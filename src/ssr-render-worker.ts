@@ -3,17 +3,10 @@
  *
  * Handles one message type sent by RenderWorkerPool in build.ts:
  *
- *   { type: 'renderFull', id, streaming: false, request: SerializableRequest }
+ *   { type: 'renderFull', id, request: SerializableRequest }
  *     → runs full lifecycle (getInitProps → render loop → getAfterRenderProps → getFinalProps)
  *     → renderToString(ReactPage)
  *     → postMessage({ id, html, headHtml, status })
- *
- *   { type: 'renderFull', id, streaming: true, request: SerializableRequest }
- *     → runs full lifecycle
- *     → renderToReadableStream(ReactPage), streams chunks back
- *     → postMessage({ id, type: 'head', headHtml, status })
- *     → postMessage({ id, type: 'chunk', chunk }) × N
- *     → postMessage({ id, type: 'done' })
  *
  * The SSR bundle path is passed once via workerData at thread creation time so
  * the SSR module is only imported once per worker lifetime.
@@ -31,7 +24,6 @@ const { ssrBundlePath } = workerData as { ssrBundlePath: string };
 let _React: any = null;
 let _renderToStaticMarkup: ((element: any) => string) | null = null;
 let _renderToString: ((element: any) => string) | null = null;
-let _renderToReadableStream: ((element: any, options?: any) => Promise<ReadableStream<Uint8Array>>) | null = null;
 // Full SSR module — includes default (App component) + lifecycle exports.
 let _ssrMod: any = null;
 
@@ -51,12 +43,6 @@ async function init() {
         const serverMod = await import(serverPath);
         _renderToString = serverMod.renderToString;
         _renderToStaticMarkup = serverMod.renderToStaticMarkup;
-    }
-
-    if (!_renderToReadableStream) {
-        const browserPath = pathToFileURL(req.resolve('react-dom/server.browser')).href;
-        const browserMod = await import(browserPath);
-        _renderToReadableStream = browserMod.renderToReadableStream;
     }
 
     if (!_ssrMod) {
@@ -193,7 +179,7 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
 }
 
 parentPort!.on('message', async (msg: any) => {
-    const { id, type, request, streaming } = msg;
+    const { id, type, request } = msg;
     try {
         await init();
 
@@ -204,41 +190,17 @@ parentPort!.on('message', async (msg: any) => {
 
         const ReactPage = buildReactPage(finalAppProps, clientProps);
 
-        if (streaming) {
-            parentPort!.postMessage({ id, type: 'head', headHtml, status });
-            let streamPromise: Promise<ReadableStream<Uint8Array>>;
-            try {
-                (globalThis as any).__hadarsUnsuspend = unsuspend;
-                streamPromise = _renderToReadableStream!(ReactPage);
-            } finally {
-                (globalThis as any).__hadarsUnsuspend = null;
-            }
-            const stream = await streamPromise;
-            const reader = stream.getReader();
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                parentPort!.postMessage({ id, type: 'chunk', chunk: value }, [value.buffer as ArrayBuffer]);
-            }
-            parentPort!.postMessage({ id, type: 'done' });
-        } else {
-            let html: string;
-            try {
-                (globalThis as any).__hadarsUnsuspend = unsuspend;
-                html = _renderToString!(ReactPage);
-            } finally {
-                (globalThis as any).__hadarsUnsuspend = null;
-            }
-            parentPort!.postMessage({ id, html, headHtml, status });
+        let html: string;
+        try {
+            (globalThis as any).__hadarsUnsuspend = unsuspend;
+            html = _renderToString!(ReactPage);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
         }
+        parentPort!.postMessage({ id, html, headHtml, status });
 
     } catch (err: any) {
         (globalThis as any).__hadarsUnsuspend = null;
-        const errMsg = err?.message ?? String(err);
-        if (streaming) {
-            parentPort!.postMessage({ id, type: 'error', error: errMsg });
-        } else {
-            parentPort!.postMessage({ id, error: errMsg });
-        }
+        parentPort!.postMessage({ id, error: err?.message ?? String(err) });
     }
 });

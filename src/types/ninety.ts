@@ -84,15 +84,15 @@ export interface HadarsOptions {
      *
      * **Bun / Deno** — creates a `node:worker_threads` render pool of this size.
      * Each thread handles the synchronous `renderToString` step, freeing the
-     * main event loop for I/O. Only applies when `streaming` is `false` (the default).
+     * main event loop for I/O.
      */
     workers?: number;
     /**
-     * Whether to use streaming SSR (`renderToReadableStream`) for rendering React
-     * components. Defaults to `false`. Set to `true` to use streaming via
-     * `renderToReadableStream` instead of the synchronous `renderToString`.
+     * Override or extend rspack's `optimization` config for production client builds.
+     * Merged on top of hadars defaults (splitChunks vendor splitting, deterministic moduleIds).
+     * Has no effect on the SSR bundle or dev mode.
      */
-    streaming?: boolean;
+    optimization?: Record<string, unknown>;
 }
 
 

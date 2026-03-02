@@ -10,36 +10,18 @@ import { RspackDevServer } from "@rspack/dev-server";
 import pathMod from "node:path";
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import cluster from 'node:cluster';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/ninety";
-
 const encoder = new TextEncoder();
 
 const HEAD_MARKER = '<meta name="NINETY_HEAD">';
 const BODY_MARKER = '<meta name="NINETY_BODY">';
 
-// Resolve react-dom/server.browser from the *project's* node_modules (process.cwd())
-// rather than from hadars's own install location. This guarantees the same React
-// instance is used here and in the SSR bundle (which is also built relative to cwd),
-// preventing "Invalid hook call" errors when hadars is installed as a file: symlink.
-let _renderToReadableStream: ((element: any, options?: any) => Promise<ReadableStream<Uint8Array>>) | null = null;
-async function getReadableStreamRenderer(): Promise<(element: any, options?: any) => Promise<ReadableStream<Uint8Array>>> {
-    if (!_renderToReadableStream) {
-        const req = createRequire(pathMod.resolve(process.cwd(), '__hadars_fake__.js'));
-        const resolved = req.resolve('react-dom/server.browser');
-        const mod = await import(pathToFileURL(resolved).href);
-        _renderToReadableStream = mod.renderToReadableStream;
-    }
-    return _renderToReadableStream!;
-}
-
 // Resolve renderToString from react-dom/server in the project's node_modules.
-// Used when streaming is disabled via `streaming: false` in hadars config.
 let _renderToString: ((element: any) => string) | null = null;
 async function getRenderToString(): Promise<(element: any) => string> {
     if (!_renderToString) {
@@ -53,10 +35,6 @@ async function getRenderToString(): Promise<(element: any) => string> {
 
 // Round-robin thread pool for SSR rendering — used on Bun/Deno where
 // node:cluster is not available but node:worker_threads is.
-// Supports three render modes matching the worker's message protocol:
-//   staticMarkup — renderToStaticMarkup for lifecycle passes in getReactResponse
-//   renderString — renderToString for non-streaming responses
-//   renderStream — renderToReadableStream chunks forwarded as a ReadableStream
 
 import type { SerializableRequest } from './ssr-render-worker';
 
@@ -65,14 +43,7 @@ type PendingRenderFull = {
     resolve: (result: { html: string; headHtml: string; status: number }) => void;
     reject: (err: Error) => void;
 };
-type PendingRenderFullStream = {
-    kind: 'renderFullStream';
-    headSettled: boolean;
-    headResolve: (result: { headHtml: string; status: number }) => void;
-    headReject: (err: Error) => void;
-    controller: ReadableStreamDefaultController<Uint8Array>;
-};
-type PendingEntry = PendingRenderFull | PendingRenderFullStream;
+type PendingEntry = PendingRenderFull;
 
 class RenderWorkerPool {
     private workers: any[] = [];
@@ -95,32 +66,9 @@ class RenderWorkerPool {
                 const w = new Worker(workerPath, { workerData: { ssrBundlePath } });
                 this.workerPending.set(w, new Set());
                 w.on('message', (msg: any) => {
-                    const { id, type, html, headHtml, status, error, chunk } = msg;
+                    const { id, html, headHtml, status, error } = msg;
                     const p = this.pending.get(id);
                     if (!p) return;
-
-                    if (p.kind === 'renderFullStream') {
-                        if (type === 'head') {
-                            p.headSettled = true;
-                            p.headResolve({ headHtml, status });
-                            return;
-                        }
-                        if (type === 'chunk') {
-                            p.controller.enqueue(chunk as Uint8Array);
-                            return;
-                        }
-                        this.pending.delete(id);
-                        this.workerPending.get(w)?.delete(id);
-                        if (type === 'done') p.controller.close();
-                        else {
-                            const err = new Error(error ?? 'Stream error');
-                            if (!p.headSettled) p.headReject(err);
-                            p.controller.error(err);
-                        }
-                        return;
-                    }
-
-                    // renderFull (non-streaming)
                     this.pending.delete(id);
                     this.workerPending.get(w)?.delete(id);
                     if (error) p.reject(new Error(error));
@@ -153,11 +101,7 @@ class RenderWorkerPool {
                 const p = this.pending.get(id);
                 if (p) {
                     this.pending.delete(id);
-                    if (p.kind === 'renderFull') p.reject(err);
-                    else {
-                        if (!p.headSettled) p.headReject(err);
-                        p.controller.error(err);
-                    }
+                    p.reject(err);
                 }
             }
             this.workerPending.delete(w);
@@ -189,36 +133,6 @@ class RenderWorkerPool {
         });
     }
 
-    /** Run the full SSR lifecycle in a worker thread, streaming the response. */
-    renderFullStream(req: SerializableRequest): { head: Promise<{ headHtml: string; status: number }>; stream: ReadableStream<Uint8Array> } {
-        let headResolve!: (r: { headHtml: string; status: number }) => void;
-        let headReject!: (err: Error) => void;
-        const head = new Promise<{ headHtml: string; status: number }>((res, rej) => {
-            headResolve = res; headReject = rej;
-        });
-        let controller!: ReadableStreamDefaultController<Uint8Array>;
-        const stream = new ReadableStream<Uint8Array>({ start: (ctrl) => { controller = ctrl; } });
-        const w = this.nextWorker();
-        if (!w) {
-            queueMicrotask(() => {
-                headReject(new Error('[hadars] No render workers available'));
-                controller.error(new Error('[hadars] No render workers available'));
-            });
-            return { head, stream };
-        }
-        const id = this.nextId++;
-        this.pending.set(id, { kind: 'renderFullStream', headSettled: false, headResolve, headReject, controller });
-        this.workerPending.get(w)?.add(id);
-        try {
-            w.postMessage({ id, type: 'renderFull', streaming: true, request: req });
-        } catch (err) {
-            this.pending.delete(id);
-            this.workerPending.get(w)?.delete(id);
-            queueMicrotask(() => { headReject(err as Error); controller.error(err); });
-        }
-        return { head, stream };
-    }
-
     async terminate(): Promise<void> {
         await Promise.all(this.workers.map((w: any) => w.terminate()));
     }
@@ -229,56 +143,29 @@ async function buildSsrResponse(
     headHtml: string,
     status: number,
     getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
-    streaming: boolean,
     unsuspendForRender: any,
 ): Promise<Response> {
-    // Resolve renderers before touching globalThis.__hadarsUnsuspend.
-    // Any await after setting the global would create a window where a concurrent
-    // request on the same thread could overwrite it before the render call runs.
-    // Loading the renderer first ensures the set→call→clear sequence is synchronous.
-    const renderToString = !streaming ? await getRenderToString() : null;
-    const renderReadableStream = streaming ? await getReadableStreamRenderer() : null;
-
-    if (!streaming) {
-        const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
-        let bodyHtml: string;
-        // set → call (synchronous) → clear: no await in between, safe under concurrency
-        try {
-            (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
-            bodyHtml = renderToString!(ReactPage);
-        } finally {
-            (globalThis as any).__hadarsUnsuspend = null;
-        }
-        return new Response(precontentHtml + bodyHtml + postContent, {
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
-            status,
-        });
-    }
+    // Pre-load renderer before starting the stream so the set→call→clear
+    // sequence around __hadarsUnsuspend is fully synchronous (no await between them).
+    const renderToString = await getRenderToString();
 
     const responseStream = new ReadableStream({
         async start(controller) {
             const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
+            // Flush the shell (precontentHtml) immediately so the browser can
+            // start loading CSS/fonts before renderToString blocks the thread.
             controller.enqueue(encoder.encode(precontentHtml));
+            await Promise.resolve(); // yield to let the runtime flush the shell chunk
 
-            // React's renderToReadableStream starts rendering synchronously on call,
-            // so hooks fire before the returned Promise settles. Set the global
-            // immediately before the call and clear right after — no await in between.
-            let streamPromise: Promise<ReadableStream<Uint8Array>>;
+            // set → call (synchronous) → clear: no await in between, safe under concurrency
+            let bodyHtml: string;
             try {
                 (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
-                streamPromise = renderReadableStream!(ReactPage);
+                bodyHtml = renderToString(ReactPage);
             } finally {
                 (globalThis as any).__hadarsUnsuspend = null;
             }
-            const bodyStream = await streamPromise;
-            const reader = bodyStream.getReader();
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                controller.enqueue(value);
-            }
-
-            controller.enqueue(encoder.encode(postContent));
+            controller.enqueue(encoder.encode(bodyHtml + postContent));
             controller.close();
         },
     });
@@ -622,7 +509,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         });
 
         const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
-        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, options.streaming === true, unsuspend);
+        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
     }, options.websocket);
 };
 
@@ -647,8 +534,6 @@ export const build = async (options: HadarsRuntimeOptions) => {
     const tmpFilePath = pathMod.join(os.tmpdir(), `hadars-client-${Date.now()}.tsx`);
     await fs.writeFile(tmpFilePath, clientScript);
 
-    const randomStr = crypto.randomBytes(6).toString('hex');
-
     // Compile client and SSR bundles in parallel — they write to different
     // output directories and use different entry files, so they are fully
     // independent and safe to run concurrently.
@@ -657,13 +542,15 @@ export const build = async (options: HadarsRuntimeOptions) => {
         compileEntry(tmpFilePath, {
             target: 'web',
             output: {
-                filename: `index-${randomStr}.js`,
+                // Content hash: filename is stable when code is unchanged → better browser/CDN cache.
+                filename: 'index.[contenthash:8].js',
                 path: pathMod.resolve(__dirname, StaticPath),
             },
             base: options.baseURL,
             mode: 'production',
             swcPlugins: options.swcPlugins,
             define: options.define,
+            optimization: options.optimization,
         }),
         compileEntry(pathMod.resolve(__dirname, options.entry), {
             output: {
@@ -681,11 +568,6 @@ export const build = async (options: HadarsRuntimeOptions) => {
         }),
     ]);
     await fs.rm(tmpFilePath);
-
-    await fs.writeFile(
-        pathMod.join(__dirname, HadarsFolder, 'hadars.json'),
-        JSON.stringify({ buildId: randomStr }),
-    );
     console.log("Build complete.");
 };
 
@@ -784,35 +666,12 @@ export const run = async (options: HadarsRuntimeOptions) => {
         if (renderPool) {
             // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.
             const serialReq = await serializeRequest(request);
-            if (options.streaming) {
-                const { head, stream } = renderPool.renderFullStream(serialReq);
-                const { headHtml: wHead, status: wStatus } = await head;
-                const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
-                const responseStream = new ReadableStream({
-                    async start(controller) {
-                        controller.enqueue(encoder.encode(precontentHtml));
-                        const reader = stream.getReader();
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-                            controller.enqueue(value);
-                        }
-                        controller.enqueue(encoder.encode(postContent));
-                        controller.close();
-                    },
-                });
-                return new Response(responseStream, {
-                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-                    status: wStatus,
-                });
-            } else {
-                const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
-                const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
-                return new Response(precontentHtml + html + postContent, {
-                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-                    status: wStatus,
-                });
-            }
+            const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
+            const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
+            return new Response(precontentHtml + html + postContent, {
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                status: wStatus,
+            });
         }
 
         const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
@@ -826,6 +685,6 @@ export const run = async (options: HadarsRuntimeOptions) => {
         });
 
         const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
-        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, options.streaming === true, unsuspend);
+        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
     }, options.websocket);
 };

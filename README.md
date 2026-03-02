@@ -66,11 +66,31 @@ hadars run         # multi-core when workers > 1
 
 - **React Fast Refresh** — full HMR via rspack-dev-server, module-level patches
 - **True SSR** — components render on the server with your data, then hydrate on the client
+- **Shell streaming** — HTML shell is flushed immediately so browsers can start loading assets before the body arrives
 - **Code splitting** — `loadModule('./Comp')` splits on the browser, bundles statically on the server
 - **Head management** — `HadarsHead` controls `<title>`, `<meta>`, `<link>` on server and client
 - **Cross-runtime** — Bun, Node.js, Deno; uses the standard Fetch API throughout
 - **Multi-core** — `workers: os.cpus().length` forks a process per CPU core via `node:cluster`
 - **TypeScript-first** — full types for props, lifecycle hooks, config, and the request object
+
+## useServerData
+
+Fetch async data inside a component during SSR. The framework's render loop awaits the promise and re-renders until all values are resolved, then serialises them into the page for zero-cost client hydration.
+
+```tsx
+import { useServerData } from 'hadars';
+
+const UserCard = ({ userId }: { userId: string }) => {
+    const user = useServerData(['user', userId], () => db.getUser(userId));
+    if (!user) return null; // undefined while pending on the first SSR pass
+    return <p>{user.name}</p>;
+};
+```
+
+- **`key`** — string or string array; must be stable and unique within the page
+- **Server** — calls `fn()`, awaits the result across render iterations, returns `undefined` until resolved
+- **Client** — reads the pre-resolved value from the hydration cache serialised by the server; `fn()` is never called in the browser
+- **Suspense libraries** — also works when `fn()` throws a thenable (e.g. Relay `useLazyLoadQuery` with `suspense: true`); the thrown promise is awaited and the next render re-calls `fn()` synchronously
 
 ## Data lifecycle hooks
 
@@ -97,20 +117,7 @@ hadars run         # multi-core when workers > 1
 | `fetch` | `function` | — | Custom fetch handler; return a `Response` to short-circuit SSR |
 | `websocket` | `object` | — | WebSocket handler (Bun only) |
 | `wsPath` | `string` | `"/ws"` | Path that triggers WebSocket upgrade |
-| `streaming` | `boolean` | `false` | Set to `true` to use `renderToReadableStream` (streaming SSR) instead of the default `renderToString` |
-
-## Local build
-
-```bash
-npm install
-npm run build:all
-```
-
-## Publishing
-
-1. Update `version`, `repository`, `license` in `package.json`
-2. `npm login`
-3. `npm publish`
+| `optimization` | `object` | — | Override rspack `optimization` for production client builds (merged on top of defaults) |
 
 ## License
 

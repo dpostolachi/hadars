@@ -138,6 +138,8 @@ interface EntryOptions {
     // optional compile-time defines (e.g. { 'process.env.NODE_ENV': '"development"' })
     define?: Record<string, string>;
     base?: string;
+    // optional rspack optimization overrides (production client builds only)
+    optimization?: Record<string, unknown>;
 }
 
 const buildCompilerConfig = (
@@ -258,6 +260,25 @@ const buildCompilerConfig = (
         mainFields: isServerBuild ? ['main', 'module'] : ['browser', 'module', 'main'],
     };
 
+    // Production client builds get vendor splitting and deterministic module IDs.
+    // User-supplied optimization is merged on top so it can extend or override defaults.
+    // Dev and SSR builds skip this — splitChunks slows HMR, SSR uses externals instead.
+    const optimization: any = (!isServerBuild && !isDev) ? {
+        moduleIds: 'deterministic',
+        splitChunks: {
+            chunks: 'all',
+            cacheGroups: {
+                react: {
+                    test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+                    name: 'vendor-react',
+                    chunks: 'all' as const,
+                    priority: 20,
+                },
+            },
+        },
+        ...(opts.optimization ?? {}),
+    } : (opts.optimization ? { ...opts.optimization } : undefined);
+
     return {
         entry,
         output: {
@@ -266,6 +287,7 @@ const buildCompilerConfig = (
         },
         mode: opts.mode,
         externals,
+        ...(optimization !== undefined ? { optimization } : {}),
         plugins: [
             new rspack.HtmlRspackPlugin({
                 publicPath: base || '/',
