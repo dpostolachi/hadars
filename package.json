@@ -90,10 +90,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dumistoklus/ninety.git"
+    "url": "git+https://github.com/dpostolachi/hadars.git"
   },
   "bugs": {
-    "url": "https://github.com/dumistoklus/ninety/issues"
+    "url": "https://github.com/dpostolachi/hadars/issues"
   },
-  "homepage": "https://github.com/dumistoklus/ninety#readme"
+  "homepage": "https://github.com/dpostolachi/hadars#readme"
 }
