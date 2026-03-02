@@ -416,6 +416,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         `--outDir=${HadarsFolder}`,
         `--outFile=${SSR_FILENAME}`,
         `--base=${baseURL}`,
+        ...(options.swcPlugins ? [`--swcPlugins=${JSON.stringify(options.swcPlugins)}`] : []),
+        ...(options.define ? [`--define=${JSON.stringify(options.define)}`] : []),
     ], { stdio: 'pipe' });
     child.stdin?.end();
 

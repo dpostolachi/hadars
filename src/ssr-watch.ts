@@ -19,6 +19,8 @@ const entry = argv['entry'];
 const outDir = argv['outDir'] || '.hadars';
 const outFile = argv['outFile'] || 'index.ssr.js';
 const base = argv['base'] || '';
+const swcPlugins = argv['swcPlugins'] ? JSON.parse(argv['swcPlugins']) : undefined;
+const define = argv['define'] ? JSON.parse(argv['define']) : undefined;
 
 if (!entry) {
   console.error('ssr-watch: missing --entry argument');
@@ -40,6 +42,8 @@ if (!entry) {
       base,
       mode: 'development',
       watch: true,
+      swcPlugins,
+      define,
       onChange: () => {
         console.log('ssr-watch: SSR rebuilt');
       }
