@@ -110,6 +110,15 @@ async function run() {
   );
   console.log('Copied dist/utils/clientScript.tsx');
 
+  // dist/utils/Head.tsx — imported by the generated client script at runtime via
+  // an absolute path (the $_HEAD_PATH$ placeholder). Rspack resolves .tsx extensions,
+  // so the raw source file is sufficient — no pre-compilation needed.
+  cpSync(
+    resolve(root, 'src', 'utils', 'Head.tsx'),
+    resolve(distUtilsDir, 'Head.tsx'),
+  );
+  console.log('Copied dist/utils/Head.tsx');
+
   // dist/template.html — HtmlRspackPlugin template (resolved from packageDir in rspack.ts)
   cpSync(
     resolve(root, 'src', 'utils', 'template.html'),
