@@ -181,7 +181,7 @@ export const getReactResponse = async (
                     context,
                 })} />
             </div>
-            <script id="hadars" type="application/json" dangerouslySetInnerHTML={{ __html: JSON.stringify({ hadars: { props: clientProps } }) }}></script>
+            <script id="hadars" type="application/json" dangerouslySetInnerHTML={{ __html: JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c') }}></script>
         </>
     )
 

@@ -72,6 +72,9 @@ type PendingEntry = PendingRenderString | PendingRenderStream;
 class RenderWorkerPool {
     private workers: any[] = [];
     private pending = new Map<number, PendingEntry>();
+    // Track which pending IDs were dispatched to each worker so we can reject
+    // them when that worker crashes.
+    private workerPending = new Map<any, Set<number>>();
     private nextId = 0;
     private rrIndex = 0;
 
@@ -85,6 +88,7 @@ class RenderWorkerPool {
         import('node:worker_threads').then(({ Worker }) => {
             for (let i = 0; i < size; i++) {
                 const w = new Worker(workerPath, { workerData: { ssrBundlePath } });
+                this.workerPending.set(w, new Set());
                 w.on('message', (msg: any) => {
                     const { id, type, html, error, chunk } = msg;
                     const p = this.pending.get(id);
@@ -96,6 +100,7 @@ class RenderWorkerPool {
                             return; // keep entry until 'done'
                         }
                         this.pending.delete(id);
+                        this.workerPending.get(w)?.delete(id);
                         if (type === 'done') p.controller.close();
                         else p.controller.error(new Error(error ?? 'Stream error'));
                         return;
@@ -103,11 +108,19 @@ class RenderWorkerPool {
 
                     // renderString
                     this.pending.delete(id);
+                    this.workerPending.get(w)?.delete(id);
                     if (error) p.reject(new Error(error));
                     else p.resolve(html);
                 });
                 w.on('error', (err: Error) => {
                     console.error('[hadars] Render worker error:', err);
+                    this._handleWorkerDeath(w, err);
+                });
+                w.on('exit', (code: number) => {
+                    if (code !== 0) {
+                        console.error(`[hadars] Render worker exited with code ${code}`);
+                        this._handleWorkerDeath(w, new Error(`Render worker exited with code ${code}`));
+                    }
                 });
                 this.workers.push(w);
             }
@@ -116,7 +129,28 @@ class RenderWorkerPool {
         });
     }
 
-    private nextWorker() {
+    private _handleWorkerDeath(w: any, err: Error) {
+        // Remove the dead worker from the rotation so it is never selected again.
+        const idx = this.workers.indexOf(w);
+        if (idx !== -1) this.workers.splice(idx, 1);
+
+        // Reject every in-flight request that was sent to this worker.
+        const ids = this.workerPending.get(w);
+        if (ids) {
+            for (const id of ids) {
+                const p = this.pending.get(id);
+                if (p) {
+                    this.pending.delete(id);
+                    if (p.kind === 'renderString') p.reject(err);
+                    else p.controller.error(err);
+                }
+            }
+            this.workerPending.delete(w);
+        }
+    }
+
+    private nextWorker(): any | undefined {
+        if (this.workers.length === 0) return undefined;
         const w = this.workers[this.rrIndex % this.workers.length];
         this.rrIndex++;
         return w;
@@ -125,9 +159,21 @@ class RenderWorkerPool {
     /** Offload a full renderToString call. Returns the HTML string. */
     renderString(appProps: Record<string, unknown>, clientProps: Record<string, unknown>): Promise<string> {
         return new Promise((resolve, reject) => {
+            const w = this.nextWorker();
+            if (!w) {
+                reject(new Error('[hadars] No render workers available'));
+                return;
+            }
             const id = this.nextId++;
             this.pending.set(id, { kind: 'renderString', resolve, reject });
-            this.nextWorker().postMessage({ id, type: 'renderString', appProps, clientProps });
+            this.workerPending.get(w)?.add(id);
+            try {
+                w.postMessage({ id, type: 'renderString', appProps, clientProps });
+            } catch (err) {
+                this.pending.delete(id);
+                this.workerPending.get(w)?.delete(id);
+                reject(err);
+            }
         });
     }
 
@@ -138,11 +184,24 @@ class RenderWorkerPool {
         const stream = new ReadableStream<Uint8Array>({
             start: (ctrl) => { controller = ctrl; },
         });
+        const w = this.nextWorker();
+        if (!w) {
+            // Immediately error the stream if no workers are available.
+            queueMicrotask(() => controller.error(new Error('[hadars] No render workers available')));
+            return stream;
+        }
         const id = this.nextId++;
         // Store controller before postMessage so the handler is ready when
         // the first chunk arrives.
         this.pending.set(id, { kind: 'renderStream', controller });
-        this.nextWorker().postMessage({ id, type: 'renderStream', appProps, clientProps });
+        this.workerPending.get(w)?.add(id);
+        try {
+            w.postMessage({ id, type: 'renderStream', appProps, clientProps });
+        } catch (err) {
+            this.pending.delete(id);
+            this.workerPending.get(w)?.delete(id);
+            queueMicrotask(() => controller.error(err));
+        }
         return stream;
     }
 
@@ -341,13 +400,10 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const packageDir = pathMod.dirname(fileURLToPath(import.meta.url));
     const clientScriptPath = pathMod.resolve(packageDir, 'utils', 'clientScript.tsx');
 
-    const headPath = pathMod.resolve(packageDir, 'utils', 'Head');
-
     let clientScript = '';
     try {
         clientScript = (await fs.readFile(clientScriptPath, 'utf-8'))
-            .replace('$_MOD_PATH$', entry + getSuffix(options.mode))
-            .replace('$_HEAD_PATH$', headPath);
+            .replace('$_MOD_PATH$', entry + getSuffix(options.mode));
     }
     catch (err) {
         console.error("Failed to read client script from package dist, falling back to src", err);
@@ -420,6 +476,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         ...(options.define ? [`--define=${JSON.stringify(options.define)}`] : []),
     ], { stdio: 'pipe' });
     child.stdin?.end();
+
+    // Ensure the SSR watcher child is killed when this process exits.
+    const cleanupChild = () => { try { if (!child.killed) child.kill(); } catch {} };
+    process.once('exit', cleanupChild);
+    process.once('SIGINT', () => { cleanupChild(); process.exit(0); });
+    process.once('SIGTERM', () => { cleanupChild(); process.exit(0); });
 
     // Convert Node.js Readable streams to Web ReadableStream so the rest of
     // the logic works identically across all runtimes.
@@ -553,17 +615,14 @@ export const build = async (options: HadarsRuntimeOptions) => {
     // prepare client script
     const packageDir = pathMod.dirname(fileURLToPath(import.meta.url));
     const clientScriptPath = pathMod.resolve(packageDir, 'utils', 'clientScript.js');
-    const headPath = pathMod.resolve(packageDir, 'utils', 'Head');
     let clientScript = '';
     try {
         clientScript = (await fs.readFile(clientScriptPath, 'utf-8'))
-            .replace('$_MOD_PATH$', entry + getSuffix(options.mode))
-            .replace('$_HEAD_PATH$', headPath);
+            .replace('$_MOD_PATH$', entry + getSuffix(options.mode));
     } catch (err) {
         const srcClientPath = pathMod.resolve(packageDir, 'utils', 'clientScript.tsx');
         clientScript = (await fs.readFile(srcClientPath, 'utf-8'))
-            .replace('$_MOD_PATH$', entry + `?v=${Date.now()}`)
-            .replace('$_HEAD_PATH$', pathMod.resolve(packageDir, 'utils', 'Head'));
+            .replace('$_MOD_PATH$', entry + `?v=${Date.now()}`);
     }
 
     const tmpFilePath = pathMod.join(os.tmpdir(), `hadars-client-${Date.now()}.tsx`);
@@ -645,7 +704,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
     if (!isNode && workers > 1) {
         const packageDir = pathMod.dirname(fileURLToPath(import.meta.url));
         const workerJs = pathMod.resolve(packageDir, 'ssr-render-worker.js');
-        const workerTs = pathMod.resolve(packageDir, 'src', 'ssr-render-worker.ts');
+        const workerTs = pathMod.resolve(packageDir, 'ssr-render-worker.ts');
         const workerFile = existsSync(workerJs) ? workerJs : workerTs;
         const ssrBundlePath = pathMod.resolve(__dirname, HadarsFolder, SSR_FILENAME);
         renderPool = new RenderWorkerPool(workerFile, workers, ssrBundlePath);

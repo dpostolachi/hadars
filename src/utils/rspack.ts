@@ -260,7 +260,6 @@ const buildCompilerConfig = (
 
     return {
         entry,
-        resolve: resolveConfig,
         output: {
             ...opts.output,
             clean: false,
@@ -280,6 +279,13 @@ const buildCompilerConfig = (
             ...extraPlugins,
         ],
         ...localConfig,
+        // Merge base resolve (modules, tsConfig, extensions) with per-build resolve
+        // (alias, mainFields). The spread order matters: resolveConfig wins for keys
+        // it defines, localConfig.resolve wins for keys it defines exclusively.
+        resolve: {
+            ...localConfig.resolve,
+            ...resolveConfig,
+        },
         // HMR is not implemented for module chunk format, so disable outputModule
         // for client builds. SSR builds still need it for dynamic import() of exports.
         experiments: {

@@ -49,12 +49,11 @@ export default App;
 
 ## CLI
 
-After installing hadars the `hadars` (Node.js) and `hadars-bun` (Bun) binaries are available:
+After installing hadars the `hadars` binary is available. It works on Node.js, Bun, and Deno — the runtime is auto-detected:
 
 ```bash
 # Development server with React Fast Refresh HMR
 hadars dev
-hadars-bun dev     # Bun — runs TypeScript directly, no build step
 
 # Production build (client + SSR bundles compiled in parallel)
 hadars build

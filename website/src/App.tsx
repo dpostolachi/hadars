@@ -197,8 +197,7 @@ export default App;
                     <h3>3 — run it</h3>
                     <Code>{`
 # development server with React Fast Refresh HMR
-hadars dev           # Node.js binary
-hadars-bun dev       # Bun binary (runs TypeScript directly)
+hadars dev
 
 # production build — client + SSR compiled in parallel
 hadars build

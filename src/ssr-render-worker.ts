@@ -77,7 +77,7 @@ function buildReactPage(R: any, appProps: Record<string, unknown>, clientProps: 
             id: 'hadars',
             type: 'application/json',
             dangerouslySetInnerHTML: {
-                __html: JSON.stringify({ hadars: { props: clientProps } }),
+                __html: JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c'),
             },
         }),
     );

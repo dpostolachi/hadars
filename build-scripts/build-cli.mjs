@@ -40,11 +40,9 @@ async function run() {
   });
 
   // Ensure shebang is present on the CLI binary
-  const shebang = '#!/usr/bin/env node\n';
   const cliContent = readFileSync(cliOut, 'utf8');
-  if (!cliContent.startsWith('#!')) {
-    writeFileSync(cliOut, shebang + cliContent, 'utf8');
-  }
+  const cliBody = cliContent.startsWith('#!') ? cliContent.replace(/^#![^\n]*\n/, '') : cliContent;
+  writeFileSync(cliOut, '#!/usr/bin/env node\n' + cliBody, 'utf8');
   console.log('Built', cliOut);
 
   // Build SSR watch worker — needed for Node.js/Deno where .ts cannot be

@@ -231,15 +231,25 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const existing = unsuspend.cache.get(cacheKey);
 
     // Suspense promise has resolved — re-call fn() so the hook returns its value
-    // synchronously from its own internal cache. The result is returned directly
-    // without being stored as 'fulfilled', so it is never included in the
-    // serialised serverData sent to the client (the library owns its own hydration).
+    // synchronously from its own internal cache. Cache the result as
+    // 'suspense-cached' so later renders (e.g. the final renderToString in
+    // buildSsrResponse, which runs after getFinalProps may have cleared the
+    // user's QueryClient) can return the value without calling fn() again.
+    // NOT stored as 'fulfilled' so it is never included in serverData sent to
+    // the client — the Suspense library owns its own hydration.
     if (existing?.status === 'suspense-resolved') {
         try {
-            return fn() as T | undefined;
+            const value = fn() as T;
+            unsuspend.cache.set(cacheKey, { status: 'suspense-cached', value });
+            return value;
         } catch {
             return undefined;
         }
+    }
+
+    // Return the cached Suspense value on all subsequent renders.
+    if (existing?.status === 'suspense-cached') {
+        return existing.value as T;
     }
 
     if (!existing) {

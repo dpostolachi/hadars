@@ -5,8 +5,7 @@
   "module": "./dist/index.js",
   "type": "module",
   "bin": {
-    "hadars": "dist/cli.js",
-    "hadars-bun": "cli-bun.ts"
+    "hadars": "dist/cli.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,7 +14,6 @@
     "src",
     "cli-lib.ts",
     "cli.ts",
-    "cli-bun.ts",
     "index.ts",
     "LICENSE"
   ],

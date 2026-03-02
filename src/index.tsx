@@ -9,7 +9,7 @@ export type {
     HadarsEntryModule,
     HadarsApp,
 } from "./types/ninety";
-export { Head as HadarsHead, useServerData } from './utils/Head';
+export { Head as HadarsHead, useServerData, initServerDataCache } from './utils/Head';
 import { AppProviderSSR, AppProviderCSR } from "./utils/Head";
 
 export const HadarsContext = typeof window === 'undefined' ? AppProviderSSR : AppProviderCSR;
