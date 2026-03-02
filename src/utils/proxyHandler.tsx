@@ -53,14 +53,14 @@ export const createProxyHandler = (options: HadarsOptions): ProxyHandler => {
     const proxyRules = Object.entries(proxy).sort((a, b) => b[0].length - a[0].length);
 
     return async (req: HadarsRequest) => {
-        if (req.method === 'OPTIONS' && options.proxyCORS) {
-            return new Response(null, {
-                status: 204,
-                headers: getCORSHeaders(req),
-            });
-        }
         for (const [path, target] of proxyRules) {
             if (req.pathname.startsWith(path)) {
+                if (req.method === 'OPTIONS' && proxyCORS) {
+                    return new Response(null, {
+                        status: 204,
+                        headers: getCORSHeaders(req),
+                    });
+                }
                 const targetURL = new URL(target);
                 targetURL.pathname = targetURL.pathname.replace(/\/$/, '') + req.pathname.slice(path.length);
                 targetURL.search = req.search;
@@ -69,25 +69,28 @@ export const createProxyHandler = (options: HadarsOptions): ProxyHandler => {
                 // Overwrite the Host header to match the target
                 sendHeaders.set('Host', targetURL.host);
 
+                const hasBody = !['GET', 'HEAD'].includes(req.method);
                 const proxyReq = new Request(targetURL.toString(), {
                     method: req.method,
                     headers: sendHeaders,
-                    body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.body,
+                    body: hasBody ? req.body : undefined,
                     redirect: 'follow',
-                });
+                    // Node.js (undici) requires duplex:'half' when body is a ReadableStream
+                    ...(hasBody ? { duplex: 'half' } : {}),
+                } as RequestInit);
 
                 const res = await fetch(proxyReq);
-                if (proxyCORS) {
-                    Object.entries(getCORSHeaders(req)).forEach(([key, value]) => {
-                        res.headers.set(key, value);
-                    });
-                }
                 // Read the response body
                 const body = await res.arrayBuffer();
                 // remove content-length and content-encoding headers to avoid issues with modified body
                 const clonedRes = new Headers(res.headers);
                 clonedRes.delete('content-length');
                 clonedRes.delete('content-encoding');
+                if (proxyCORS) {
+                    Object.entries(getCORSHeaders(req)).forEach(([key, value]) => {
+                        clonedRes.set(key, value);
+                    });
+                }
                 // return a new Response with the modified headers and original body
                 return new Response(body, {
                     status: res.status,
