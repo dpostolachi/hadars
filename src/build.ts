@@ -58,16 +58,21 @@ async function getRenderToString(): Promise<(element: any) => string> {
 //   renderString — renderToString for non-streaming responses
 //   renderStream — renderToReadableStream chunks forwarded as a ReadableStream
 
-type PendingRenderString = {
-    kind: 'renderString';
-    resolve: (html: string) => void;
+import type { SerializableRequest } from './ssr-render-worker';
+
+type PendingRenderFull = {
+    kind: 'renderFull';
+    resolve: (result: { html: string; headHtml: string; status: number }) => void;
     reject: (err: Error) => void;
 };
-type PendingRenderStream = {
-    kind: 'renderStream';
+type PendingRenderFullStream = {
+    kind: 'renderFullStream';
+    headSettled: boolean;
+    headResolve: (result: { headHtml: string; status: number }) => void;
+    headReject: (err: Error) => void;
     controller: ReadableStreamDefaultController<Uint8Array>;
 };
-type PendingEntry = PendingRenderString | PendingRenderStream;
+type PendingEntry = PendingRenderFull | PendingRenderFullStream;
 
 class RenderWorkerPool {
     private workers: any[] = [];
@@ -90,27 +95,36 @@ class RenderWorkerPool {
                 const w = new Worker(workerPath, { workerData: { ssrBundlePath } });
                 this.workerPending.set(w, new Set());
                 w.on('message', (msg: any) => {
-                    const { id, type, html, error, chunk } = msg;
+                    const { id, type, html, headHtml, status, error, chunk } = msg;
                     const p = this.pending.get(id);
                     if (!p) return;
 
-                    if (p.kind === 'renderStream') {
+                    if (p.kind === 'renderFullStream') {
+                        if (type === 'head') {
+                            p.headSettled = true;
+                            p.headResolve({ headHtml, status });
+                            return;
+                        }
                         if (type === 'chunk') {
                             p.controller.enqueue(chunk as Uint8Array);
-                            return; // keep entry until 'done'
+                            return;
                         }
                         this.pending.delete(id);
                         this.workerPending.get(w)?.delete(id);
                         if (type === 'done') p.controller.close();
-                        else p.controller.error(new Error(error ?? 'Stream error'));
+                        else {
+                            const err = new Error(error ?? 'Stream error');
+                            if (!p.headSettled) p.headReject(err);
+                            p.controller.error(err);
+                        }
                         return;
                     }
 
-                    // renderString
+                    // renderFull (non-streaming)
                     this.pending.delete(id);
                     this.workerPending.get(w)?.delete(id);
                     if (error) p.reject(new Error(error));
-                    else p.resolve(html);
+                    else p.resolve({ html, headHtml, status });
                 });
                 w.on('error', (err: Error) => {
                     console.error('[hadars] Render worker error:', err);
@@ -130,19 +144,20 @@ class RenderWorkerPool {
     }
 
     private _handleWorkerDeath(w: any, err: Error) {
-        // Remove the dead worker from the rotation so it is never selected again.
         const idx = this.workers.indexOf(w);
         if (idx !== -1) this.workers.splice(idx, 1);
 
-        // Reject every in-flight request that was sent to this worker.
         const ids = this.workerPending.get(w);
         if (ids) {
             for (const id of ids) {
                 const p = this.pending.get(id);
                 if (p) {
                     this.pending.delete(id);
-                    if (p.kind === 'renderString') p.reject(err);
-                    else p.controller.error(err);
+                    if (p.kind === 'renderFull') p.reject(err);
+                    else {
+                        if (!p.headSettled) p.headReject(err);
+                        p.controller.error(err);
+                    }
                 }
             }
             this.workerPending.delete(w);
@@ -156,19 +171,16 @@ class RenderWorkerPool {
         return w;
     }
 
-    /** Offload a full renderToString call. Returns the HTML string. */
-    renderString(appProps: Record<string, unknown>, clientProps: Record<string, unknown>): Promise<string> {
+    /** Run the full SSR lifecycle in a worker thread. Returns html, headHtml, status. */
+    renderFull(req: SerializableRequest): Promise<{ html: string; headHtml: string; status: number }> {
         return new Promise((resolve, reject) => {
             const w = this.nextWorker();
-            if (!w) {
-                reject(new Error('[hadars] No render workers available'));
-                return;
-            }
+            if (!w) { reject(new Error('[hadars] No render workers available')); return; }
             const id = this.nextId++;
-            this.pending.set(id, { kind: 'renderString', resolve, reject });
+            this.pending.set(id, { kind: 'renderFull', resolve, reject });
             this.workerPending.get(w)?.add(id);
             try {
-                w.postMessage({ id, type: 'renderString', appProps, clientProps });
+                w.postMessage({ id, type: 'renderFull', streaming: false, request: req });
             } catch (err) {
                 this.pending.delete(id);
                 this.workerPending.get(w)?.delete(id);
@@ -177,32 +189,34 @@ class RenderWorkerPool {
         });
     }
 
-    /** Offload a renderToReadableStream call. Returns a ReadableStream fed by
-     *  worker chunk messages. */
-    renderStream(appProps: Record<string, unknown>, clientProps: Record<string, unknown>): ReadableStream<Uint8Array> {
-        let controller!: ReadableStreamDefaultController<Uint8Array>;
-        const stream = new ReadableStream<Uint8Array>({
-            start: (ctrl) => { controller = ctrl; },
+    /** Run the full SSR lifecycle in a worker thread, streaming the response. */
+    renderFullStream(req: SerializableRequest): { head: Promise<{ headHtml: string; status: number }>; stream: ReadableStream<Uint8Array> } {
+        let headResolve!: (r: { headHtml: string; status: number }) => void;
+        let headReject!: (err: Error) => void;
+        const head = new Promise<{ headHtml: string; status: number }>((res, rej) => {
+            headResolve = res; headReject = rej;
         });
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const stream = new ReadableStream<Uint8Array>({ start: (ctrl) => { controller = ctrl; } });
         const w = this.nextWorker();
         if (!w) {
-            // Immediately error the stream if no workers are available.
-            queueMicrotask(() => controller.error(new Error('[hadars] No render workers available')));
-            return stream;
+            queueMicrotask(() => {
+                headReject(new Error('[hadars] No render workers available'));
+                controller.error(new Error('[hadars] No render workers available'));
+            });
+            return { head, stream };
         }
         const id = this.nextId++;
-        // Store controller before postMessage so the handler is ready when
-        // the first chunk arrives.
-        this.pending.set(id, { kind: 'renderStream', controller });
+        this.pending.set(id, { kind: 'renderFullStream', headSettled: false, headResolve, headReject, controller });
         this.workerPending.get(w)?.add(id);
         try {
-            w.postMessage({ id, type: 'renderStream', appProps, clientProps });
+            w.postMessage({ id, type: 'renderFull', streaming: true, request: req });
         } catch (err) {
             this.pending.delete(id);
             this.workerPending.get(w)?.delete(id);
-            queueMicrotask(() => controller.error(err));
+            queueMicrotask(() => { headReject(err as Error); controller.error(err); });
         }
-        return stream;
+        return { head, stream };
     }
 
     async terminate(): Promise<void> {
@@ -216,33 +230,24 @@ async function buildSsrResponse(
     status: number,
     getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
     streaming: boolean,
-    renderPool?: RenderWorkerPool,
-    renderPayload?: { appProps: Record<string, unknown>; clientProps: Record<string, unknown> },
+    unsuspendForRender: any,
 ): Promise<Response> {
     // Resolve renderers before touching globalThis.__hadarsUnsuspend.
     // Any await after setting the global would create a window where a concurrent
     // request on the same thread could overwrite it before the render call runs.
     // Loading the renderer first ensures the set→call→clear sequence is synchronous.
-    const renderToString = (!streaming && !renderPool) ? await getRenderToString() : null;
-    const renderReadableStream = (streaming && !renderPool) ? await getReadableStreamRenderer() : null;
-
-    // Extract the unsuspend cache from renderPayload so non-pool renders can expose
-    // resolved useServerData() values to the SSR bundle via globalThis.__hadarsUnsuspend.
-    const unsuspendForRender = (renderPayload?.appProps?.context as any)?._unsuspend ?? null;
+    const renderToString = !streaming ? await getRenderToString() : null;
+    const renderReadableStream = streaming ? await getReadableStreamRenderer() : null;
 
     if (!streaming) {
         const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
         let bodyHtml: string;
-        if (renderPool && renderPayload) {
-            bodyHtml = await renderPool.renderString(renderPayload.appProps, renderPayload.clientProps);
-        } else {
-            // set → call (synchronous) → clear: no await in between, safe under concurrency
-            try {
-                (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
-                bodyHtml = renderToString!(ReactPage);
-            } finally {
-                (globalThis as any).__hadarsUnsuspend = null;
-            }
+        // set → call (synchronous) → clear: no await in between, safe under concurrency
+        try {
+            (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
+            bodyHtml = renderToString!(ReactPage);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
         }
         return new Response(precontentHtml + bodyHtml + postContent, {
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -255,22 +260,17 @@ async function buildSsrResponse(
             const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
             controller.enqueue(encoder.encode(precontentHtml));
 
-            let bodyStream: ReadableStream<Uint8Array>;
-            if (renderPool && renderPayload) {
-                bodyStream = renderPool.renderStream(renderPayload.appProps, renderPayload.clientProps);
-            } else {
-                // React's renderToReadableStream starts rendering synchronously on call,
-                // so hooks fire before the returned Promise settles. Set the global
-                // immediately before the call and clear right after — no await in between.
-                let streamPromise: Promise<ReadableStream<Uint8Array>>;
-                try {
-                    (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
-                    streamPromise = renderReadableStream!(ReactPage);
-                } finally {
-                    (globalThis as any).__hadarsUnsuspend = null;
-                }
-                bodyStream = await streamPromise;
+            // React's renderToReadableStream starts rendering synchronously on call,
+            // so hooks fire before the returned Promise settles. Set the global
+            // immediately before the call and clear right after — no await in between.
+            let streamPromise: Promise<ReadableStream<Uint8Array>>;
+            try {
+                (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
+                streamPromise = renderReadableStream!(ReactPage);
+            } finally {
+                (globalThis as any).__hadarsUnsuspend = null;
             }
+            const bodyStream = await streamPromise;
             const reader = bodyStream.getReader();
             while (true) {
                 const { done, value } = await reader.read();
@@ -287,6 +287,24 @@ async function buildSsrResponse(
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
         status,
     });
+}
+
+/** Serialize a HadarsRequest into a structure-clonable object for postMessage. */
+async function serializeRequest(req: any): Promise<SerializableRequest> {
+    const isGetOrHead = ['GET', 'HEAD'].includes(req.method ?? 'GET');
+    const body = isGetOrHead ? null : new Uint8Array(await req.clone().arrayBuffer());
+    const headers: Record<string, string> = {};
+    (req.headers as Headers).forEach((v: string, k: string) => { headers[k] = v; });
+    return {
+        url: req.url,
+        method: req.method ?? 'GET',
+        headers,
+        body,
+        pathname: req.pathname,
+        search: req.search,
+        location: req.location,
+        cookies: req.cookies,
+    };
 }
 
 /**
@@ -593,7 +611,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             getFinalProps,
         } = (await import(importPath)) as HadarsEntryModule<any>;
 
-        const { ReactPage, status, headHtml } = await getReactResponse(request, {
+        const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
             document: {
                 body: Component as React.FC<HadarsProps<object>>,
                 lang: 'en',
@@ -603,7 +621,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             },
         });
 
-        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, options.streaming === true); // no pool in dev
+        const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
+        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, options.streaming === true, unsuspend);
     }, options.websocket);
 };
 
@@ -762,6 +781,40 @@ export const run = async (options: HadarsRuntimeOptions) => {
             getFinalProps,
         } = (await import(componentPath)) as HadarsEntryModule<any>;
 
+        if (renderPool) {
+            // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.
+            const serialReq = await serializeRequest(request);
+            if (options.streaming) {
+                const { head, stream } = renderPool.renderFullStream(serialReq);
+                const { headHtml: wHead, status: wStatus } = await head;
+                const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
+                const responseStream = new ReadableStream({
+                    async start(controller) {
+                        controller.enqueue(encoder.encode(precontentHtml));
+                        const reader = stream.getReader();
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            controller.enqueue(value);
+                        }
+                        controller.enqueue(encoder.encode(postContent));
+                        controller.close();
+                    },
+                });
+                return new Response(responseStream, {
+                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                    status: wStatus,
+                });
+            } else {
+                const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
+                const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
+                return new Response(precontentHtml + html + postContent, {
+                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                    status: wStatus,
+                });
+            }
+        }
+
         const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
             document: {
                 body: Component as React.FC<HadarsProps<object>>,
@@ -772,6 +825,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
             },
         });
 
-        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, options.streaming === true, renderPool, renderPayload);
+        const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
+        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, options.streaming === true, unsuspend);
     }, options.websocket);
 };
