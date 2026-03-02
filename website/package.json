@@ -1,0 +1,17 @@
+{
+  "name": "hadars-website",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "hadars dev",
+    "build": "hadars build",
+    "start": "hadars run"
+  },
+  "dependencies": {
+    "hadars": "file:..",
+    "@tanstack/react-query": "^5.90.21",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
