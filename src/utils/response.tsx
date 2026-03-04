@@ -30,48 +30,44 @@ interface ReactResponseOptions {
     }
 }
 
-const getHeadHtml = (seoData: AppHead, renderToStaticMarkup: (el: any) => string): string => {
-    const metaEntries = Object.entries(seoData.meta)
-    const linkEntries = Object.entries(seoData.link)
-    const styleEntries = Object.entries(seoData.style)
-    const scriptEntries = Object.entries(seoData.script)
+// ── Head HTML serialisation (no React render needed) ─────────────────────────
 
-    return renderToStaticMarkup(
-        <>
-            <title>{seoData.title}</title>
-            {
-            metaEntries.map( ([id, options]) => (
-                <meta
-                    key={id}
-                    id={ id }
-                    { ...options }
-                />
-            ) )
-            }
-            {linkEntries.map( ([id, options]) => (
-                <link
-                    key={id}
-                    id={ id }
-                    { ...options }
-                />
-            ))}
-            {styleEntries.map( ([id, options]) => (
-                <style
-                    key={id}
-                    id={id}
-                    { ...options }
-                />
-            ))}
-            {scriptEntries.map( ([id, options]) => (
-                <script
-                    key={id}
-                    id={id}
-                    { ...options }
-                />
-            ))}
-        </>
-    )
+const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c]);
+const escText = (s: string) => s.replace(/[&<>]/g, c => ESC[c]);
+
+// React prop → HTML attribute name for the subset used in head tags.
+const ATTR: Record<string, string> = {
+    className: 'class', htmlFor: 'for', httpEquiv: 'http-equiv',
+    charSet: 'charset', crossOrigin: 'crossorigin', noModule: 'nomodule',
+    referrerPolicy: 'referrerpolicy', fetchPriority: 'fetchpriority',
+};
+
+function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, selfClose = false): string {
+    let attrs = ` id="${escAttr(id)}"`;
+    let inner = '';
+    for (const [k, v] of Object.entries(opts)) {
+        if (k === 'key' || k === 'children') continue;
+        if (k === 'dangerouslySetInnerHTML') { inner = (v as any).__html ?? ''; continue; }
+        const attr = ATTR[k] ?? k;
+        if (v === true) attrs += ` ${attr}`;
+        else if (v !== false && v != null) attrs += ` ${attr}="${escAttr(String(v))}"`;
+    }
+    return selfClose ? `<${tag}${attrs}>` : `<${tag}${attrs}>${inner}</${tag}>`;
 }
+
+const getHeadHtml = (seoData: AppHead): string => {
+    let html = `<title>${escText(seoData.title ?? '')}</title>`;
+    for (const [id, opts] of Object.entries(seoData.meta))
+        html += renderHeadTag('meta', id, opts as Record<string, unknown>, true);
+    for (const [id, opts] of Object.entries(seoData.link))
+        html += renderHeadTag('link', id, opts as Record<string, unknown>, true);
+    for (const [id, opts] of Object.entries(seoData.style))
+        html += renderHeadTag('style', id, opts as Record<string, unknown>);
+    for (const [id, opts] of Object.entries(seoData.script))
+        html += renderHeadTag('script', id, opts as Record<string, unknown>);
+    return html;
+};
 
 
 export const getReactResponse = async (
@@ -141,20 +137,20 @@ export const getReactResponse = async (
         }
         if (unsuspend.hasPending) await processUnsuspend();
     } while (unsuspend.hasPending && ++iters < 25);
+    if (unsuspend.hasPending) {
+        console.warn('[hadars] SSR render loop hit the 25-iteration cap — some useServerData values may not be resolved. Check for data dependencies that are never fulfilled.');
+    }
 
-    props = getAfterRenderProps ? await getAfterRenderProps(props, html) : props;
-    // Re-render to capture any head changes introduced by getAfterRenderProps.
-    try {
-        (globalThis as any).__hadarsUnsuspend = unsuspend;
-        renderToStaticMarkup(
-            <App {...({
-                ...props,
-                location: req.location,
-                context,
-            })} />
-        );
-    } finally {
-        (globalThis as any).__hadarsUnsuspend = null;
+    if (getAfterRenderProps) {
+        props = await getAfterRenderProps(props, html);
+        // Re-render only when getAfterRenderProps is present — it may mutate
+        // props that affect head tags, so we need another pass to capture them.
+        try {
+            (globalThis as any).__hadarsUnsuspend = unsuspend;
+            renderToStaticMarkup(<App {...({ ...props, location: req.location, context })} />);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
+        }
     }
 
     // Serialize resolved useServerData() values for client hydration.
@@ -188,7 +184,7 @@ export const getReactResponse = async (
     return {
         ReactPage,
         status: context.head.status,
-        headHtml: getHeadHtml(context.head, renderToStaticMarkup),
+        headHtml: getHeadHtml(context.head),
         renderPayload: {
             appProps: { ...props, location: req.location, context } as Record<string, unknown>,
             clientProps: clientProps as Record<string, unknown>,

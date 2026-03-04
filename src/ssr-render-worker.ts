@@ -146,6 +146,9 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
             await Promise.all(pending);
         }
     } while (unsuspend.hasPending && ++iters < 25);
+    if (unsuspend.hasPending) {
+        console.warn('[hadars] SSR render loop hit the 25-iteration cap — some useServerData values may not be resolved. Check for data dependencies that are never fulfilled.');
+    }
 
     props = getAfterRenderProps ? await getAfterRenderProps(props, html) : props;
 

@@ -32,8 +32,12 @@ const main = async () => {
 
     const { location } = props;
 
-    if ( appMod.getClientProps ) {
-        props = await appMod.getClientProps(props);
+    if (appMod.getClientProps) {
+        try {
+            props = await appMod.getClientProps(props);
+        } catch (err) {
+            console.error('[hadars] getClientProps threw an error:', err);
+        }
     }
 
     props = {

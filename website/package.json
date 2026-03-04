@@ -9,8 +9,10 @@
     "start": "hadars run"
   },
   "dependencies": {
-    "hadars": "file:..",
     "@tanstack/react-query": "^5.90.21",
+    "@types/prismjs": "^1.26.6",
+    "hadars": "file:..",
+    "prismjs": "^1.30.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   }

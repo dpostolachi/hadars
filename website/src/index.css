@@ -186,6 +186,30 @@ body {
     color: #d4d4d8;
 }
 
+/* Prism token colours — VS Code Dark+ palette */
+.code-block .token.comment,
+.code-block .token.prolog,
+.code-block .token.cdata          { color: #6a9955; font-style: italic; }
+.code-block .token.keyword,
+.code-block .token.rule           { color: #569cd6; }
+.code-block .token.operator       { color: #d4d4d4; }
+.code-block .token.string,
+.code-block .token.attr-value,
+.code-block .token.template-string{ color: #ce9178; }
+.code-block .token.number,
+.code-block .token.boolean        { color: #b5cea8; }
+.code-block .token.function       { color: #dcdcaa; }
+.code-block .token.class-name,
+.code-block .token.builtin        { color: #4ec9b0; }
+.code-block .token.punctuation    { color: #d4d4d4; }
+.code-block .token.tag            { color: #4ec9b0; }
+.code-block .token.tag .token.punctuation { color: #808080; }
+.code-block .token.attr-name,
+.code-block .token.property,
+.code-block .token.variable       { color: #9cdcfe; }
+.code-block .token.interpolation-punctuation { color: #569cd6; }
+.code-block .token.important      { color: #569cd6; font-weight: bold; }
+
 /* inline code */
 :not(.code-block) > code {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;

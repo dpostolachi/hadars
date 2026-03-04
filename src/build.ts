@@ -10,6 +10,7 @@ import { RspackDevServer } from "@rspack/dev-server";
 import pathMod from "node:path";
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -53,6 +54,9 @@ class RenderWorkerPool {
     private workerPending = new Map<any, Set<number>>();
     private nextId = 0;
     private rrIndex = 0;
+    private _Worker: any = null;
+    private _workerPath = '';
+    private _ssrBundlePath = '';
 
     constructor(workerPath: string, size: number, ssrBundlePath: string) {
         // Dynamically import Worker so this class can be defined at module load
@@ -61,34 +65,40 @@ class RenderWorkerPool {
     }
 
     private _init(workerPath: string, size: number, ssrBundlePath: string) {
+        this._workerPath = workerPath;
+        this._ssrBundlePath = ssrBundlePath;
         import('node:worker_threads').then(({ Worker }) => {
-            for (let i = 0; i < size; i++) {
-                const w = new Worker(workerPath, { workerData: { ssrBundlePath } });
-                this.workerPending.set(w, new Set());
-                w.on('message', (msg: any) => {
-                    const { id, html, headHtml, status, error } = msg;
-                    const p = this.pending.get(id);
-                    if (!p) return;
-                    this.pending.delete(id);
-                    this.workerPending.get(w)?.delete(id);
-                    if (error) p.reject(new Error(error));
-                    else p.resolve({ html, headHtml, status });
-                });
-                w.on('error', (err: Error) => {
-                    console.error('[hadars] Render worker error:', err);
-                    this._handleWorkerDeath(w, err);
-                });
-                w.on('exit', (code: number) => {
-                    if (code !== 0) {
-                        console.error(`[hadars] Render worker exited with code ${code}`);
-                        this._handleWorkerDeath(w, new Error(`Render worker exited with code ${code}`));
-                    }
-                });
-                this.workers.push(w);
-            }
+            this._Worker = Worker;
+            for (let i = 0; i < size; i++) this._spawnWorker();
         }).catch(err => {
             console.error('[hadars] Failed to initialise render worker pool:', err);
         });
+    }
+
+    private _spawnWorker() {
+        if (!this._Worker) return;
+        const w = new this._Worker(this._workerPath, { workerData: { ssrBundlePath: this._ssrBundlePath } });
+        this.workerPending.set(w, new Set());
+        w.on('message', (msg: any) => {
+            const { id, html, headHtml, status, error } = msg;
+            const p = this.pending.get(id);
+            if (!p) return;
+            this.pending.delete(id);
+            this.workerPending.get(w)?.delete(id);
+            if (error) p.reject(new Error(error));
+            else p.resolve({ html, headHtml, status });
+        });
+        w.on('error', (err: Error) => {
+            console.error('[hadars] Render worker error:', err);
+            this._handleWorkerDeath(w, err);
+        });
+        w.on('exit', (code: number) => {
+            if (code !== 0) {
+                console.error(`[hadars] Render worker exited with code ${code}`);
+                this._handleWorkerDeath(w, new Error(`Render worker exited with code ${code}`));
+            }
+        });
+        this.workers.push(w);
     }
 
     private _handleWorkerDeath(w: any, err: Error) {
@@ -106,6 +116,10 @@ class RenderWorkerPool {
             }
             this.workerPending.delete(w);
         }
+
+        // Spawn a replacement to keep the pool at full capacity.
+        console.log('[hadars] Spawning replacement render worker');
+        this._spawnWorker();
     }
 
     private nextWorker(): any | undefined {
@@ -319,7 +333,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     await fs.writeFile(tmpFilePath, clientScript);
 
     // SSR live-reload id to force re-import
-    let ssrBuildId = Date.now();
+    let ssrBuildId = crypto.randomBytes(4).toString('hex');
 
     // Start rspack-dev-server for the client bundle. It provides true React
     // Fast Refresh HMR: the browser's HMR runtime connects directly to the
@@ -435,7 +449,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                     const chunk = decoder.decode(value, { stream: true });
                     try { process.stdout.write(chunk); } catch (e) { }
                     if (chunk.includes(rebuildMarker)) {
-                        ssrBuildId = Date.now();
+                        ssrBuildId = crypto.randomBytes(4).toString('hex');
                         console.log('[hadars] SSR bundle updated, build id:', ssrBuildId);
                     }
                 }
@@ -491,25 +505,34 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         // (cache-busting key) rather than a literal filename character on Linux.
         const importPath = pathToFileURL(ssrComponentPath).href + `?t=${ssrBuildId}`;
 
-        const {
-            default: Component,
-            getInitProps,
-            getAfterRenderProps,
-            getFinalProps,
-        } = (await import(importPath)) as HadarsEntryModule<any>;
-
-        const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
-            document: {
-                body: Component as React.FC<HadarsProps<object>>,
-                lang: 'en',
+        try {
+            const {
+                default: Component,
                 getInitProps,
                 getAfterRenderProps,
                 getFinalProps,
-            },
-        });
+            } = (await import(importPath)) as HadarsEntryModule<any>;
 
-        const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
-        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
+            const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
+                document: {
+                    body: Component as React.FC<HadarsProps<object>>,
+                    lang: 'en',
+                    getInitProps,
+                    getAfterRenderProps,
+                    getFinalProps,
+                },
+            });
+
+            const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
+            return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
+        } catch (err: any) {
+            console.error('[hadars] SSR render error:', err);
+            const msg = (err?.stack ?? err?.message ?? String(err)).replace(/</g, '&lt;');
+            return new Response(`<!doctype html><pre style="white-space:pre-wrap">${msg}</pre>`, {
+                status: 500,
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
+        }
     }, options.websocket);
 };
 
@@ -656,35 +679,41 @@ export const run = async (options: HadarsRuntimeOptions) => {
         const componentPath = pathToFileURL(
             pathMod.resolve(__dirname, HadarsFolder, SSR_FILENAME)
         ).href;
-        const {
-            default: Component,
-            getInitProps,
-            getAfterRenderProps,
-            getFinalProps,
-        } = (await import(componentPath)) as HadarsEntryModule<any>;
 
-        if (renderPool) {
-            // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.
-            const serialReq = await serializeRequest(request);
-            const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
-            const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
-            return new Response(precontentHtml + html + postContent, {
-                headers: { 'Content-Type': 'text/html; charset=utf-8' },
-                status: wStatus,
-            });
-        }
-
-        const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
-            document: {
-                body: Component as React.FC<HadarsProps<object>>,
-                lang: 'en',
+        try {
+            const {
+                default: Component,
                 getInitProps,
                 getAfterRenderProps,
                 getFinalProps,
-            },
-        });
+            } = (await import(componentPath)) as HadarsEntryModule<any>;
 
-        const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
-        return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
+            if (renderPool) {
+                // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.
+                const serialReq = await serializeRequest(request);
+                const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
+                const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
+                return new Response(precontentHtml + html + postContent, {
+                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                    status: wStatus,
+                });
+            }
+
+            const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
+                document: {
+                    body: Component as React.FC<HadarsProps<object>>,
+                    lang: 'en',
+                    getInitProps,
+                    getAfterRenderProps,
+                    getFinalProps,
+                },
+            });
+
+            const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
+            return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
+        } catch (err: any) {
+            console.error('[hadars] SSR render error:', err);
+            return new Response('Internal Server Error', { status: 500 });
+        }
     }, options.websocket);
 };

@@ -1,7 +1,17 @@
 import React from 'react';
 import './index.css';
-import { HadarsContext, HadarsHead, useServerData, type HadarsApp, type HadarsRequest } from 'hadars';
-import { dehydrate, hydrate, QueryClient, QueryClientProvider, useQuery, useSuspenseQuery, type DehydratedState } from '@tanstack/react-query'
+import { HadarsContext, HadarsHead, useServerData, loadModule, type HadarsApp, type HadarsRequest } from 'hadars';
+import { dehydrate, hydrate, QueryClient, QueryClientProvider, useSuspenseQuery, type DehydratedState } from '@tanstack/react-query'
+import Prism from 'prismjs';
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-jsx';
+import 'prismjs/components/prism-tsx';
+import 'prismjs/components/prism-bash';
+
+// loadModule('./LazyPanel') is transformed by the hadars rspack loader:
+//   browser → import('./LazyPanel')            (separate JS chunk, code-split)
+//   server  → Promise.resolve(require('./LazyPanel'))  (statically bundled)
+const LazyPanel = React.lazy(() => loadModule<{ default: React.FC }>('./LazyPanel'));
 
 interface PageProps {
     serverTime: string;
@@ -12,9 +22,17 @@ interface PageProps {
 
 // ── tiny shared components ────────────────────────────────────────────────────
 
-const Code: React.FC<{ children: string }> = ({ children }) => (
-    <pre className="code-block"><code>{children.trim()}</code></pre>
-);
+type CodeLang = 'tsx' | 'typescript' | 'bash';
+
+const Code: React.FC<{ children: string; lang?: CodeLang }> = ({ children, lang = 'tsx' }) => {
+    const grammar = Prism.languages[lang] ?? Prism.languages.plaintext;
+    const highlighted = Prism.highlight(children.trim(), grammar, lang);
+    return (
+        <pre className={`code-block language-${lang}`}>
+            <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+        </pre>
+    );
+};
 
 const Pill: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <span className="pill">{children}</span>
@@ -39,18 +57,16 @@ const SuspenseQueryRow: React.FC = () => {
     // useServerData catches the thrown promise from useSuspenseQuery,
     // awaits it, then re-renders. On the second pass useSuspenseQuery
     // returns synchronously and the value is immediately available.
-    const abc = useServerData(['data-fetch2'], () => useSuspenseQuery({
+    const weatherData = useServerData(['data-fetch2'], () => useSuspenseQuery({
         queryKey: ['data-fetch'],
         queryFn: async () => {
             const res = await fetch('http://localhost:9090/api/data');
             return res.json();
         },
     }) ) || {};
-    console.log('SuspenseQueryRow render, abc:', abc);
 
-    const { data } = abc as any;
+    const { data } = weatherData as any;
 
-    console.log('Fetched API data:', data);
     return (
         <div className="demo-row">
             <span className="demo-label">useServerData + Suspense hook</span>
@@ -72,11 +88,10 @@ interface ProcessStats {
 const ServerStatsRow: React.FC = () => {
     const stats = useServerData<ProcessStats>('server_stats', async () => {
         const res = {
-        pid: process.pid,
-        mem: Math.round(process.memoryUsage().rss / 1024 / 1024),
-    };
-    console.log('Fetched server stats:', res);
-    return res;
+            pid: process.pid,
+            mem: Math.round(process.memoryUsage().rss / 1024 / 1024),
+        };
+        return res;
     });
 
     return (
@@ -133,7 +148,7 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                         Runs on Bun, Node.js, and Deno — export a component, export <code>getInitProps</code>, run one command.
                     </p>
                     <div className="hero-cta">
-                        <Code>{`hadars dev`}</Code>
+                        <Code lang="bash">{`hadars dev`}</Code>
                     </div>
                 </header>
 
@@ -152,7 +167,7 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                     <p>Add hadars as a dependency, create a config, write a page component.</p>
 
                     <h3>1 — hadars.config.ts</h3>
-                    <Code>{`
+                    <Code lang="typescript">{`
 import os from 'os';
 import type { HadarsOptions } from 'hadars';
 
@@ -195,7 +210,7 @@ export default App;
                     `}</Code>
 
                     <h3>3 — run it</h3>
-                    <Code>{`
+                    <Code lang="bash">{`
 # development server with React Fast Refresh HMR
 hadars dev
 
@@ -375,7 +390,7 @@ const Page: React.FC = () => {
 
                     <h3>HadarsRequest</h3>
                     <p>Extends the standard <code>Request</code> with:</p>
-                    <Code>{`
+                    <Code lang="typescript">{`
 interface HadarsRequest extends Request {
     pathname: string;              // URL pathname, e.g. "/blog/my-post"
     search: string;               // Query string, e.g. "?page=2"
@@ -392,7 +407,7 @@ interface HadarsRequest extends Request {
                         or throw a thenable (Suspense protocol). Only <code>Promise</code>-returning
                         calls are serialised for the client; Suspense hooks manage their own hydration.
                     </p>
-                    <Code>{`
+                    <Code lang="typescript">{`
 import { useServerData } from 'hadars';
 
 // Normal async — result is serialised into the page, no re-fetch on the client:
@@ -409,7 +424,7 @@ const result = useServerData(['posts'], () =>
                     `}</Code>
 
                     <h3>HadarsProps&lt;T&gt;</h3>
-                    <Code>{`
+                    <Code lang="typescript">{`
 type HadarsProps<T> = T & {
     location: string;    // current URL path
     context: AppContext; // pass to <HadarsContext>
@@ -434,6 +449,14 @@ type HadarsProps<T> = T & {
                             <span className="demo-value">{location}</span>
                         </div>
                         <ServerStatsRow />
+                        <React.Suspense fallback={
+                            <div className="demo-row">
+                                <span className="demo-label">loadModule — lazy chunk</span>
+                                <span className="demo-value">loading…</span>
+                            </div>
+                        }>
+                            <LazyPanel />
+                        </React.Suspense>
                         <div className="demo-row">
                             <span className="demo-label">Client counter</span>
                             <span className="demo-value">

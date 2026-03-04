@@ -1,0 +1,47 @@
+name: SSR Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # ── 1. Build the hadars library ─────────────────────────────────────────
+
+      - name: Install hadars dependencies
+        run: npm install --ignore-scripts
+
+      - name: Build hadars
+        run: npm run build:all
+
+      # ── 2. Build the website (uses hadars as file:..) ───────────────────────
+
+      - name: Install website dependencies
+        run: npm install --ignore-scripts
+        working-directory: website
+
+      - name: Build website
+        run: node node_modules/.bin/hadars build
+        working-directory: website
+
+      # ── 3. Run SSR integration tests with Bun ───────────────────────────────
+      # The test file starts the website server, waits for it to be ready,
+      # runs all assertions, then kills it on teardown.
+
+      - name: Run SSR tests
+        run: bun test test/ssr.test.ts

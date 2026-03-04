@@ -46,12 +46,52 @@ const noopCtx: ServerContext = { upgrade: () => false };
  * The `fetchHandler` may return `undefined` to signal that the response was
  * handled out-of-band (e.g. a Bun WebSocket upgrade).
  */
+const COMPRESSIBLE_RE = /\b(?:text\/|application\/(?:json|javascript|xml)|image\/svg\+xml)/;
+
+function withCompression(handler: FetchHandler): FetchHandler {
+    return async (req, ctx) => {
+        const res = await handler(req, ctx);
+        if (!res?.body) return res;
+        if (!COMPRESSIBLE_RE.test(res.headers.get('Content-Type') ?? '')) return res;
+        if (res.headers.has('Content-Encoding')) return res; // already compressed
+
+        const accept = req.headers.get('Accept-Encoding') ?? '';
+        const encoding = accept.includes('br') ? 'br' : accept.includes('gzip') ? 'gzip' : null;
+        if (!encoding) return res;
+
+        try {
+            const compressed = res.body.pipeThrough(new (globalThis as any).CompressionStream(encoding));
+            const headers = new Headers(res.headers);
+            headers.set('Content-Encoding', encoding);
+            headers.delete('Content-Length');
+            return new Response(compressed, { status: res.status, statusText: res.statusText, headers });
+        } catch {
+            return res;
+        }
+    };
+}
+
+function withRequestLogging(handler: FetchHandler): FetchHandler {
+    return async (req, ctx) => {
+        const start = performance.now();
+        const res = await handler(req, ctx);
+        const ms = Math.round(performance.now() - start);
+        const status = res?.status ?? 404;
+        const path = new URL(req.url).pathname;
+        console.log(`[hadars] ${req.method} ${path} ${status} ${ms}ms`);
+        return res;
+    };
+}
+
 export async function serve(
     port: number,
     fetchHandler: FetchHandler,
     /** Bun WebSocketHandler — ignored on Deno and Node.js. */
     websocket?: unknown,
 ): Promise<void> {
+    fetchHandler = withCompression(fetchHandler);
+    fetchHandler = withRequestLogging(fetchHandler);
+
     // ── Bun ────────────────────────────────────────────────────────────────
     if (isBun) {
         (globalThis as any).Bun.serve({

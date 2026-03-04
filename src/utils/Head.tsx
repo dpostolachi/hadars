@@ -175,8 +175,10 @@ export const useApp = () => React.useContext(AppContext);
 const clientServerDataCache = new Map<string, unknown>();
 
 /** Call this before hydrating to seed the client cache from the server's data.
- *  Invoked automatically by the hadars client bootstrap. */
+ *  Invoked automatically by the hadars client bootstrap.
+ *  Always clears the existing cache before populating — call with `{}` to just clear. */
 export function initServerDataCache(data: Record<string, unknown>) {
+    clientServerDataCache.clear();
     for (const [k, v] of Object.entries(data)) {
         clientServerDataCache.set(k, v);
     }
@@ -208,7 +210,7 @@ export function initServerDataCache(data: Record<string, unknown>) {
  * if (!user) return null; // undefined while pending on the first SSR pass
  */
 export function useServerData<T>(key: string | string[], fn: () => Promise<T> | T): T | undefined {
-    const cacheKey = Array.isArray(key) ? key.join('\x00') : key;
+    const cacheKey = Array.isArray(key) ? JSON.stringify(key) : key;
 
     if (typeof window !== 'undefined') {
         // Client: if the server serialised a value for this key, return it directly
