@@ -7,6 +7,7 @@
  *   - getInitProps() data is in the client props (and server-only keys are stripped)
  *   - HTTP compression is applied
  *   - loadModule() code-split LazyPanel into a separate JS chunk
+ *   - /cache-test is served from cache (frozen serverTime on repeated requests)
  *
  * Prerequisites (handled by the CI workflow):
  *   npm run build:all
@@ -111,6 +112,48 @@ test('loadModule: LazyPanel is code-split into a separate JS chunk', async () =>
     const jsChunks  = files.filter(f => f.endsWith('.js'));
     expect(jsChunks.length).toBeGreaterThanOrEqual(2);
 });
+
+// ── cache tests ───────────────────────────────────────────────────────────────
+
+async function getCachePage(): Promise<{ res: Response; html: string; serverTime: string }> {
+    const res  = await fetch(BASE_URL + '/cache-test');
+    const html = await res.text();
+    const m    = html.match(/<script id="hadars" type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
+    const props = m ? (JSON.parse(m[1]).hadars?.props ?? {}) : {};
+    return { res, html, serverTime: props.serverTime ?? '' };
+}
+
+test('cache: GET /cache-test returns 200 with correct title', async () => {
+    const { res, html } = await getCachePage();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+    expect(html).toContain('<title>Cache test — hadars</title>');
+});
+
+test('cache: repeated requests to /cache-test return the same serverTime (cache hit)', async () => {
+    const { serverTime: first } = await getCachePage();
+    expect(first).toBeTruthy();
+
+    // Small pause so the background gzip+store task completes before the second request.
+    await new Promise(r => setTimeout(r, 50));
+
+    const { serverTime: second } = await getCachePage();
+    expect(second).toBe(first);
+});
+
+test('cache: cached /cache-test response is served pre-compressed with gzip', async () => {
+    // Warm the cache (first request populates it in the background).
+    await getCachePage();
+    await new Promise(r => setTimeout(r, 50));
+
+    // Second request is a cache hit — body was pre-compressed at store time.
+    const res = await fetch(BASE_URL + '/cache-test', {
+        headers: { 'Accept-Encoding': 'gzip' },
+    });
+    expect(res.headers.get('content-encoding')).toBe('gzip');
+});
+
+// ── custom fetch handler ───────────────────────────────────────────────────────
 
 test('custom fetch handler: /api/data returns weather JSON', async () => {
     const res = await fetch(BASE_URL + '/api/data');

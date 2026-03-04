@@ -230,6 +230,96 @@ const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     };
 };
 
+// ── SSR response cache ────────────────────────────────────────────────────────
+
+interface CacheEntry {
+    /** Gzip-compressed response body — much cheaper to keep in RAM than raw HTML. */
+    body: Uint8Array;
+    status: number;
+    /** Headers with Content-Encoding: gzip already set. */
+    headers: [string, string][];
+    expiresAt: number | null;
+}
+
+type CacheFetchHandler = (req: Request, ctx: any) => Promise<Response | undefined>;
+
+async function transformStream(data: Uint8Array, stream: { writable: WritableStream; readable: ReadableStream<Uint8Array> }): Promise<Uint8Array> {
+    const writer = stream.writable.getWriter();
+    writer.write(data);
+    writer.close();
+    const chunks: Uint8Array[] = [];
+    const reader = stream.readable.getReader();
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+    }
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
+    return out;
+}
+
+const gzipCompress   = (d: Uint8Array) => transformStream(d, new (globalThis as any).CompressionStream('gzip'));
+const gzipDecompress = (d: Uint8Array) => transformStream(d, new (globalThis as any).DecompressionStream('gzip'));
+
+function createRenderCache(
+    opts: NonNullable<HadarsOptions['cache']>,
+    handler: CacheFetchHandler,
+): CacheFetchHandler {
+    const store = new Map<string, CacheEntry>();
+
+    return async (req, ctx) => {
+        const hadarsReq = parseRequest(req);
+        const cacheOpts = await opts(hadarsReq);
+        const key = cacheOpts?.key ?? null;
+
+        if (key != null) {
+            const entry = store.get(key);
+            if (entry) {
+                if (entry.expiresAt == null || Date.now() < entry.expiresAt) {
+                    const accept = req.headers.get('Accept-Encoding') ?? '';
+                    if (accept.includes('gzip')) {
+                        return new Response(entry.body.buffer as ArrayBuffer, { status: entry.status, headers: entry.headers });
+                    }
+                    // Client doesn't support gzip — decompress before serving
+                    const plain = await gzipDecompress(entry.body);
+                    const headers = entry.headers.filter(([k]) => k.toLowerCase() !== 'content-encoding');
+                    return new Response(plain.buffer as ArrayBuffer, { status: entry.status, headers });
+                }
+                store.delete(key);
+            }
+        }
+
+        const res = await handler(req, ctx);
+
+        // Compress and cache in the background via clone() so the original
+        // stream is returned to the client immediately.
+        if (key != null && res) {
+            const ttl = cacheOpts?.ttl;
+            res.clone().arrayBuffer().then(async (buf) => {
+                const body = await gzipCompress(new Uint8Array(buf));
+                const headers: [string, string][] = [];
+                res.headers.forEach((v, k) => {
+                    if (k.toLowerCase() !== 'content-encoding' && k.toLowerCase() !== 'content-length') {
+                        headers.push([k, v]);
+                    }
+                });
+                headers.push(['content-encoding', 'gzip']);
+                store.set(key, {
+                    body,
+                    status: res.status,
+                    headers,
+                    expiresAt: ttl != null ? Date.now() + ttl : null,
+                });
+            }).catch(() => { /* ignore read errors on clone */ });
+        }
+
+        return res;
+    };
+}
+
 interface HadarsRuntimeOptions extends HadarsOptions {
     mode: "development" | "production";
 }
@@ -639,7 +729,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
         fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8')
     );
 
-    await serve(port, async (req, ctx) => {
+    const runHandler: CacheFetchHandler = async (req, ctx) => {
         const request = parseRequest(req);
         if (handler) {
             const res = await handler(request);
@@ -715,5 +805,11 @@ export const run = async (options: HadarsRuntimeOptions) => {
             console.error('[hadars] SSR render error:', err);
             return new Response('Internal Server Error', { status: 500 });
         }
-    }, options.websocket);
+    };
+
+    await serve(
+        port,
+        options.cache ? createRenderCache(options.cache, runHandler) : runHandler,
+        options.websocket,
+    );
 };

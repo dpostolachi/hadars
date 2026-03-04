@@ -93,6 +93,24 @@ export interface HadarsOptions {
      * Has no effect on the SSR bundle or dev mode.
      */
     optimization?: Record<string, unknown>;
+    /**
+     * SSR response cache for `run()` mode. Has no effect in `dev()` mode.
+     *
+     * Receives the incoming request and should return `{ key, ttl? }` to cache
+     * the response, or `null`/`undefined` to skip caching for that request.
+     * `ttl` is the time-to-live in milliseconds; omit for entries that never expire.
+     * The function may be async.
+     *
+     * @example
+     * // Cache every page by pathname (no per-user personalisation):
+     * cache: (req) => ({ key: req.pathname })
+     *
+     * @example
+     * // Cache with a per-route TTL, skip authenticated requests:
+     * cache: (req) => req.cookies.session ? null : { key: req.pathname, ttl: 60_000 }
+     */
+    cache?: (req: HadarsRequest) => { key: string; ttl?: number } | null | undefined
+                                  | Promise<{ key: string; ttl?: number } | null | undefined>;
 }
 
 

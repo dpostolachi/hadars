@@ -104,6 +104,66 @@ const ServerStatsRow: React.FC = () => {
     );
 };
 
+// ── /cache-test page ──────────────────────────────────────────────────────────
+
+// This page is served with a 30-second SSR cache (see hadars.config.ts).
+// The SSR timestamp is frozen while cached; the client clock ticks normally.
+// When they diverge it proves the cached HTML is being served.
+const CacheTestPage: React.FC<{ serverTime: string; context: any }> = ({ serverTime, context }) => {
+    const [clientTime, setClientTime] = React.useState('');
+
+    React.useEffect(() => {
+        const fmt = () => new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' });
+        setClientTime(fmt());
+        const id = setInterval(() => setClientTime(fmt()), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    const isCached = clientTime !== '' && clientTime !== serverTime;
+
+    return (
+        <HadarsContext context={context}>
+            <HadarsHead status={200}>
+                <title>Cache test — hadars</title>
+            </HadarsHead>
+            <div className="layout">
+                <nav className="navbar">
+                    <a className="navbar-brand" href="/">hadars</a>
+                </nav>
+                <header className="hero" style={{ paddingBottom: '2rem' }}>
+                    <h1>SSR cache test</h1>
+                    <p className="hero-sub">
+                        This page has a <strong>30-second TTL</strong> configured in{' '}
+                        <code>hadars.config.ts</code>. Reload within 30 s — the SSR timestamp
+                        stays frozen while the client clock keeps ticking.
+                    </p>
+                </header>
+                <section className="doc-section">
+                    <div className="demo-box">
+                        <div className="demo-row">
+                            <span className="demo-label">SSR timestamp <em>(frozen when cached)</em></span>
+                            <span className="demo-value">{serverTime}</span>
+                        </div>
+                        <div className="demo-row">
+                            <span className="demo-label">Client clock <em>(always live)</em></span>
+                            <span className="demo-value">{clientTime || '—'}</span>
+                        </div>
+                        <div className="demo-row">
+                            <span className="demo-label">Cache status</span>
+                            <span className="demo-value" style={{ color: isCached ? '#4ec9b0' : '#9cdcfe' }}>
+                                {clientTime === '' ? '—' : isCached
+                                    ? 'HIT — serving cached HTML (30 s TTL)'
+                                    : 'MISS — freshly rendered'}
+                            </span>
+                        </div>
+                    </div>
+                </section>
+                <footer className="footer"><p>hadars — MIT licence</p></footer>
+            </div>
+        </HadarsContext>
+    );
+};
+
 // ── page ─────────────────────────────────────────────────────────────────────
 
 const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context, rcClient }) => {
@@ -523,4 +583,11 @@ export const getClientProps = async ( props: Partial<PageProps> ): Promise<Parti
     }
 }
 
-export default Home;
+const App = ((props: any) => {
+    if (props.location === '/cache-test') {
+        return <CacheTestPage serverTime={props.serverTime} context={props.context} />;
+    }
+    return <Home {...props} />;
+}) as HadarsApp<PageProps>;
+
+export default App;
