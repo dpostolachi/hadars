@@ -41,7 +41,7 @@ export async function tryServeFile(filePath: string): Promise<Response | null> {
         const data = await readFile(filePath);
         const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
         const contentType = MIME[ext] ?? 'application/octet-stream';
-        return new Response(data, { headers: { 'Content-Type': contentType } });
+        return new Response(data.buffer as ArrayBuffer, { headers: { 'Content-Type': contentType } });
     } catch {
         return null;
     }

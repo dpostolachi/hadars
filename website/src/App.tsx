@@ -25,7 +25,7 @@ interface PageProps {
 type CodeLang = 'tsx' | 'typescript' | 'bash';
 
 const Code: React.FC<{ children: string; lang?: CodeLang }> = ({ children, lang = 'tsx' }) => {
-    const grammar = Prism.languages[lang] ?? Prism.languages.plaintext;
+    const grammar = (Prism.languages[lang] ?? Prism.languages.plaintext)!;
     const highlighted = Prism.highlight(children.trim(), grammar, lang);
     return (
         <pre className={`code-block language-${lang}`}>

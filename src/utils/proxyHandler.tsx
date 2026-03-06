@@ -1,4 +1,4 @@
-import type { HadarsOptions, HadarsRequest } from "../types/ninety";
+import type { HadarsOptions, HadarsRequest } from "../types/hadars";
 
 type ProxyHandler = (req: HadarsRequest) => ( Promise<Response | undefined> | undefined );
 

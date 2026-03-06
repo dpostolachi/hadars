@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "ninety-website",
+      "name": "hadars-website",
       "dependencies": {
         "@tanstack/react-query": "^5.90.21",
         "@types/prismjs": "^1.26.6",

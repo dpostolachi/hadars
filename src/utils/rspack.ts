@@ -2,7 +2,7 @@ import rspack from "@rspack/core";
 import type { Configuration, RuleSetLoaderWithOptions, RuleSetRule } from "@rspack/core";
 import ReactRefreshPlugin from '@rspack/plugin-react-refresh';
 import path from 'node:path';
-import type { SwcPluginList } from '../types/ninety';
+import type { SwcPluginList } from '../types/hadars';
 import { fileURLToPath } from "node:url";
 import pathMod from "node:path";
 import { existsSync } from "node:fs";

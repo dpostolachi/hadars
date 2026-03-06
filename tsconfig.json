@@ -26,8 +26,9 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
     "paths": {
-      "@ninety/core": ["./src/index.tsx"],
+      "hadars": ["./src/index.tsx"],
       "$_HEAD_PATH$": ["./src/utils/Head.tsx"]
     }
-  }
+  },
+  "exclude": ["dist"]
 }

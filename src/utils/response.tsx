@@ -2,7 +2,7 @@ import type React from "react";
 import { createRequire } from "node:module";
 import pathMod from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AppHead, AppUnsuspend, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/ninety";
+import type { AppHead, AppUnsuspend, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/hadars";
 
 // Resolve react-dom/server from the *project's* node_modules (process.cwd()) so
 // the same React instance is used here as in the SSR bundle. Without this,
@@ -33,8 +33,8 @@ interface ReactResponseOptions {
 // ── Head HTML serialisation (no React render needed) ─────────────────────────
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c]);
-const escText = (s: string) => s.replace(/[&<>]/g, c => ESC[c]);
+const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c] ?? c);
+const escText = (s: string) => s.replace(/[&<>]/g, c => ESC[c] ?? c);
 
 // React prop → HTML attribute name for the subset used in head tags.
 const ATTR: Record<string, string> = {

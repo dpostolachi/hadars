@@ -67,9 +67,7 @@
     "@rspack/plugin-react-refresh": "^1.6.1",
     "@swc/core": "^1.15.18",
     "@types/bun": "latest",
-    "@types/react-dom": "^19.2.3",
-    "react-refresh": "^0.17.0",
-    "typescript": "^5.9.3"
+    "react-refresh": "^0.17.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
@@ -79,12 +77,9 @@
   },
   "dependencies": {
     "@mdx-js/loader": "^3.1.1",
-    "@mdx-js/react": "^3.1.1",
     "@svgr/webpack": "^8.1.0",
-    "@tailwindcss/postcss": "^4.2.1",
     "postcss": "^8.5.8",
-    "postcss-loader": "^8.2.1",
-    "tailwindcss": "^4.2.1"
+    "postcss-loader": "^8.2.1"
   },
   "license": "MIT",
   "repository": {

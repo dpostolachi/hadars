@@ -30,7 +30,7 @@ let _ssrMod: any = null;
 async function init() {
     if (_React && _ssrMod) return;
 
-    const req = createRequire(pathMod.resolve(process.cwd(), '__ninety_fake__.js'));
+    const req = createRequire(pathMod.resolve(process.cwd(), '__hadars_fake__.js'));
 
     if (!_React) {
         const reactPath = pathToFileURL(req.resolve('react')).href;
@@ -63,7 +63,7 @@ export type SerializableRequest = {
 
 function deserializeRequest(s: SerializableRequest): any {
     const init: RequestInit = { method: s.method, headers: new Headers(s.headers) };
-    if (s.body) init.body = s.body;
+    if (s.body) init.body = s.body.buffer as ArrayBuffer;
     const req = new Request(s.url, init);
     Object.assign(req, {
         pathname: s.pathname,

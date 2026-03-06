@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import * as Hadars from './src/build'
-import type { HadarsOptions } from './src/types/ninety'
+import type { HadarsOptions } from './src/types/hadars'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
 

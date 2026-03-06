@@ -1,6 +1,6 @@
 import React from 'react';
 import { hydrateRoot, createRoot } from 'react-dom/client';
-import type { HadarsEntryModule } from '../types/ninety';
+import type { HadarsEntryModule } from '../types/hadars';
 import { initServerDataCache } from 'hadars';
 import * as _appMod from '$_MOD_PATH$';
 

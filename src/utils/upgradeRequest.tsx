@@ -1,5 +1,5 @@
 import type { ServerContext } from './serve';
-import type { HadarsOptions, HadarsRequest } from "../types/ninety";
+import type { HadarsOptions, HadarsRequest } from "../types/hadars";
 
 type UpgradeHandle = (req: HadarsRequest, ctx: ServerContext) => boolean;
 

@@ -7,12 +7,12 @@ import { runCli } from './cli-lib'
 // (native Bun.serve, WebSocket support, etc.).
 // Falls back to Node.js silently if bun is not in PATH.
 if (typeof (globalThis as any).Bun === 'undefined' && typeof (globalThis as any).Deno === 'undefined') {
-    const child = spawn('bun', [process.argv[1], ...process.argv.slice(2)], {
+    const child = spawn('bun', [process.argv[1]!, ...process.argv.slice(2)], {
         stdio: 'inherit',
         env: process.env,
     });
     const sigs = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
-    const fwd = (sig: string) => () => { try { child.kill(sig); } catch {} };
+    const fwd = (sig: NodeJS.Signals) => () => { try { child.kill(sig); } catch {} };
     for (const sig of sigs) process.on(sig, fwd(sig));
     child.on('error', (err: any) => {
         for (const sig of sigs) process.removeAllListeners(sig);

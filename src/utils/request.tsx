@@ -1,4 +1,4 @@
-import type { HadarsRequest } from "../types/ninety";
+import type { HadarsRequest } from "../types/hadars";
 import { parseCookies } from "./cookies";
 
 export const parseRequest = (request: Request): HadarsRequest => {

@@ -8,7 +8,7 @@ export type {
     HadarsGetClientProps,
     HadarsEntryModule,
     HadarsApp,
-} from "./types/ninety";
+} from "./types/hadars";
 export { Head as HadarsHead, useServerData, initServerDataCache } from './utils/Head';
 import { AppProviderSSR, AppProviderCSR } from "./utils/Head";
 

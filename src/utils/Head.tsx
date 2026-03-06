@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AppContext, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/ninety'
+import type { AppContext, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
 
 interface InnerContext {
     setTitle: (title: string) => void;

@@ -64,7 +64,7 @@ async function getPage(): Promise<PageResult> {
     const res  = await fetch(BASE_URL + '/');
     const html = await res.text();
     const m    = html.match(/<script id="hadars" type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
-    const props = m ? (JSON.parse(m[1]).hadars?.props ?? {}) : {};
+    const props = m ? (JSON.parse(m[1] ?? '{}').hadars?.props ?? {}) : {};
     return { res, html, props };
 }
 
@@ -119,7 +119,7 @@ async function getCachePage(): Promise<{ res: Response; html: string; serverTime
     const res  = await fetch(BASE_URL + '/cache-test');
     const html = await res.text();
     const m    = html.match(/<script id="hadars" type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
-    const props = m ? (JSON.parse(m[1]).hadars?.props ?? {}) : {};
+    const props = m ? (JSON.parse(m[1] ?? '{}').hadars?.props ?? {}) : {};
     return { res, html, serverTime: props.serverTime ?? '' };
 }
 

@@ -16,11 +16,11 @@ import { existsSync } from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import cluster from 'node:cluster';
-import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/ninety";
+import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
 const encoder = new TextEncoder();
 
-const HEAD_MARKER = '<meta name="NINETY_HEAD">';
-const BODY_MARKER = '<meta name="NINETY_BODY">';
+const HEAD_MARKER = '<meta name="HADARS_HEAD">';
+const BODY_MARKER = '<meta name="HADARS_BODY">';
 
 // Resolve renderToString from react-dom/server in the project's node_modules.
 let _renderToString: ((element: any) => string) | null = null;
@@ -264,11 +264,37 @@ async function transformStream(data: Uint8Array, stream: { writable: WritableStr
 const gzipCompress   = (d: Uint8Array) => transformStream(d, new (globalThis as any).CompressionStream('gzip'));
 const gzipDecompress = (d: Uint8Array) => transformStream(d, new (globalThis as any).DecompressionStream('gzip'));
 
+async function buildCacheEntry(res: Response, ttl: number | undefined): Promise<CacheEntry> {
+    const buf = await res.arrayBuffer();
+    const body = await gzipCompress(new Uint8Array(buf));
+    const headers: [string, string][] = [];
+    res.headers.forEach((v, k) => {
+        if (k.toLowerCase() !== 'content-encoding' && k.toLowerCase() !== 'content-length') {
+            headers.push([k, v]);
+        }
+    });
+    headers.push(['content-encoding', 'gzip']);
+    return { body, status: res.status, headers, expiresAt: ttl != null ? Date.now() + ttl : null };
+}
+
+async function serveFromEntry(entry: CacheEntry, req: Request): Promise<Response> {
+    const accept = req.headers.get('Accept-Encoding') ?? '';
+    if (accept.includes('gzip')) {
+        return new Response(entry.body.buffer as ArrayBuffer, { status: entry.status, headers: entry.headers });
+    }
+    // Client doesn't support gzip — decompress before serving
+    const plain = await gzipDecompress(entry.body);
+    const headers = entry.headers.filter(([k]) => k.toLowerCase() !== 'content-encoding');
+    return new Response(plain.buffer as ArrayBuffer, { status: entry.status, headers });
+}
+
 function createRenderCache(
     opts: NonNullable<HadarsOptions['cache']>,
     handler: CacheFetchHandler,
 ): CacheFetchHandler {
-    const store = new Map<string, CacheEntry>();
+    const store    = new Map<string, CacheEntry>();
+    // Single-flight map: coalesces concurrent misses for the same key onto one render.
+    const inFlight = new Map<string, Promise<CacheEntry | null>>();
 
     return async (req, ctx) => {
         const hadarsReq = parseRequest(req);
@@ -278,45 +304,39 @@ function createRenderCache(
         if (key != null) {
             const entry = store.get(key);
             if (entry) {
-                if (entry.expiresAt == null || Date.now() < entry.expiresAt) {
-                    const accept = req.headers.get('Accept-Encoding') ?? '';
-                    if (accept.includes('gzip')) {
-                        return new Response(entry.body.buffer as ArrayBuffer, { status: entry.status, headers: entry.headers });
-                    }
-                    // Client doesn't support gzip — decompress before serving
-                    const plain = await gzipDecompress(entry.body);
-                    const headers = entry.headers.filter(([k]) => k.toLowerCase() !== 'content-encoding');
-                    return new Response(plain.buffer as ArrayBuffer, { status: entry.status, headers });
+                const expired = entry.expiresAt != null && Date.now() >= entry.expiresAt;
+                if (!expired) {
+                    return serveFromEntry(entry, req);
                 }
                 store.delete(key);
             }
+
+            // Single-flight: if a render for this key is already in progress, await
+            // it instead of starting a duplicate render (thundering herd prevention).
+            let flight = inFlight.get(key);
+            if (!flight) {
+                const ttl = cacheOpts?.ttl;
+                flight = handler(new Request(req), ctx)
+                    .then(async (res) => {
+                        if (!res || res.status < 200 || res.status >= 300 || res.headers.has('set-cookie')) {
+                            return null;
+                        }
+                        const newEntry = await buildCacheEntry(res, ttl);
+                        store.set(key, newEntry);
+                        return newEntry;
+                    })
+                    .catch(() => null)
+                    .finally(() => inFlight.delete(key));
+                inFlight.set(key, flight);
+            }
+
+            const newEntry = await flight;
+            if (newEntry) return serveFromEntry(newEntry, req);
+            // Render was uncacheable (error, Set-Cookie, etc.) — fall through to a
+            // fresh independent render for this request so it still gets a response.
         }
 
-        const res = await handler(req, ctx);
-
-        // Compress and cache in the background via clone() so the original
-        // stream is returned to the client immediately.
-        if (key != null && res) {
-            const ttl = cacheOpts?.ttl;
-            res.clone().arrayBuffer().then(async (buf) => {
-                const body = await gzipCompress(new Uint8Array(buf));
-                const headers: [string, string][] = [];
-                res.headers.forEach((v, k) => {
-                    if (k.toLowerCase() !== 'content-encoding' && k.toLowerCase() !== 'content-length') {
-                        headers.push([k, v]);
-                    }
-                });
-                headers.push(['content-encoding', 'gzip']);
-                store.set(key, {
-                    body,
-                    status: res.status,
-                    headers,
-                    expiresAt: ttl != null ? Date.now() + ttl : null,
-                });
-            }).catch(() => { /* ignore read errors on clone */ });
-        }
-
-        return res;
+        return handler(req, ctx);
     };
 }
 
@@ -457,11 +477,13 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     }, clientCompiler as any);
 
     console.log(`Starting HMR dev server on port ${hmrPort}`);
-    await new Promise<void>((resolve, reject) => {
-        let resolved = false;
+
+    // Kick off client build — does NOT await here so SSR worker can start in parallel.
+    let clientResolved = false;
+    const clientBuildDone = new Promise<void>((resolve, reject) => {
         (clientCompiler as any).hooks.done.tap('initial-build', (stats: any) => {
-            if (!resolved) {
-                resolved = true;
+            if (!clientResolved) {
+                clientResolved = true;
                 console.log(stats.toString({ colors: true }));
                 resolve();
             }
@@ -472,6 +494,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // Start SSR watcher in a separate process to avoid creating two rspack
     // compiler instances in the same process. We use node:child_process.spawn
     // which works on Bun, Node.js, and Deno (via compatibility layer).
+    // Spawned immediately so it compiles in parallel with the client build above.
     const workerCmd = resolveWorkerCmd(packageDir);
     console.log('Spawning SSR worker:', workerCmd.join(' '), 'entry:', entry);
 
@@ -501,36 +524,41 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const marker = 'ssr-watch: initial-build-complete';
     const rebuildMarker = 'ssr-watch: SSR rebuilt';
     const decoder = new TextDecoder();
-    let gotMarker = false;
     // Hoist so the async continuation loop below can keep using it.
     let stdoutReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-    try {
-        stdoutReader = stdoutWebStream.getReader();
-        let buf = '';
-        const start = Date.now();
-        const timeoutMs = 20000;
-        while (Date.now() - start < timeoutMs) {
-            const { done, value } = await stdoutReader.read();
-            if (done) { stdoutReader = null; break; }
-            const chunk = decoder.decode(value, { stream: true });
-            buf += chunk;
-            try { process.stdout.write(chunk); } catch (e) { /* ignore */ }
-            if (buf.includes(marker)) {
-                gotMarker = true;
-                break;
+    const ssrBuildDone = (async () => {
+        let gotMarker = false;
+        try {
+            stdoutReader = stdoutWebStream.getReader();
+            let buf = '';
+            const start = Date.now();
+            const timeoutMs = 20000;
+            while (Date.now() - start < timeoutMs) {
+                const { done, value } = await stdoutReader.read();
+                if (done) { stdoutReader = null; break; }
+                const chunk = decoder.decode(value, { stream: true });
+                buf += chunk;
+                try { process.stdout.write(chunk); } catch (e) { /* ignore */ }
+                if (buf.includes(marker)) {
+                    gotMarker = true;
+                    break;
+                }
             }
+            if (!gotMarker) {
+                console.warn('SSR worker did not signal initial build completion within timeout');
+            }
+        } catch (err) {
+            console.error('Error reading SSR worker output', err);
+            stdoutReader = null;
         }
-        if (!gotMarker) {
-            console.warn('SSR worker did not signal initial build completion within timeout');
-        }
-    } catch (err) {
-        console.error('Error reading SSR worker output', err);
-        stdoutReader = null;
-    }
+    })();
+
+    // Wait for both client and SSR builds to finish in parallel.
+    await Promise.all([clientBuildDone, ssrBuildDone]);
 
     // Continue reading stdout to forward logs and pick up SSR rebuild signals.
     if (stdoutReader) {
-        const reader = stdoutReader;
+        const reader = stdoutReader as ReadableStreamDefaultReader<Uint8Array>;
         (async () => {
             try {
                 while (true) {
@@ -577,7 +605,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         const url = new URL(request.url);
         const path = url.pathname;
 
-        // static files in the ninety output folder
+        // static files in the hadars output folder
         const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
@@ -743,7 +771,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
         const url = new URL(request.url);
         const path = url.pathname;
 
-        // static files in the ninety output folder
+        // static files in the hadars output folder
         const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
