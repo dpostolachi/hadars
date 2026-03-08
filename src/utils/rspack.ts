@@ -341,20 +341,16 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
     if (opts.watch) {
         await new Promise((resolve, reject) => {
             let first = true;
-            compiler.watch({}, (err: any, stats: any) => {
+            // Pass ignored patterns directly — compiler.watch(watchOptions) replaces
+            // the config-level watchOptions, so we must repeat them here.
+            compiler.watch({ ignored: ['**/node_modules/**', '**/.hadars/**'] }, (err: any, stats: any) => {
                 if (err) {
                     if (first) { first = false; reject(err); }
                     else { console.error('rspack watch error', err); }
                     return;
                 }
 
-                console.log(stats?.toString({
-                    colors: true,
-                    modules: true,
-                    children: true,
-                    chunks: true,
-                    chunkModules: true,
-                }));
+                console.log(stats?.toString({ colors: true }));
 
                 if (first) {
                     first = false;
