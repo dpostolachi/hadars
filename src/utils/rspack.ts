@@ -314,6 +314,12 @@ const buildCompilerConfig = (
             ...(localConfig.experiments || {}),
             outputModule: isServerBuild,
         },
+        // Prevent rspack from watching its own build output — without this the
+        // SSR watcher writing .hadars/index.ssr.js triggers the client compiler
+        // and vice versa, causing an infinite rebuild loop.
+        watchOptions: {
+            ignored: ['**/node_modules/**', '**/.hadars/**'],
+        },
     };
 };
 
