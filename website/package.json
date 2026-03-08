@@ -9,11 +9,13 @@
     "start": "hadars run"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "^4.2.1",
     "@tanstack/react-query": "^5.90.21",
     "@types/prismjs": "^1.26.6",
     "hadars": "file:..",
     "prismjs": "^1.30.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.2.1"
   }
 }
