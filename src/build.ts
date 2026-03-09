@@ -49,7 +49,7 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
     let processedHtml = html;
     for (const { full, attrs, css } of matches) {
         try {
-            const result = await postcss(plugins).process(css, { from: undefined });
+            const result = await postcss(plugins).process(css, { from: templatePath });
             processedHtml = processedHtml.replace(full, `<style${attrs}>${result.css}</style>`);
         } catch (err) {
             console.warn('[hadars] PostCSS error processing <style> block in HTML template:', err);
