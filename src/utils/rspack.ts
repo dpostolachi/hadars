@@ -135,6 +135,8 @@ interface EntryOptions {
     mode: "development" | "production",
     // optional swc plugins to pass to swc-loader
     swcPlugins?: SwcPluginList,
+    // optional path to a custom HTML template (resolved relative to cwd)
+    htmlTemplate?: string,
     // optional compile-time defines (e.g. { 'process.env.NODE_ENV': '"development"' })
     define?: Record<string, string>;
     base?: string;
@@ -291,7 +293,9 @@ const buildCompilerConfig = (
         plugins: [
             new rspack.HtmlRspackPlugin({
                 publicPath: base || '/',
-                template: clientScriptPath,
+                template: opts.htmlTemplate
+                    ? pathMod.resolve(process.cwd(), opts.htmlTemplate)
+                    : clientScriptPath,
                 scriptLoading: 'module',
                 filename: 'out.html',
                 inject: 'body',

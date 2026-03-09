@@ -1,5 +1,4 @@
 import React from 'react';
-import './index.css';
 import { HadarsContext, HadarsHead, useServerData, loadModule, type HadarsApp, type HadarsRequest } from 'hadars';
 import { dehydrate, hydrate, QueryClient, QueryClientProvider, useSuspenseQuery, type DehydratedState } from '@tanstack/react-query'
 import Prism from 'prismjs';

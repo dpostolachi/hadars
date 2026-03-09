@@ -94,6 +94,24 @@ export interface HadarsOptions {
      */
     optimization?: Record<string, unknown>;
     /**
+     * Path to a custom HTML template file (relative to the project root).
+     * Replaces the built-in minimal template used to generate the HTML shell.
+     *
+     * The file must include two marker elements so hadars can inject the
+     * per-request head tags and the server-rendered body:
+     *
+     * ```html
+     * <meta name="HADARS_HEAD">   <!-- replaced with <title>, <meta>, <link>, <style> tags -->
+     * <meta name="HADARS_BODY">   <!-- replaced with the SSR-rendered React tree -->
+     * ```
+     *
+     * Any `<style>` blocks in the template are automatically processed through
+     * PostCSS (using the project's `postcss.config.js`) at build/dev startup time,
+     * so `@import "tailwindcss"` and other PostCSS directives work as expected.
+     * Note: inline styles are processed once at startup and are not live-reloaded.
+     */
+    htmlTemplate?: string;
+    /**
      * SSR response cache for `run()` mode. Has no effect in `dev()` mode.
      *
      * Receives the incoming request and should return `{ key, ttl? }` to cache

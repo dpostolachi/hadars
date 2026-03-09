@@ -1,7 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
 @import "tailwindcss";
 /* Prevent Tailwind from scanning hadars' build output — otherwise it rescans
    .hadars/index.ssr.js on every rebuild and causes an infinite rebuild loop. */
-@source not "../.hadars";
+@source not ".hadars";
 
 /* ── reset ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -368,3 +374,10 @@ body {
     color: #3f3f46;
     font-size: 0.8rem;
 }
+    </style>
+    <meta name="HADARS_HEAD">
+</head>
+<body>
+    <meta name="HADARS_BODY">
+</body>
+</html>

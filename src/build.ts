@@ -19,6 +19,48 @@ import cluster from 'node:cluster';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
 const encoder = new TextEncoder();
 
+/**
+ * Reads an HTML template, processes any `<style>` blocks through PostCSS
+ * (using the project's postcss.config.js), writes the result to a temp file,
+ * and returns the temp file path. If there are no `<style>` blocks the
+ * original path is returned unchanged.
+ */
+async function processHtmlTemplate(templatePath: string): Promise<string> {
+    const html = await fs.readFile(templatePath, 'utf-8');
+
+    const styleRegex = /<style([^>]*)>([\s\S]*?)<\/style>/gi;
+    const matches: Array<{ full: string; attrs: string; css: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = styleRegex.exec(html)) !== null) {
+        matches.push({ full: m[0]!, attrs: m[1] ?? '', css: m[2] ?? '' });
+    }
+    if (matches.length === 0) return templatePath;
+
+    const { default: postcss } = await import('postcss');
+    let plugins: any[] = [];
+    try {
+        const { default: loadConfig } = await import('postcss-load-config' as any);
+        const config = await loadConfig({}, process.cwd());
+        plugins = (config as any).plugins ?? [];
+    } catch {
+        // No postcss config found — process without plugins (passthrough)
+    }
+
+    let processedHtml = html;
+    for (const { full, attrs, css } of matches) {
+        try {
+            const result = await postcss(plugins).process(css, { from: undefined });
+            processedHtml = processedHtml.replace(full, `<style${attrs}>${result.css}</style>`);
+        } catch (err) {
+            console.warn('[hadars] PostCSS error processing <style> block in HTML template:', err);
+        }
+    }
+
+    const tmpPath = pathMod.join(os.tmpdir(), `hadars-template-${Date.now()}.html`);
+    await fs.writeFile(tmpPath, processedHtml);
+    return tmpPath;
+}
+
 const HEAD_MARKER = '<meta name="HADARS_HEAD">';
 const BODY_MARKER = '<meta name="HADARS_BODY">';
 
@@ -445,6 +487,11 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // SSR live-reload id to force re-import
     let ssrBuildId = crypto.randomBytes(4).toString('hex');
 
+    // Pre-process the HTML template's <style> blocks through PostCSS (e.g. Tailwind).
+    const resolvedHtmlTemplate = options.htmlTemplate
+        ? await processHtmlTemplate(pathMod.resolve(__dirname, options.htmlTemplate))
+        : undefined;
+
     // Start rspack-dev-server for the client bundle. It provides true React
     // Fast Refresh HMR: the browser's HMR runtime connects directly to the
     // dev server's WebSocket on hmrPort and receives module-level patches
@@ -460,6 +507,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         mode: 'development',
         swcPlugins: options.swcPlugins,
         define: options.define,
+        htmlTemplate: resolvedHtmlTemplate,
     });
 
     const devServer = new RspackDevServer({
@@ -609,12 +657,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
-        // project-level static/ directory
+        // project-level static/ directory (explicit paths only — never intercept root)
         const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
-        if (path === '/' || path === '') {
-            const indexRes = await tryServeFile(pathMod.join(projectStaticPath, 'index.html'));
-            if (indexRes) return indexRes;
-        }
         const projectRes = await tryServeFile(pathMod.join(projectStaticPath, path));
         if (projectRes) return projectRes;
 
@@ -675,6 +719,11 @@ export const build = async (options: HadarsRuntimeOptions) => {
     const tmpFilePath = pathMod.join(os.tmpdir(), `hadars-client-${Date.now()}.tsx`);
     await fs.writeFile(tmpFilePath, clientScript);
 
+    // Pre-process the HTML template's <style> blocks through PostCSS (e.g. Tailwind).
+    const resolvedHtmlTemplate = options.htmlTemplate
+        ? await processHtmlTemplate(pathMod.resolve(__dirname, options.htmlTemplate))
+        : undefined;
+
     // Compile client and SSR bundles in parallel — they write to different
     // output directories and use different entry files, so they are fully
     // independent and safe to run concurrently.
@@ -692,6 +741,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             swcPlugins: options.swcPlugins,
             define: options.define,
             optimization: options.optimization,
+            htmlTemplate: resolvedHtmlTemplate,
         }),
         compileEntry(pathMod.resolve(__dirname, options.entry), {
             output: {
@@ -775,12 +825,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
         const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
-        if (path === '/' || path === '') {
-            const indexRes = await tryServeFile(pathMod.join(__dirname, StaticPath, 'index.html'));
-            if (indexRes) return indexRes;
-        }
-
-        // project-level static/ directory
+        // project-level static/ directory (explicit paths only — never intercept root)
         const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
         const projectRes = await tryServeFile(pathMod.join(projectStaticPath, path));
         if (projectRes) return projectRes;

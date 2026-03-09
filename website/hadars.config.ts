@@ -2,6 +2,7 @@ import type { HadarsOptions } from 'hadars';
 
 const config: HadarsOptions = {
     entry: 'src/App.tsx',
+    htmlTemplate: 'src/template.html',
     port: 9090,
     fetch: (req) => {
         if (req.pathname === '/api/data') {
