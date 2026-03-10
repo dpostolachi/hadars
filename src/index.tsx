@@ -10,6 +10,8 @@ export type {
     HadarsApp,
 } from "./types/hadars";
 export { Head as HadarsHead, useServerData, initServerDataCache } from './utils/Head';
+export { CacheSegment } from './components/CacheSegment';
+export { deleteSegment, clearSegments } from './utils/segmentCache';
 import { AppProviderSSR, AppProviderCSR } from "./utils/Head";
 
 export const HadarsContext = typeof window === 'undefined' ? AppProviderSSR : AppProviderCSR;

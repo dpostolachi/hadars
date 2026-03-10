@@ -1,0 +1,15 @@
+{
+    "name": "hadars-bench-app",
+    "version": "0.0.1",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "build": "hadars build",
+        "start": "hadars run"
+    },
+    "dependencies": {
+        "hadars": "file:../..",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
+    }
+}

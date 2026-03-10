@@ -1,5 +1,5 @@
 import React from 'react';
-import { HadarsContext, HadarsHead, useServerData, loadModule, type HadarsApp, type HadarsRequest } from 'hadars';
+import { HadarsContext, HadarsHead, useServerData, loadModule, CacheSegment, type HadarsApp, type HadarsRequest } from 'hadars';
 import { dehydrate, hydrate, QueryClient, QueryClientProvider, useSuspenseQuery, type DehydratedState } from '@tanstack/react-query'
 import Prism from 'prismjs';
 import 'prismjs/components/prism-typescript';
@@ -212,6 +212,7 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                 </header>
 
                 {/* ── features ── */}
+                <CacheSegment cacheKey="features-grid">
                 <section className="features-grid">
                     <FeatureCard icon="⚡" title="React Fast Refresh" desc="Full HMR via rspack-dev-server. Module-level patches, no full-page reloads." />
                     <FeatureCard icon="🖥️" title="True SSR" desc="Components render on the server with your data, then hydrate on the client." />
@@ -220,8 +221,10 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                     <FeatureCard icon="🌐" title="Cross-runtime" desc="Runs on Bun, Node.js, and Deno. No Bun-specific APIs — uses the standard Fetch API throughout." />
                     <FeatureCard icon="⚙️" title="Multi-core production" desc="Set workers: os.cpus().length to fork a process per CPU core via node:cluster. Client and SSR bundles build in parallel too." />
                 </section>
+                </CacheSegment>
 
                 {/* ── quick start ── */}
+                <CacheSegment cacheKey="section-quickstart">
                 <Section id="quickstart" title="Quick start">
                     <p>Add hadars as a dependency, create a config, write a page component.</p>
 
@@ -280,8 +283,10 @@ hadars build
 hadars run           # multi-core when workers > 1
                     `}</Code>
                 </Section>
+                </CacheSegment>
 
                 {/* ── concepts ── */}
+                <CacheSegment cacheKey="section-concepts">
                 <Section id="concepts" title="Core concepts">
 
                     <h3>Data lifecycle</h3>
@@ -424,8 +429,10 @@ const Page: React.FC = () => {
 };
                     `}</Code>
                 </Section>
+                </CacheSegment>
 
                 {/* ── api ── */}
+                <CacheSegment cacheKey="section-api">
                 <Section id="api" title="API reference">
 
                     <h3>HadarsOptions (hadars.config.ts)</h3>
@@ -490,6 +497,7 @@ type HadarsProps<T> = T & {
 };
                     `}</Code>
                 </Section>
+                </CacheSegment>
 
                 {/* ── live demo ── */}
                 <Section id="demo" title="Live demo">

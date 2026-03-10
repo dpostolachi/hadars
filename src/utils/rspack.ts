@@ -216,26 +216,27 @@ const buildCompilerConfig = (
         (opts.output && typeof opts.output === 'object' && (opts.output.library || String(opts.output.filename || '').includes('ssr')))
     );
 
+    // slim-react: the SSR-only React-compatible renderer bundled with hadars.
+    // On server builds we replace the real React with slim-react so that hooks
+    // get safe SSR stubs, context works, and renderToStream / Suspense are
+    // natively supported.  The client build is untouched and uses real React.
+    const slimReactIndex = pathMod.resolve(packageDir, 'slim-react', 'index.js');
+    const slimReactJsx   = pathMod.resolve(packageDir, 'slim-react', 'jsx-runtime.js');
+
     const resolveAliases: Record<string, string> | undefined = isServerBuild ? {
-        // force all react imports to resolve to this project's react
-        react: path.resolve(process.cwd(), 'node_modules', 'react'),
-        'react-dom': path.resolve(process.cwd(), 'node_modules', 'react-dom'),
-        // also map react/jsx-runtime to avoid duplicates when automatic runtime is used
-        'react/jsx-runtime': path.resolve(process.cwd(), 'node_modules', 'react', 'jsx-runtime.js'),
-        'react/jsx-dev-runtime': path.resolve(process.cwd(), 'node_modules', 'react', 'jsx-dev-runtime.js'),
-        // ensure emotion packages resolve to the project's node_modules so we don't pick up a browser-specific entry
-        '@emotion/react': path.resolve(process.cwd(), 'node_modules', '@emotion', 'react'),
+        // Route all React imports to slim-react for SSR.
+        react:                slimReactIndex,
+        'react/jsx-runtime':  slimReactJsx,
+        'react/jsx-dev-runtime': slimReactJsx,
+        // Keep emotion on the project's node_modules (server-safe entry).
+        '@emotion/react':  path.resolve(process.cwd(), 'node_modules', '@emotion', 'react'),
         '@emotion/server': path.resolve(process.cwd(), 'node_modules', '@emotion', 'server'),
-        '@emotion/cache': path.resolve(process.cwd(), 'node_modules', '@emotion', 'cache'),
+        '@emotion/cache':  path.resolve(process.cwd(), 'node_modules', '@emotion', 'cache'),
         '@emotion/styled': path.resolve(process.cwd(), 'node_modules', '@emotion', 'styled'),
     } : undefined;
 
     const externals = isServerBuild ? [
-        'react',
-        'react-dom',
-        // keep common aliases external as well
-        'react/jsx-runtime',
-        'react/jsx-dev-runtime',
+        // react / react-dom are replaced by slim-react via alias above — not external.
         // emotion should be external on server builds to avoid client/browser code
         '@emotion/react',
         '@emotion/server',
@@ -301,8 +302,34 @@ const buildCompilerConfig = (
                     : clientScriptPath,
                 scriptLoading: 'module',
                 filename: 'out.html',
-                inject: 'body',
+                inject: 'head',
+                minify: opts.mode === 'production',
             }),
+            // Add `async` to the emitted module script so DOMContentLoaded fires
+            // as soon as HTML is parsed — without waiting for the bundle to execute.
+            // `<script type="module" async>` is valid: it downloads in parallel and
+            // executes without blocking DOMContentLoaded, while retaining module
+            // semantics (strict mode, ES imports, etc.).
+            {
+                apply(compiler: any) {
+                    compiler.hooks.emit.tapAsync('HadarsAsyncModuleScript', (compilation: any, cb: () => void) => {
+                        const asset = compilation.assets['out.html'];
+                        if (asset) {
+                            const html: string = asset.source();
+                            const updated = html.replace(
+                                /(<script\b[^>]*\btype="module"[^>]*)(>)/g,
+                                (match, before: string, end: string) =>
+                                    before.includes('async') ? match : `${before} async${end}`,
+                            );
+                            compilation.assets['out.html'] = {
+                                source: () => updated,
+                                size:   () => Buffer.byteLength(updated),
+                            };
+                        }
+                        cb();
+                    });
+                },
+            },
             isDev && new ReactRefreshPlugin(),
             includeHotPlugin && isDev && new rspack.HotModuleReplacementPlugin(),
             ...extraPlugins,

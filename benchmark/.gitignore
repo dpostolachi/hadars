@@ -1,0 +1,6 @@
+node_modules/
+hadars/node_modules/
+nextjs/node_modules/
+hadars/dist/
+nextjs/.next/
+nextjs/next-env.d.ts

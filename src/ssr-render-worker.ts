@@ -1,53 +1,27 @@
 /**
  * SSR render worker — runs in a node:worker_threads thread.
  *
- * Handles one message type sent by RenderWorkerPool in build.ts:
+ * Uses slim-react (bundled with hadars) for rendering instead of react-dom/server.
+ * The SSR bundle is compiled with `react` aliased to slim-react, so both the
+ * worker and the bundle share the same slim-react instance (and its globalThis
+ * render state) without any extra coordination.
  *
- *   { type: 'renderFull', id, request: SerializableRequest }
- *     → runs full lifecycle (getInitProps → render loop → getAfterRenderProps → getFinalProps)
- *     → renderToString(ReactPage)
- *     → postMessage({ id, html, headHtml, status })
- *
- * The SSR bundle path is passed once via workerData at thread creation time so
- * the SSR module is only imported once per worker lifetime.
+ * Message: { type: 'renderFull', id, request: SerializableRequest }
+ * Reply:   { id, html, headHtml, status }  |  { id, error }
  */
 
 import { workerData, parentPort } from 'node:worker_threads';
-import { createRequire } from 'node:module';
-import pathMod from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { processSegmentCache } from './utils/segmentCache';
+import { renderToString, createElement, Fragment } from './slim-react/index';
 
 const { ssrBundlePath } = workerData as { ssrBundlePath: string };
 
-// Lazy-loaded singletons resolved from the *project's* node_modules so the
-// same React instance is shared with the SSR bundle (prevents invalid hook calls).
-let _React: any = null;
-let _renderToStaticMarkup: ((element: any) => string) | null = null;
-let _renderToString: ((element: any) => string) | null = null;
-// Full SSR module — includes default (App component) + lifecycle exports.
 let _ssrMod: any = null;
 
 async function init() {
-    if (_React && _ssrMod) return;
-
-    const req = createRequire(pathMod.resolve(process.cwd(), '__hadars_fake__.js'));
-
-    if (!_React) {
-        const reactPath = pathToFileURL(req.resolve('react')).href;
-        const reactMod = await import(reactPath);
-        _React = reactMod.default ?? reactMod;
-    }
-
-    if (!_renderToString || !_renderToStaticMarkup) {
-        const serverPath = pathToFileURL(req.resolve('react-dom/server')).href;
-        const serverMod = await import(serverPath);
-        _renderToString = serverMod.renderToString;
-        _renderToStaticMarkup = serverMod.renderToStaticMarkup;
-    }
-
-    if (!_ssrMod) {
-        _ssrMod = await import(pathToFileURL(ssrBundlePath).href);
-    }
+    if (_ssrMod) return;
+    _ssrMod = await import(pathToFileURL(ssrBundlePath).href);
 }
 
 export type SerializableRequest = {
@@ -65,61 +39,57 @@ function deserializeRequest(s: SerializableRequest): any {
     const init: RequestInit = { method: s.method, headers: new Headers(s.headers) };
     if (s.body) init.body = s.body.buffer as ArrayBuffer;
     const req = new Request(s.url, init);
-    Object.assign(req, {
-        pathname: s.pathname,
-        search: s.search,
-        location: s.location,
-        cookies: s.cookies,
-    });
+    Object.assign(req, { pathname: s.pathname, search: s.search, location: s.location, cookies: s.cookies });
     return req;
 }
 
-function buildHeadHtml(head: any): string {
-    const R = _React;
-    const metaEntries = Object.entries(head.meta ?? {});
-    const linkEntries = Object.entries(head.link ?? {});
-    const styleEntries = Object.entries(head.style ?? {});
-    const scriptEntries = Object.entries(head.script ?? {});
-    return _renderToStaticMarkup!(
-        R.createElement(R.Fragment, null,
-            R.createElement('title', null, head.title),
-            ...metaEntries.map(([id, opts]) => R.createElement('meta', { key: id, id, ...(opts as any) })),
-            ...linkEntries.map(([id, opts]) => R.createElement('link', { key: id, id, ...(opts as any) })),
-            ...styleEntries.map(([id, opts]) => R.createElement('style', { key: id, id, ...(opts as any) })),
-            ...scriptEntries.map(([id, opts]) => R.createElement('script', { key: id, id, ...(opts as any) })),
-        )
-    );
+// ── Head HTML serialisation ────────────────────────────────────────────────
+
+const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c] ?? c);
+const escText = (s: string) => s.replace(/[&<>]/g, c => ESC[c] ?? c);
+
+const HEAD_ATTR: Record<string, string> = {
+    className: 'class', htmlFor: 'for', httpEquiv: 'http-equiv',
+    charSet: 'charset', crossOrigin: 'crossorigin',
+};
+
+function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, selfClose = false): string {
+    let a = ` id="${escAttr(id)}"`;
+    let inner = '';
+    for (const [k, v] of Object.entries(opts)) {
+        if (k === 'key' || k === 'children') continue;
+        if (k === 'dangerouslySetInnerHTML') { inner = (v as any).__html ?? ''; continue; }
+        const attr = HEAD_ATTR[k] ?? k;
+        if (v === true) a += ` ${attr}`;
+        else if (v !== false && v != null) a += ` ${attr}="${escAttr(String(v))}"`;
+    }
+    return selfClose ? `<${tag}${a}>` : `<${tag}${a}>${inner}</${tag}>`;
 }
 
-function buildReactPage(appProps: any, clientProps: any) {
-    const R = _React;
-    const Component = _ssrMod.default;
-    return R.createElement(
-        R.Fragment, null,
-        R.createElement('div', { id: 'app' },
-            R.createElement(Component, appProps),
-        ),
-        R.createElement('script', {
-            id: 'hadars',
-            type: 'application/json',
-            dangerouslySetInnerHTML: {
-                __html: JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c'),
-            },
-        }),
-    );
+function buildHeadHtml(head: any): string {
+    let html = `<title>${escText(head.title ?? '')}</title>`;
+    for (const [id, opts] of Object.entries(head.meta ?? {}))
+        html += renderHeadTag('meta', id, opts as Record<string, unknown>, true);
+    for (const [id, opts] of Object.entries(head.link ?? {}))
+        html += renderHeadTag('link', id, opts as Record<string, unknown>, true);
+    for (const [id, opts] of Object.entries(head.style ?? {}))
+        html += renderHeadTag('style', id, opts as Record<string, unknown>);
+    for (const [id, opts] of Object.entries(head.script ?? {}))
+        html += renderHeadTag('script', id, opts as Record<string, unknown>);
+    return html;
 }
+
+// ── Full lifecycle ─────────────────────────────────────────────────────────
 
 async function runFullLifecycle(serialReq: SerializableRequest) {
-    const R = _React;
     const Component = _ssrMod.default;
     const { getInitProps, getAfterRenderProps, getFinalProps } = _ssrMod;
 
     const parsedReq = deserializeRequest(serialReq);
 
-    const unsuspend: any = { cache: new Map(), hasPending: false };
     const context: any = {
         head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200 },
-        _unsuspend: unsuspend,
     };
 
     let props: any = {
@@ -128,82 +98,77 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
         context,
     };
 
-    // useServerData render loop — same logic as getReactResponse on main thread.
-    let html = '';
-    let iters = 0;
-    do {
-        unsuspend.hasPending = false;
-        try {
-            (globalThis as any).__hadarsUnsuspend = unsuspend;
-            html = _renderToStaticMarkup!(R.createElement(Component, props));
-        } finally {
-            (globalThis as any).__hadarsUnsuspend = null;
-        }
-        if (unsuspend.hasPending) {
-            const pending = [...unsuspend.cache.values()]
-                .filter((e: any) => e.status === 'pending')
-                .map((e: any) => e.promise);
-            await Promise.all(pending);
-        }
-    } while (unsuspend.hasPending && ++iters < 25);
-    if (unsuspend.hasPending) {
-        console.warn('[hadars] SSR render loop hit the 25-iteration cap — some useServerData values may not be resolved. Check for data dependencies that are never fulfilled.');
-    }
+    // Create per-request cache for useServerData, active for all renders.
+    const unsuspend = { cache: new Map<string, any>() };
+    (globalThis as any).__hadarsUnsuspend = unsuspend;
 
-    props = getAfterRenderProps ? await getAfterRenderProps(props, html) : props;
-
-    // Re-render to capture head changes from getAfterRenderProps.
     try {
-        (globalThis as any).__hadarsUnsuspend = unsuspend;
-        _renderToStaticMarkup!(R.createElement(Component, { ...props, location: serialReq.location, context }));
+        let html = await renderToString(createElement(Component, props));
+
+        if (getAfterRenderProps) {
+            props = await getAfterRenderProps(props, html);
+            await renderToString(
+                createElement(Component, { ...props, location: serialReq.location, context }),
+            );
+        }
     } finally {
         (globalThis as any).__hadarsUnsuspend = null;
     }
 
-    // Collect resolved useServerData values for client hydration.
-    const serverData: Record<string, unknown> = {};
-    for (const [k, v] of unsuspend.cache) {
-        if ((v as any).status === 'fulfilled') serverData[k] = (v as any).value;
-        if ((v as any).status === 'suspense-cached') serverData[k] = (v as any).value;
-    }
-
     const { context: _ctx, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
+
+    // Collect fulfilled useServerData values for client-side hydration.
+    const serverData: Record<string, unknown> = {};
+    for (const [key, entry] of unsuspend.cache) {
+        if (entry.status === 'fulfilled') serverData[key] = entry.value;
+    }
     const clientProps = {
         ...restProps,
         location: serialReq.location,
         ...(Object.keys(serverData).length > 0 ? { __serverData: serverData } : {}),
     };
 
-    const headHtml = buildHeadHtml(context.head);
-    const status: number = context.head.status ?? 200;
     const finalAppProps = { ...props, location: serialReq.location, context };
-
-    return { finalAppProps, clientProps, headHtml, status, unsuspend };
+    return { finalAppProps, clientProps, unsuspend, headHtml: buildHeadHtml(context.head), status: context.head.status ?? 200 };
 }
+
+// ── Message handler ────────────────────────────────────────────────────────
 
 parentPort!.on('message', async (msg: any) => {
     const { id, type, request } = msg;
     try {
         await init();
-
         if (type !== 'renderFull') return;
 
-        const { finalAppProps, clientProps, headHtml, status, unsuspend } =
+        const { finalAppProps, clientProps, unsuspend, headHtml, status } =
             await runFullLifecycle(request as SerializableRequest);
 
-        const ReactPage = buildReactPage(finalAppProps, clientProps);
+        const Component = _ssrMod.default;
 
+        const page = createElement(Fragment, null,
+            createElement('div', { id: 'app' }, createElement(Component, finalAppProps)),
+            createElement('script', {
+                id: 'hadars',
+                type: 'application/json',
+                dangerouslySetInnerHTML: {
+                    __html: JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c'),
+                },
+            }),
+        );
+
+        // Re-use the same cache so useServerData returns immediately (no re-fetch).
+        (globalThis as any).__hadarsUnsuspend = unsuspend;
         let html: string;
         try {
-            (globalThis as any).__hadarsUnsuspend = unsuspend;
-            html = _renderToString!(ReactPage);
+            html = await renderToString(page);
         } finally {
             (globalThis as any).__hadarsUnsuspend = null;
         }
+        html = processSegmentCache(html);
+
         parentPort!.postMessage({ id, html, headHtml, status });
 
     } catch (err: any) {
-        (globalThis as any).__hadarsUnsuspend = null;
         parentPort!.postMessage({ id, error: err?.message ?? String(err) });
     }
 });

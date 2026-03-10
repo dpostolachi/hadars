@@ -9,7 +9,6 @@ import { isBun, isDeno, isNode } from "./utils/runtime";
 import { RspackDevServer } from "@rspack/dev-server";
 import pathMod from "node:path";
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -17,6 +16,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import cluster from 'node:cluster';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
+import { processSegmentCache } from "./utils/segmentCache";
 const encoder = new TextEncoder();
 
 /**
@@ -73,17 +73,7 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
 const HEAD_MARKER = '<meta name="HADARS_HEAD">';
 const BODY_MARKER = '<meta name="HADARS_BODY">';
 
-// Resolve renderToString from react-dom/server in the project's node_modules.
-let _renderToString: ((element: any) => string) | null = null;
-async function getRenderToString(): Promise<(element: any) => string> {
-    if (!_renderToString) {
-        const req = createRequire(pathMod.resolve(process.cwd(), '__hadars_fake__.js'));
-        const resolved = req.resolve('react-dom/server');
-        const mod = await import(pathToFileURL(resolved).href);
-        _renderToString = mod.renderToString;
-    }
-    return _renderToString!;
-}
+import { renderToString as slimRenderToString } from './slim-react/index';
 
 // Round-robin thread pool for SSR rendering — used on Bun/Deno where
 // node:cluster is not available but node:worker_threads is.
@@ -210,26 +200,21 @@ async function buildSsrResponse(
     getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
     unsuspendForRender: any,
 ): Promise<Response> {
-    // Pre-load renderer before starting the stream so the set→call→clear
-    // sequence around __hadarsUnsuspend is fully synchronous (no await between them).
-    const renderToString = await getRenderToString();
-
     const responseStream = new ReadableStream({
         async start(controller) {
             const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
             // Flush the shell (precontentHtml) immediately so the browser can
             // start loading CSS/fonts before renderToString blocks the thread.
             controller.enqueue(encoder.encode(precontentHtml));
-            await Promise.resolve(); // yield to let the runtime flush the shell chunk
 
-            // set → call (synchronous) → clear: no await in between, safe under concurrency
             let bodyHtml: string;
             try {
                 (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
-                bodyHtml = renderToString(ReactPage);
+                bodyHtml = await slimRenderToString(ReactPage);
             } finally {
                 (globalThis as any).__hadarsUnsuspend = null;
             }
+            bodyHtml = processSegmentCache(bodyHtml);
             controller.enqueue(encoder.encode(bodyHtml + postContent));
             controller.close();
         },
@@ -697,7 +682,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 getFinalProps,
             } = (await import(importPath)) as HadarsEntryModule<any>;
 
-            const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
+            const { ReactPage, unsuspend, status, headHtml } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -707,7 +692,6 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 },
             });
 
-            const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
             return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
@@ -885,7 +869,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 });
             }
 
-            const { ReactPage, status, headHtml, renderPayload } = await getReactResponse(request, {
+            const { ReactPage, unsuspend, status, headHtml } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -895,7 +879,6 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 },
             });
 
-            const unsuspend = (renderPayload.appProps.context as any)?._unsuspend ?? null;
             return buildSsrResponse(ReactPage, headHtml, status, getPrecontentHtml, unsuspend);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);

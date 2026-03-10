@@ -273,8 +273,7 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
                     () => { unsuspend.cache.set(cacheKey, { status: 'suspense-resolved' }); },
                 );
                 unsuspend.cache.set(cacheKey, { status: 'pending', promise: suspensePromise });
-                unsuspend.hasPending = true;
-                return undefined;
+                throw suspensePromise; // slim-react will await and retry
             }
             throw thrown;
         }
@@ -294,12 +293,10 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
             reason => { unsuspend.cache.set(cacheKey, { status: 'rejected', reason }); },
         );
         unsuspend.cache.set(cacheKey, { status: 'pending', promise });
-        unsuspend.hasPending = true;
-        return undefined;
+        throw promise; // slim-react will await and retry
     }
     if (existing.status === 'pending') {
-        unsuspend.hasPending = true;
-        return undefined;
+        throw existing.promise; // slim-react will await and retry
     }
     if (existing.status === 'rejected') throw existing.reason;
     return existing.value as T;
