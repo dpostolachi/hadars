@@ -42,6 +42,7 @@ jobs:
       # ── 3. Run SSR integration tests with Bun ───────────────────────────────
       # The test file starts the website server, waits for it to be ready,
       # runs all assertions, then kills it on teardown.
-
+      - name: Run renderer comparison tests
+        run: bun test test/render-compare.test.tsx
       - name: Run SSR tests
         run: bun test test/ssr.test.ts

@@ -3,9 +3,15 @@
 // with elements produced by the real React JSX runtime (e.g. when a library
 // uses React.createElement directly).  This means the SSR bundle can be aliased
 // to slim-react without any element shape mismatch.
-export const SLIM_ELEMENT  = Symbol.for("react.element");
-export const FRAGMENT_TYPE = Symbol.for("react.fragment");
-export const SUSPENSE_TYPE = Symbol.for("react.suspense");
+//
+// React 19 introduced "react.transitional.element" as the canonical $$typeof for
+// elements created by createElement / the jsx-runtime.  We keep the old
+// "react.element" as slim-react's own emission symbol (unchanged wire format for
+// SSR HTML — it makes no difference) and accept both in the renderer.
+export const SLIM_ELEMENT   = Symbol.for("react.element");
+export const REACT19_ELEMENT = Symbol.for("react.transitional.element");
+export const FRAGMENT_TYPE  = Symbol.for("react.fragment");
+export const SUSPENSE_TYPE  = Symbol.for("react.suspense");
 
 // ---- Types ----
 export type ComponentFunction = (props: any) => SlimNode;

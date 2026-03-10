@@ -16,6 +16,7 @@
 
 import {
   SLIM_ELEMENT,
+  REACT19_ELEMENT,
   FRAGMENT_TYPE,
   SUSPENSE_TYPE,
   type SlimElement,
@@ -53,7 +54,11 @@ const VOID_ELEMENTS = new Set([
 ]);
 
 function escapeHtml(str: string): string {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/'/g, "&#x27;");
 }
 
 function escapeAttr(str: string): string {
@@ -240,7 +245,9 @@ function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
       key === "children" ||
       key === "key" ||
       key === "ref" ||
-      key === "dangerouslySetInnerHTML"
+      key === "dangerouslySetInnerHTML" ||
+      key === "suppressHydrationWarning" ||
+      key === "suppressContentEditableWarning"
     )
       continue;
     // Skip event handlers (onClick, onChange, …)
@@ -259,12 +266,24 @@ function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
             ? "for"
             : key === "tabIndex"
               ? "tabindex"
-              : key;
+              : key === "defaultValue"
+                ? "value"
+                : key === "defaultChecked"
+                  ? "checked"
+                  : key;
     }
 
-    if (value === false || value == null) continue;
+    if (value === false || value == null) {
+      // aria-* and data-* attributes treat `false` as the string "false"
+      // (omitting them would change semantics, e.g. aria-hidden="false" ≠ absent).
+      if (value === false && (attrName.startsWith("aria-") || attrName.startsWith("data-"))) {
+        attrs += ` ${attrName}="false"`;
+      }
+      continue;
+    }
     if (value === true) {
-      attrs += ` ${attrName}`;
+      // Emit as attr="" to match React's server output exactly.
+      attrs += ` ${attrName}=""`;
       continue;
     }
     if (key === "style" && typeof value === "object") {
@@ -281,16 +300,29 @@ function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
 // ---------------------------------------------------------------------------
 
 interface Writer {
+  /** Write raw HTML markup. Resets lastWasText to false. */
   write(chunk: string): void;
+  /** Write escaped text content. Sets lastWasText to true. */
+  text(s: string): void;
+  /** True if the last thing written was a text node (not markup). */
+  lastWasText: boolean;
 }
 
 class BufferWriter implements Writer {
   chunks: string[] = [];
+  lastWasText = false;
   write(chunk: string) {
     this.chunks.push(chunk);
+    this.lastWasText = false;
+  }
+  text(s: string) {
+    this.chunks.push(s);
+    this.lastWasText = true;
   }
   flush(target: Writer) {
     for (const c of this.chunks) target.write(c);
+    // Propagate the text-node tracking state from the buffer's last write.
+    target.lastWasText = this.lastWasText;
   }
 }
 
@@ -314,11 +346,11 @@ function renderNode(
   // --- primitives / nullish ---
   if (node == null || typeof node === "boolean") return;
   if (typeof node === "string") {
-    writer.write(escapeHtml(node));
+    writer.text(escapeHtml(node));
     return;
   }
   if (typeof node === "number") {
-    writer.write(String(node));
+    writer.text(String(node));
     return;
   }
 
@@ -341,13 +373,14 @@ function renderNode(
     );
   }
 
-  // --- SlimElement ---
+  // --- SlimElement (accepts both the classic and React 19 transitional symbols) ---
   if (
     typeof node === "object" &&
     node !== null &&
-    "$$typeof" in node &&
-    (node as SlimElement).$$typeof === SLIM_ELEMENT
+    "$$typeof" in node
   ) {
+    const elType = (node as any)["$$typeof"] as symbol;
+    if (elType !== SLIM_ELEMENT && elType !== REACT19_ELEMENT) return;
     const element = node as SlimElement;
     const { type, props } = element;
 
@@ -366,11 +399,50 @@ function renderNode(
       return renderComponent(type, props, writer, isSvg);
     }
 
+    // Object component wrappers: React.memo, React.forwardRef,
+    // Context.Provider (React 19: the context IS the provider),
+    // Context.Consumer — all identified by their own $$typeof.
+    if (typeof type === "object" && type !== null) {
+      return renderComponent(type as unknown as Function, props, writer, isSvg);
+    }
+
     // HTML / SVG element
     if (typeof type === "string") {
       return renderHostElement(type, props, writer, isSvg);
     }
   }
+}
+
+/**
+ * Recursively clone `<option>` / `<optgroup>` nodes inside a `<select>` tree,
+ * stamping `selected` on options whose value is in `selectedValues`.
+ * Handles both single-select and multi-select (defaultValue array).
+ */
+function markSelectedOptionsMulti(children: SlimNode, selectedValues: Set<string>): SlimNode {
+  if (children == null || typeof children === "boolean") return children;
+  if (typeof children === "string" || typeof children === "number") return children;
+  if (Array.isArray(children)) {
+    return children.map((c) => markSelectedOptionsMulti(c, selectedValues));
+  }
+  if (
+    typeof children === "object" &&
+    "$$typeof" in children
+  ) {
+    const elType = (children as any)["$$typeof"] as symbol;
+    if (elType !== SLIM_ELEMENT && elType !== REACT19_ELEMENT) return children;
+    const el = children as SlimElement;
+    if (el.type === "option") {
+      // Option value falls back to its text children if no value prop.
+      const optValue = el.props.value !== undefined ? el.props.value : el.props.children;
+      const isSelected = selectedValues.has(String(optValue));
+      return { ...el, props: { ...el.props, selected: isSelected || undefined } };
+    }
+    if (el.type === "optgroup" || el.type === FRAGMENT_TYPE) {
+      const newChildren = markSelectedOptionsMulti(el.props.children, selectedValues);
+      return { ...el, props: { ...el.props, children: newChildren } };
+    }
+  }
+  return children;
 }
 
 /** Render a host (HTML/SVG) element. Sync when children are sync. */
@@ -383,13 +455,60 @@ function renderHostElement(
   const enteringSvg = tag === "svg";
   const childSvg = isSvg || enteringSvg;
 
-  const effectiveProps =
-    enteringSvg && !props.xmlns
-      ? { xmlns: "http://www.w3.org/2000/svg", ...props }
-      : props;
+  // ── <textarea> ────────────────────────────────────────────────────────────
+  if (tag === "textarea") {
+    const textContent = props.value ?? props.defaultValue ?? props.children ?? "";
+    const filteredProps: Record<string, any> = {};
+    for (const k of Object.keys(props)) {
+      if (k !== "value" && k !== "defaultValue" && k !== "children") filteredProps[k] = props[k];
+    }
+    writer.write(`<textarea${renderAttributes(filteredProps, false)}>`);
+    writer.text(escapeHtml(String(textContent)));
+    writer.write("</textarea>");
+    return;
+  }
 
-  writer.write(`<${tag}${renderAttributes(effectiveProps, childSvg)}>`);
+  // ── <select> ──────────────────────────────────────────────────────────────
+  // React never emits a `value` attribute on <select>; instead it marks the
+  // matching <option> as `selected`.
+  if (tag === "select") {
+    const selectedValue = props.value ?? props.defaultValue;
+    const filteredProps: Record<string, any> = {};
+    for (const k of Object.keys(props)) {
+      if (k !== "value" && k !== "defaultValue") filteredProps[k] = props[k];
+    }
+    writer.write(`<select${renderAttributes(filteredProps, false)}>`);
+    // Normalise selectedValue to a Set of strings to handle both single values
+    // and arrays (multi-select with defaultValue={['a','b']}).
+    const selectedSet: Set<string> | null =
+      selectedValue == null
+        ? null
+        : Array.isArray(selectedValue)
+          ? new Set((selectedValue as unknown[]).map(String))
+          : new Set([String(selectedValue)]);
+    const patchedChildren =
+      selectedSet != null
+        ? markSelectedOptionsMulti(props.children, selectedSet)
+        : props.children;
+    const inner = renderChildren(patchedChildren, writer, false);
+    if (inner && typeof (inner as any).then === "function") {
+      return (inner as Promise<void>).then(() => { writer.write("</select>"); });
+    }
+    writer.write("</select>");
+    return;
+  }
 
+  // React 19 does not inject xmlns on <svg> — browsers handle SVG namespaces
+  // automatically for inline HTML5 SVG, so we match React's behaviour.
+  writer.write(`<${tag}${renderAttributes(props, childSvg)}`);
+
+  // Void elements are self-closing (matching React's output format).
+  if (VOID_ELEMENTS.has(tag)) {
+    writer.write("/>");
+    return;
+  }
+
+  writer.write(">");
   const childContext = tag === "foreignObject" ? false : childSvg;
 
   let inner: MaybePromise = undefined;
@@ -400,18 +519,18 @@ function renderHostElement(
   }
 
   if (inner && typeof (inner as any).then === "function") {
-    return (inner as Promise<void>).then(() => {
-      if (!VOID_ELEMENTS.has(tag)) writer.write(`</${tag}>`);
-    });
+    return (inner as Promise<void>).then(() => { writer.write(`</${tag}>`); });
   }
-  if (!VOID_ELEMENTS.has(tag)) writer.write(`</${tag}>`);
+  writer.write(`</${tag}>`);
 }
 
-// React special $$typeof symbols for memo, forwardRef, and context/provider
+// React special $$typeof symbols for memo, forwardRef, context/provider/consumer, lazy
 const REACT_MEMO        = Symbol.for("react.memo");
 const REACT_FORWARD_REF = Symbol.for("react.forward_ref");
-const REACT_PROVIDER    = Symbol.for("react.provider"); // React 18 Provider object
-const REACT_CONTEXT     = Symbol.for("react.context");  // React 19 context-as-provider
+const REACT_PROVIDER    = Symbol.for("react.provider");  // React 18 Provider object
+const REACT_CONTEXT     = Symbol.for("react.context");   // React 19: context IS provider
+const REACT_CONSUMER    = Symbol.for("react.consumer");  // React 19 Consumer object
+const REACT_LAZY        = Symbol.for("react.lazy");      // React.lazy()
 
 /** Render a function or class component. */
 function renderComponent(
@@ -433,6 +552,31 @@ function renderComponent(
   // React.forwardRef — call the wrapped render function
   if (typeOf === REACT_FORWARD_REF) {
     return renderComponent((type as any).render, props, writer, isSvg);
+  }
+
+  // React.lazy — initialise via the _init/_payload protocol; may suspend.
+  if (typeOf === REACT_LAZY) {
+    // _init returns the resolved module (or throws a Promise/Error).
+    const resolved = (type as any)._init((type as any)._payload);
+    // The module may export `.default` or be the component directly.
+    const LazyComp = resolved?.default ?? resolved;
+    return renderComponent(LazyComp, props, writer, isSvg);
+  }
+
+  // React.Consumer (React 19) — call the children render prop with the current value
+  if (typeOf === REACT_CONSUMER) {
+    const ctx = (type as any)._context;
+    const value = ctx?._currentValue;
+    const result: SlimNode =
+      typeof props.children === "function" ? props.children(value) : null;
+    const savedScope = pushComponentScope();
+    const finish = () => popComponentScope(savedScope);
+    const r = renderNode(result, writer, isSvg);
+    if (r && typeof (r as any).then === "function") {
+      return (r as Promise<void>).then(finish);
+    }
+    finish();
+    return;
   }
 
   // Provider detection:
@@ -457,10 +601,30 @@ function renderComponent(
   // Each component gets a fresh local-ID counter (for multiple useId calls).
   const savedScope = pushComponentScope();
 
+  // For React 19 Provider (context object IS the provider — not callable), just
+  // render children directly; the context value was already pushed above.
+  if (isProvider && typeof type !== "function") {
+    const finish = () => {
+      popComponentScope(savedScope);
+      ctx._currentValue = prevCtxValue;
+    };
+    const r = renderChildren(props.children, writer, isSvg);
+    if (r && typeof (r as any).then === "function") {
+      return (r as Promise<void>).then(finish);
+    }
+    finish();
+    return;
+  }
+
   let result: SlimNode;
   try {
     if (type.prototype && typeof type.prototype.render === "function") {
       const instance = new (type as any)(props);
+      // Call getDerivedStateFromProps if defined, matching React's behaviour.
+      if (typeof (type as any).getDerivedStateFromProps === "function") {
+        const derived = (type as any).getDerivedStateFromProps(props, instance.state ?? {});
+        if (derived != null) instance.state = { ...(instance.state ?? {}), ...derived };
+      }
       result = instance.render();
     } else {
       result = type(props);
@@ -512,9 +676,12 @@ function renderChildArray(
 ): MaybePromise {
   const totalChildren = children.length;
   for (let i = 0; i < totalChildren; i++) {
-    // React inserts <!-- --> between adjacent text-like nodes so the browser
-    // preserves separate DOM text nodes — required for correct hydration.
-    if (i > 0 && isTextLike(children[i]) && isTextLike(children[i - 1])) {
+    // React inserts <!-- --> between adjacent text nodes to force the browser
+    // to preserve distinct DOM text nodes — required for correct hydration.
+    // We use writer.lastWasText instead of inspecting the previous VDOM node
+    // so that text emitted at the end of a nested array or fragment is also
+    // accounted for (fixes the {["a","b"]}{"c"} adjacency edge case).
+    if (isTextLike(children[i]) && writer.lastWasText) {
       writer.write("<!-- -->");
     }
     const savedTree = pushTreeContext(totalChildren, i);
@@ -540,7 +707,7 @@ function renderChildArrayFrom(
 ): MaybePromise {
   const totalChildren = children.length;
   for (let i = startIndex; i < totalChildren; i++) {
-    if (i > 0 && isTextLike(children[i]) && isTextLike(children[i - 1])) {
+    if (isTextLike(children[i]) && writer.lastWasText) {
       writer.write("<!-- -->");
     }
     const savedTree = pushTreeContext(totalChildren, i);
@@ -641,8 +808,14 @@ export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
       resetRenderState();
 
       const writer: Writer = {
+        lastWasText: false,
         write(chunk: string) {
           controller.enqueue(encoder.encode(chunk));
+          this.lastWasText = false;
+        },
+        text(s: string) {
+          controller.enqueue(encoder.encode(s));
+          this.lastWasText = true;
         },
       };
 
@@ -666,7 +839,11 @@ export async function renderToString(element: SlimNode): Promise<string> {
   for (let attempt = 0; attempt < MAX_SUSPENSE_RETRIES; attempt++) {
     resetRenderState();
     const chunks: string[] = [];
-    const writer: Writer = { write(c) { chunks.push(c); } };
+    const writer: Writer = {
+      lastWasText: false,
+      write(c) { chunks.push(c); this.lastWasText = false; },
+      text(s) { chunks.push(s); this.lastWasText = true; },
+    };
     try {
       const r = renderNode(element, writer);
       if (r && typeof (r as any).then === "function") await r;
