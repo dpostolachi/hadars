@@ -21,6 +21,7 @@ const outFile = argv['outFile'] || 'index.ssr.js';
 const base = argv['base'] || '';
 const swcPlugins = argv['swcPlugins'] ? JSON.parse(argv['swcPlugins']) : undefined;
 const define = argv['define'] ? JSON.parse(argv['define']) : undefined;
+const moduleRules = argv['moduleRules'] ? JSON.parse(argv['moduleRules']) : undefined;
 
 if (!entry) {
   console.error('ssr-watch: missing --entry argument');
@@ -44,6 +45,7 @@ if (!entry) {
       watch: true,
       swcPlugins,
       define,
+      moduleRules,
       onChange: () => {
         console.log('ssr-watch: SSR rebuilt');
       }

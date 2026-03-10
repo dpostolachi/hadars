@@ -39,16 +39,6 @@ const getConfigBase = (mode: "development" | "production"): Omit<Configuration, 
         module: {
             rules: [
                 {
-                    test: /\.mdx?$/,
-                    use: [
-                    {
-                        loader: '@mdx-js/loader',
-                        options: {
-                        },
-                    },
-                    ],
-                },
-                {
                     test: /\.css$/,
                     use: ["postcss-loader"],
                     type: "css",
@@ -142,6 +132,8 @@ interface EntryOptions {
     base?: string;
     // optional rspack optimization overrides (production client builds only)
     optimization?: Record<string, unknown>;
+    // additional module rules appended after the built-in rules
+    moduleRules?: Record<string, any>[];
 }
 
 const buildCompilerConfig = (
@@ -205,6 +197,10 @@ const buildCompilerConfig = (
                 }
             }
         }
+    }
+
+    if (opts.moduleRules && opts.moduleRules.length > 0) {
+        localConfig.module.rules.push(...opts.moduleRules);
     }
 
     // For server (SSR) builds we should avoid bundling react/react-dom so

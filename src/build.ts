@@ -507,6 +507,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         mode: 'development',
         swcPlugins: options.swcPlugins,
         define: options.define,
+        moduleRules: options.moduleRules,
         htmlTemplate: resolvedHtmlTemplate,
     });
 
@@ -554,6 +555,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         `--base=${baseURL}`,
         ...(options.swcPlugins ? [`--swcPlugins=${JSON.stringify(options.swcPlugins)}`] : []),
         ...(options.define ? [`--define=${JSON.stringify(options.define)}`] : []),
+        ...(options.moduleRules ? [`--moduleRules=${JSON.stringify(options.moduleRules)}`] : []),
     ], { stdio: 'pipe' });
     child.stdin?.end();
 
@@ -747,6 +749,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             mode: 'production',
             swcPlugins: options.swcPlugins,
             define: options.define,
+            moduleRules: options.moduleRules,
             optimization: options.optimization,
             htmlTemplate: resolvedHtmlTemplate,
         }),
@@ -763,6 +766,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             mode: 'production',
             swcPlugins: options.swcPlugins,
             define: options.define,
+            moduleRules: options.moduleRules,
         }),
     ]);
     await fs.rm(tmpFilePath);

@@ -112,6 +112,22 @@ export interface HadarsOptions {
      */
     htmlTemplate?: string;
     /**
+     * Additional rspack module rules appended to the built-in rule set.
+     * Applied to both the client and the SSR bundle.
+     *
+     * Useful for loaders not included by default, such as `@mdx-js/loader`,
+     * `less-loader`, `yaml-loader`, etc.
+     *
+     * @example
+     * moduleRules: [
+     *   {
+     *     test: /\.mdx?$/,
+     *     use: [{ loader: '@mdx-js/loader' }],
+     *   },
+     * ]
+     */
+    moduleRules?: Record<string, any>[];
+    /**
      * SSR response cache for `run()` mode. Has no effect in `dev()` mode.
      *
      * Receives the incoming request and should return `{ key, ttl? }` to cache
