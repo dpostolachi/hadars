@@ -199,6 +199,12 @@ export class Component<P = {}, S = {}> {
 
 export class PureComponent<P = {}, S = {}> extends Component<P, S> {}
 
+// ---- Version ----
+// Exported as a named export so that namespace imports (`import * as React`)
+// — as used by react-redux and other libraries that check React.version —
+// find it on the module namespace rather than only on the default export.
+export const version = "19.1.1";
+
 // ---- Default export ----
 // Mirrors `import React from 'react'` so code that uses React.useState,
 // React.createContext, React.Suspense, etc. works without changes.
@@ -218,8 +224,8 @@ const React = {
   Children, Component, PureComponent,
   // Rendering
   renderToStream, renderToString, renderToReadableStream,
-  // Version stub
-  version: "19.0.0-slim",
+  // Version
+  version,
 };
 
 export default React;
