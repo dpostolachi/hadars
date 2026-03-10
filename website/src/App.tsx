@@ -25,7 +25,22 @@ type CodeLang = 'tsx' | 'typescript' | 'bash';
 
 const Code: React.FC<{ children: string; lang?: CodeLang }> = ({ children, lang = 'tsx' }) => {
     const grammar = (Prism.languages[lang] ?? Prism.languages.plaintext)!;
-    const highlighted = Prism.highlight(children.trim(), grammar, lang);
+    const highlighted = Prism.highlight(children, grammar, lang);
+    const [ready, setReady] = React.useState(false);
+    
+    // Avoid hydration mismatch by only Prism-highlighting on the client.
+    React.useEffect(() => {
+        setReady(true);
+    }, []);
+
+    if (!ready) {
+        return (
+            <pre className="code-block">
+                <code>{children}</code>
+            </pre>
+        );
+    }
+    
     return (
         <pre className={`code-block language-${lang}`}>
             <code dangerouslySetInnerHTML={{ __html: highlighted }} />
@@ -207,7 +222,7 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                         Runs on Bun, Node.js, and Deno — export a component, export <code>getInitProps</code>, run one command.
                     </p>
                     <div className="hero-cta">
-                        <Code lang="bash">{`hadars dev`}</Code>
+                        <Code lang="bash">hadars dev</Code>
                     </div>
                 </header>
 
@@ -229,7 +244,7 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                     <p>Add hadars as a dependency, create a config, write a page component.</p>
 
                     <h3>1 — hadars.config.ts</h3>
-                    <Code lang="typescript">{`
+                    {/* <Code lang="typescript">{`
 import os from 'os';
 import type { HadarsOptions } from 'hadars';
 
@@ -241,10 +256,10 @@ const config: HadarsOptions = {
 };
 
 export default config;
-                    `}</Code>
+                    `}</Code> */}
 
                     <h3>2 — src/App.tsx</h3>
-                    <Code>{`
+                    {/* <Code>{`
 import React from 'react';
 import { HadarsContext, HadarsHead, type HadarsApp, type HadarsRequest } from 'hadars';
 
@@ -281,7 +296,7 @@ hadars build
 
 # serve the production build
 hadars run           # multi-core when workers > 1
-                    `}</Code>
+                    `}</Code> */}
                 </Section>
                 </CacheSegment>
 
@@ -323,7 +338,7 @@ hadars run           # multi-core when workers > 1
                         On the server the context is populated by mutation during render.
                         On the client the same API writes directly to <code>document.head</code>.
                     </p>
-                    <Code>{`
+                    {/* <Code>{`
 <HadarsHead status={200}>
     <title>My Page</title>
     <meta id="og-title" property="og:title" content="My Page" />
@@ -351,7 +366,7 @@ export default function Dashboard() {
         </React.Suspense>
     );
 }
-                    `}</Code>
+                    `}</Code> */}
                     <h3>Async data with useServerData</h3>
                     <p>
                         <code>useServerData(key, fn)</code> lets any component fetch async data
@@ -360,7 +375,7 @@ export default function Dashboard() {
                         serialises the results into the page so the client hydrates with the
                         same values — no second fetch in the browser.
                     </p>
-                    <Code>{`
+                    {/* <Code>{`
 import { useServerData } from 'hadars';
 
 // Inside any component wrapped by HadarsContext:
@@ -373,7 +388,7 @@ return <h1>Hello, {user.name}</h1>;
 
 // Use an array key when the key depends on dynamic values:
 const post = useServerData(['post', postId], () => db.getPost(postId));
-                    `}</Code>
+                    `}</Code> */}
 
                     <h3>Suspense-compatible hooks (e.g. React Query)</h3>
                     <p>
@@ -385,7 +400,7 @@ const post = useServerData(['post', postId], () => db.getPost(postId));
                         Suspense library handles its own cache hydration (via <code>dehydrate</code>{' '}
                         /<code> hydrate</code> in <code>getFinalProps</code> / <code>getClientProps</code>).
                     </p>
-                    <Code>{`
+                    {/* <Code>{`
 // 1. Wrap your app in a QueryClientProvider, passing a per-request QueryClient.
 //    Create the client in getInitProps and destroy it in getFinalProps.
 
@@ -427,7 +442,7 @@ const Page: React.FC = () => {
     const { data } = result as any;
     return <ul>{data?.map(p => <li key={p.id}>{p.title}</li>)}</ul>;
 };
-                    `}</Code>
+                    `}</Code> */}
                 </Section>
                 </CacheSegment>
 
@@ -456,14 +471,14 @@ const Page: React.FC = () => {
 
                     <h3>HadarsRequest</h3>
                     <p>Extends the standard <code>Request</code> with:</p>
-                    <Code lang="typescript">{`
+                    {/* <Code lang="typescript">{`
 interface HadarsRequest extends Request {
     pathname: string;              // URL pathname, e.g. "/blog/my-post"
     search: string;               // Query string, e.g. "?page=2"
     location: string;             // pathname + search
     cookies: Record<string, string>;
 }
-                    `}</Code>
+                    `}</Code> */}
 
                     <h3>useServerData&lt;T&gt;(key, fn)</h3>
                     <p>
@@ -473,7 +488,7 @@ interface HadarsRequest extends Request {
                         or throw a thenable (Suspense protocol). Only <code>Promise</code>-returning
                         calls are serialised for the client; Suspense hooks manage their own hydration.
                     </p>
-                    <Code lang="typescript">{`
+                    {/* <Code lang="typescript">{`
 import { useServerData } from 'hadars';
 
 // Normal async — result is serialised into the page, no re-fetch on the client:
@@ -487,15 +502,15 @@ const post = useServerData(['post', postId], () => db.getPost(postId));
 const result = useServerData(['posts'], () =>
     useSuspenseQuery({ queryKey: ['posts'], queryFn: fetchPosts })
 );
-                    `}</Code>
+                    `}</Code> */}
 
                     <h3>HadarsProps&lt;T&gt;</h3>
-                    <Code lang="typescript">{`
+                    {/* <Code lang="typescript">{`
 type HadarsProps<T> = T & {
     location: string;    // current URL path
     context: AppContext; // pass to <HadarsContext>
 };
-                    `}</Code>
+                    `}</Code> */}
                 </Section>
                 </CacheSegment>
 

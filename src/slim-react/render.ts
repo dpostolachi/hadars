@@ -500,6 +500,11 @@ function renderComponent(
  * so that `useId` produces deterministic, position-based IDs.
  * Goes async only when a child actually returns a Promise.
  */
+/** Returns true for nodes that become DOM text nodes (string or number). */
+function isTextLike(node: SlimNode): boolean {
+  return typeof node === "string" || typeof node === "number";
+}
+
 function renderChildArray(
   children: SlimNode[],
   writer: Writer,
@@ -507,6 +512,11 @@ function renderChildArray(
 ): MaybePromise {
   const totalChildren = children.length;
   for (let i = 0; i < totalChildren; i++) {
+    // React inserts <!-- --> between adjacent text-like nodes so the browser
+    // preserves separate DOM text nodes — required for correct hydration.
+    if (i > 0 && isTextLike(children[i]) && isTextLike(children[i - 1])) {
+      writer.write("<!-- -->");
+    }
     const savedTree = pushTreeContext(totalChildren, i);
     const r = renderNode(children[i], writer, isSvg);
     if (r && typeof (r as any).then === "function") {
@@ -530,6 +540,9 @@ function renderChildArrayFrom(
 ): MaybePromise {
   const totalChildren = children.length;
   for (let i = startIndex; i < totalChildren; i++) {
+    if (i > 0 && isTextLike(children[i]) && isTextLike(children[i - 1])) {
+      writer.write("<!-- -->");
+    }
     const savedTree = pushTreeContext(totalChildren, i);
     const r = renderNode(children[i], writer, isSvg);
     if (r && typeof (r as any).then === "function") {
@@ -584,8 +597,11 @@ async function renderSuspense(
       if (r && typeof (r as any).then === "function") {
         await r;
       }
-      // Success – flush to the real writer.
+      // Success – wrap with React's Suspense boundary markers so hydrateRoot
+      // can locate the boundary in the DOM (<!--$--> … <!--/$-->).
+      writer.write("<!--$-->");
       buffer.flush(writer);
+      writer.write("<!--/$-->");
       return;
     } catch (error: unknown) {
       if (error && typeof (error as any).then === "function") {
@@ -597,12 +613,14 @@ async function renderSuspense(
     }
   }
 
-  // Exhausted retries → render the fallback if provided.
+  // Exhausted retries → render the fallback (boundary stays in loading state).
   restoreContext(snap);
+  writer.write("<!--$?-->");
   if (fallback) {
     const r = renderNode(fallback, writer, isSvg);
     if (r && typeof (r as any).then === "function") await r;
   }
+  writer.write("<!--/$-->");
 }
 
 // ---------------------------------------------------------------------------
