@@ -36,6 +36,16 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
     }
     if (matches.length === 0) return templatePath;
 
+    await ensureHadarsTmpDir();
+
+    // Cache by content hash — same template content → skip Tailwind re-scan on restart.
+    const sourceHash = crypto.createHash('md5').update(html).digest('hex').slice(0, 8);
+    const cachedPath = pathMod.join(HADARS_TMP_DIR, `template-${sourceHash}.html`);
+    try {
+        await fs.access(cachedPath);
+        return cachedPath; // cache hit
+    } catch { /* cache miss — process below */ }
+
     const { default: postcss } = await import('postcss');
     let plugins: any[] = [];
     try {
@@ -56,9 +66,8 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
         }
     }
 
-    const tmpPath = pathMod.join(os.tmpdir(), `hadars-template-${Date.now()}.html`);
-    await fs.writeFile(tmpPath, processedHtml);
-    return tmpPath;
+    await fs.writeFile(cachedPath, processedHtml);
+    return cachedPath;
 }
 
 const HEAD_MARKER = '<meta name="HADARS_HEAD">';
@@ -395,6 +404,11 @@ const getSuffix = (mode: Mode) => mode === 'development' ? `?v=${Date.now()}` : 
 
 const HadarsFolder = './.hadars';
 const StaticPath = `${HadarsFolder}/static`;
+// Dedicated temp directory — keeps all hadars temp files out of the root of
+// os.tmpdir() so rspack's file watcher doesn't traverse unrelated system files
+// (e.g. Steam/Chrome shared-memory device files) in that directory.
+const HADARS_TMP_DIR = pathMod.join(os.tmpdir(), 'hadars');
+const ensureHadarsTmpDir = () => fs.mkdir(HADARS_TMP_DIR, { recursive: true });
 
 const validateOptions = (options: HadarsRuntimeOptions) => {
     if (!options.entry) {
@@ -481,7 +495,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         throw err;
     }
 
-    const tmpFilePath = pathMod.join(os.tmpdir(), `hadars-client-${Date.now()}.tsx`);
+    await ensureHadarsTmpDir();
+    const tmpFilePath = pathMod.join(HADARS_TMP_DIR, `client-${Date.now()}.tsx`);
     await fs.writeFile(tmpFilePath, clientScript);
 
     // SSR live-reload id to force re-import
@@ -601,27 +616,32 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         }
     })();
 
-    // Wait for both client and SSR builds to finish in parallel.
-    await Promise.all([clientBuildDone, ssrBuildDone]);
+    // Both builds run in parallel — this promise resolves when they're both done.
+    // We do NOT await it here; the server starts immediately below so that the
+    // port is bound right away. Incoming requests await this promise before
+    // processing, so they hold in-flight and all resolve together once ready.
+    const readyPromise = Promise.all([clientBuildDone, ssrBuildDone]);
 
-    // Continue reading stdout to forward logs and pick up SSR rebuild signals.
-    if (stdoutReader) {
-        const reader = stdoutReader as ReadableStreamDefaultReader<Uint8Array>;
-        (async () => {
-            try {
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    const chunk = decoder.decode(value, { stream: true });
-                    try { process.stdout.write(chunk); } catch (e) { }
-                    if (chunk.includes(rebuildMarker)) {
-                        ssrBuildId = crypto.randomBytes(4).toString('hex');
-                        console.log('[hadars] SSR bundle updated, build id:', ssrBuildId);
+    readyPromise.then(() => {
+        // Continue reading stdout to forward logs and pick up SSR rebuild signals.
+        if (stdoutReader) {
+            const reader = stdoutReader as ReadableStreamDefaultReader<Uint8Array>;
+            (async () => {
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        const chunk = decoder.decode(value, { stream: true });
+                        try { process.stdout.write(chunk); } catch (e) { }
+                        if (chunk.includes(rebuildMarker)) {
+                            ssrBuildId = crypto.randomBytes(4).toString('hex');
+                            console.log('[hadars] SSR bundle updated, build id:', ssrBuildId);
+                        }
                     }
-                }
-            } catch (e) { }
-        })();
-    }
+                } catch (e) { }
+            })();
+        }
+    });
 
     // Forward stderr asynchronously
     (async () => {
@@ -636,10 +656,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     })();
 
     const getPrecontentHtml = makePrecontentHtmlGetter(
-        fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8')
+        readyPromise.then(() => fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8'))
     );
 
     await serve(port, async (req, ctx) => {
+        // Hold requests until both builds are ready. Once resolved this is a no-op.
+        await readyPromise;
         const request = parseRequest(req);
         if (handler) {
             const res = await handler(request);
@@ -716,7 +738,8 @@ export const build = async (options: HadarsRuntimeOptions) => {
             .replace('$_MOD_PATH$', entry + `?v=${Date.now()}`);
     }
 
-    const tmpFilePath = pathMod.join(os.tmpdir(), `hadars-client-${Date.now()}.tsx`);
+    await ensureHadarsTmpDir();
+    const tmpFilePath = pathMod.join(HADARS_TMP_DIR, `client-${Date.now()}.tsx`);
     await fs.writeFile(tmpFilePath, clientScript);
 
     // Pre-process the HTML template's <style> blocks through PostCSS (e.g. Tailwind).

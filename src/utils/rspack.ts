@@ -288,6 +288,9 @@ const buildCompilerConfig = (
             clean: false,
         },
         mode: opts.mode,
+        // Persist transformed modules to disk — subsequent starts only recompile
+        // changed files, making repeat dev starts significantly faster.
+        cache: true,
         externals,
         ...(optimization !== undefined ? { optimization } : {}),
         plugins: [
