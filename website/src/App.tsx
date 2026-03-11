@@ -1,5 +1,7 @@
 import React from 'react';
 import { HadarsContext, HadarsHead, useServerData, loadModule, CacheSegment, type HadarsApp, type HadarsRequest } from 'hadars';
+import styled from '@emotion/styled';
+import { ThemeProvider, useTheme } from '@emotion/react';
 import { dehydrate, hydrate, QueryClient, QueryClientProvider, useSuspenseQuery, type DehydratedState } from '@tanstack/react-query'
 import Prism from 'prismjs';
 import 'prismjs/components/prism-typescript';
@@ -18,6 +20,57 @@ interface PageProps {
     rcClient?: QueryClient;
     cache?: DehydratedState;
 }
+
+// ── emotion components ────────────────────────────────────────────────────────
+
+interface EmotionTheme { accent: string; accent2: string; }
+const emotionTheme: EmotionTheme = { accent: '#7c3aed', accent2: '#059669' };
+
+const EmotionBadge = styled.span`
+    display: inline-block;
+    background: #7c3aed;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    letter-spacing: 0.05em;
+`;
+
+const EmotionBox = styled.div`
+    border: 2px solid #7c3aed;
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+`;
+
+const EmotionThemedBadge: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const theme = useTheme() as EmotionTheme;
+    const Badge = styled.span`
+        display: inline-block;
+        background: ${theme.accent2};
+        color: #fff;
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+    `;
+    return <Badge>{children}</Badge>;
+};
+
+const EmotionDemo: React.FC = () => (
+    <ThemeProvider theme={emotionTheme}>
+        <EmotionBox>
+            <EmotionBadge>@emotion/styled</EmotionBadge>
+            <EmotionThemedBadge>@emotion/react useTheme</EmotionThemedBadge>
+            <span style={{ color: '#888' }}>rendered on the server via slim-react</span>
+        </EmotionBox>
+    </ThemeProvider>
+);
 
 // ── tiny shared components ────────────────────────────────────────────────────
 
@@ -517,6 +570,7 @@ type HadarsProps<T> = T & {
                 {/* ── live demo ── */}
                 <Section id="demo" title="Live demo">
                     <p>This page <em>is</em> a hadars app. The values below were produced on the server.</p>
+                    <EmotionDemo />
                     <div className="demo-box">
                         <div className="demo-row">
                             <span className="demo-label">Server time</span>

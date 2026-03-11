@@ -218,22 +218,18 @@ const buildCompilerConfig = (
         react:                slimReactIndex,
         'react/jsx-runtime':  slimReactJsx,
         'react/jsx-dev-runtime': slimReactJsx,
-        // Keep emotion on the project's node_modules (server-safe entry).
-        '@emotion/react':  path.resolve(process.cwd(), 'node_modules', '@emotion', 'react'),
-        '@emotion/server': path.resolve(process.cwd(), 'node_modules', '@emotion', 'server'),
-        '@emotion/cache':  path.resolve(process.cwd(), 'node_modules', '@emotion', 'cache'),
-        '@emotion/styled': path.resolve(process.cwd(), 'node_modules', '@emotion', 'styled'),
+        // @emotion/* is bundled (not external) so that its `react` imports are
+        // resolved through the alias above to slim-react. If left external,
+        // emotion loads real React from node_modules and calls
+        // ReactSharedInternals.H.useContext which requires React's dispatcher.
     } : undefined;
 
     const externals = isServerBuild ? [
         // Node.js built-ins — must not be bundled; resolved by the runtime.
         'node:fs', 'node:path', 'node:os', 'node:stream', 'node:util',
-        // react / react-dom are replaced by slim-react via alias above — not external.
-        // emotion should be external on server builds to avoid client/browser code
-        '@emotion/react',
+        // @emotion/server is only used outside component rendering (CSS extraction)
+        // and does not call React hooks, so it is safe to leave as external.
         '@emotion/server',
-        '@emotion/cache',
-        '@emotion/styled',
     ] : undefined;
 
     const extraPlugins: any[] = [];
@@ -253,6 +249,9 @@ const buildCompilerConfig = (
         alias: resolveAliases,
         // for server builds prefer the package "main"/"module" fields and avoid "browser" so we don't pick browser-specific entrypoints
         mainFields: isServerBuild ? ['main', 'module'] : ['browser', 'module', 'main'],
+        // for server builds exclude the "browser" condition so packages with package.json
+        // "exports" conditions (e.g. @emotion/*) resolve their Node/CJS entry, not the browser build
+        ...(isServerBuild ? { conditionNames: ['node', 'require', 'default'] } : {}),
     };
 
     // Production client builds get vendor splitting and deterministic module IDs.
