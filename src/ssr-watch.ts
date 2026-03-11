@@ -21,7 +21,7 @@ const outFile = argv['outFile'] || 'index.ssr.js';
 const base = argv['base'] || '';
 const swcPlugins = argv['swcPlugins'] ? JSON.parse(argv['swcPlugins']) : undefined;
 const define = argv['define'] ? JSON.parse(argv['define']) : undefined;
-const moduleRules = argv['moduleRules'] ? JSON.parse(argv['moduleRules']) : undefined;
+const moduleRules = argv['moduleRules'] ? JSON.parse(argv['moduleRules'], (_k, v) => (v && typeof v === 'object' && '__re' in v) ? new RegExp(v.__re, v.__flags) : v) : undefined;
 
 if (!entry) {
   console.error('ssr-watch: missing --entry argument');

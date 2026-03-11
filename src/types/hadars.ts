@@ -112,6 +112,24 @@ export interface HadarsOptions {
      */
     htmlTemplate?: string;
     /**
+     * Force the React runtime mode independently of the build mode.
+     * Useful when you need production build optimizations (minification, tree-shaking)
+     * but want React's development build for debugging hydration mismatches or
+     * component stack traces.
+     *
+     * - `'development'` — forces `process.env.NODE_ENV = "development"` and enables
+     *   JSX source info even in `hadars build`. React prints detailed hydration error
+     *   messages and component stacks.
+     * - `'production'` — the default; React uses the optimised production bundle.
+     *
+     * Only affects the **client** bundle. The SSR bundle always uses slim-react.
+     *
+     * @example
+     * // hadars.config.ts — debug hydration errors in a production build
+     * reactMode: 'development'
+     */
+    reactMode?: 'development' | 'production';
+    /**
      * Additional rspack module rules appended to the built-in rule set.
      * Applied to both the client and the SSR bundle.
      *

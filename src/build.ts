@@ -508,6 +508,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         swcPlugins: options.swcPlugins,
         define: options.define,
         moduleRules: options.moduleRules,
+        reactMode: options.reactMode,
         htmlTemplate: resolvedHtmlTemplate,
     });
 
@@ -555,7 +556,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         `--base=${baseURL}`,
         ...(options.swcPlugins ? [`--swcPlugins=${JSON.stringify(options.swcPlugins)}`] : []),
         ...(options.define ? [`--define=${JSON.stringify(options.define)}`] : []),
-        ...(options.moduleRules ? [`--moduleRules=${JSON.stringify(options.moduleRules)}`] : []),
+        ...(options.moduleRules ? [`--moduleRules=${JSON.stringify(options.moduleRules, (_k, v) => v instanceof RegExp ? { __re: v.source, __flags: v.flags } : v)}`] : []),
     ], { stdio: 'pipe' });
     child.stdin?.end();
 
@@ -751,6 +752,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             define: options.define,
             moduleRules: options.moduleRules,
             optimization: options.optimization,
+            reactMode: options.reactMode,
             htmlTemplate: resolvedHtmlTemplate,
         }),
         compileEntry(pathMod.resolve(__dirname, options.entry), {

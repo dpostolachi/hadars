@@ -134,6 +134,8 @@ interface EntryOptions {
     optimization?: Record<string, unknown>;
     // additional module rules appended after the built-in rules
     moduleRules?: Record<string, any>[];
+    // force React runtime mode independently of build mode (client only)
+    reactMode?: 'development' | 'production';
 }
 
 const buildCompilerConfig = (
@@ -232,15 +234,44 @@ const buildCompilerConfig = (
         '@emotion/server',
     ] : undefined;
 
+    // reactMode lets the caller force React's dev/prod runtime independently of
+    // the webpack build mode. Only applies to the client bundle (SSR uses slim-react).
+    // 'development' → process.env.NODE_ENV = "development" + JSX dev transform.
+    const effectiveReactDev = isServerBuild
+        ? false  // slim-react doesn't use NODE_ENV
+        : opts.reactMode === 'development' ? true
+        : opts.reactMode === 'production'  ? false
+        : isDev;                           // default: follow build mode
+
+    if (!isServerBuild && opts.reactMode !== undefined) {
+        // Override the SWC JSX development flag for all js/ts rules already built
+        const rules = localConfig.module?.rules ?? [];
+        for (const rule of rules) {
+            if (!rule?.use || !Array.isArray(rule.use)) continue;
+            for (const entry of rule.use) {
+                if (entry?.loader?.includes('swc-loader')) {
+                    entry.options = entry.options ?? {};
+                    entry.options.jsc = entry.options.jsc ?? {};
+                    entry.options.jsc.transform = entry.options.jsc.transform ?? {};
+                    entry.options.jsc.transform.react = entry.options.jsc.transform.react ?? {};
+                    entry.options.jsc.transform.react.development = effectiveReactDev;
+                    entry.options.jsc.transform.react.refresh = effectiveReactDev && isDev;
+                }
+            }
+        }
+    }
+
     const extraPlugins: any[] = [];
-    if (opts.define && typeof opts.define === 'object') {
-        // rspack's DefinePlugin shape mirrors webpack's DefinePlugin
+    const defineValues: Record<string, string> = { ...(opts.define ?? {}) };
+    // When reactMode overrides the React runtime we must also set process.env.NODE_ENV
+    // so React picks its dev/prod bundle, independently of the rspack build mode.
+    if (!isServerBuild && opts.reactMode !== undefined) {
+        defineValues['process.env.NODE_ENV'] = JSON.stringify(opts.reactMode);
+    }
+    if (Object.keys(defineValues).length > 0) {
         const DefinePlugin = (rspack as any).DefinePlugin || (rspack as any).plugins?.DefinePlugin;
         if (DefinePlugin) {
-            extraPlugins.push(new DefinePlugin(opts.define));
-        } else {
-            // fallback: try to inject via plugin API name
-            extraPlugins.push({ name: 'DefinePlugin', value: opts.define });
+            extraPlugins.push(new DefinePlugin(defineValues));
         }
     }
 
