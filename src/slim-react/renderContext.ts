@@ -63,10 +63,15 @@ export function popContextValue(context: object, prev: unknown): void {
   (_g[MAP_KEY] as Map<object, unknown> | null)?.set(context, prev);
 }
 
+// TreeContext matches React 19's representation exactly:
+// `id` is a packed bitfield with a leading sentinel `1` bit followed by tree
+// path slots. The most-recently-pushed slot occupies the HIGHEST non-sentinel
+// bits, matching React 19's Fizz `pushTreeContext` bit-packing order.
+// `overflow` accumulates segments that no longer fit in the 30-bit budget,
+// prepended newest-first (same as React 19).
 export interface TreeContext {
-  id: number;
-  overflow: string;
-  bits: number;
+  id: number;       // bitfield with sentinel; 1 = empty (just sentinel, no data)
+  overflow: string; // base-32 partial path segments that overflowed
 }
 
 interface RenderState {
@@ -76,7 +81,8 @@ interface RenderState {
 }
 
 const GLOBAL_KEY = "__slimReactRenderState";
-const EMPTY: TreeContext = { id: 0, overflow: "", bits: 0 };
+// React 19's initial context is { id: 1, overflow: "" } — sentinel bit only.
+const EMPTY: TreeContext = { id: 1, overflow: "" };
 
 function s(): RenderState {
   const g = globalThis as any;
@@ -96,23 +102,45 @@ export function setIdPrefix(prefix: string) {
   s().idPrefix = prefix;
 }
 
+/**
+ * Push a new level onto the tree context — matches React 19's Fizz
+ * `pushTreeContext` exactly:
+ *   - new slot occupies the HIGHER bit positions (above the old base data)
+ *   - on overflow, the LOWEST bits of the old data move to the overflow string
+ *     (rounded to a multiple of 5 so base-32 digits align on byte boundaries)
+ */
 export function pushTreeContext(totalChildren: number, index: number): TreeContext {
   const st = s();
   const saved: TreeContext = { ...st.currentTreeContext };
-  const pendingBits = 32 - Math.clz32(totalChildren);
-  const slot = index + 1;
-  const totalBits = st.currentTreeContext.bits + pendingBits;
 
-  if (totalBits <= 30) {
+  const baseIdWithLeadingBit = st.currentTreeContext.id;
+  const baseOverflow = st.currentTreeContext.overflow;
+  // Number of data bits currently stored (excludes the sentinel bit).
+  const baseLength = 31 - Math.clz32(baseIdWithLeadingBit);
+  // Strip the sentinel to get the pure data portion.
+  let baseId = baseIdWithLeadingBit & ~(1 << baseLength);
+
+  const slot = index + 1; // 1-indexed
+  const newBits = 32 - Math.clz32(totalChildren); // bits required for the new slot
+  const length = newBits + baseLength;             // total data bits after push
+
+  if (30 < length) {
+    // Overflow: flush the lowest bits of the old data to the overflow string.
+    // Round down to a multiple of 5 so each base-32 character covers exactly
+    // 5 bits (no fractional digits that would corrupt adjacent chars).
+    const numberOfOverflowBits = baseLength - (baseLength % 5);
+    const overflowStr = (baseId & ((1 << numberOfOverflowBits) - 1)).toString(32);
+    baseId >>= numberOfOverflowBits;
+    const newBaseLength = baseLength - numberOfOverflowBits;
     st.currentTreeContext = {
-      id: (st.currentTreeContext.id << pendingBits) | slot,
-      overflow: st.currentTreeContext.overflow,
-      bits: totalBits,
+      id: (1 << (newBits + newBaseLength)) | (slot << newBaseLength) | baseId,
+      overflow: overflowStr + baseOverflow,
     };
   } else {
-    let newOverflow = st.currentTreeContext.overflow;
-    if (st.currentTreeContext.bits > 0) newOverflow += st.currentTreeContext.id.toString(32);
-    st.currentTreeContext = { id: (1 << pendingBits) | slot, overflow: newOverflow, bits: pendingBits };
+    st.currentTreeContext = {
+      id: (1 << length) | (slot << baseLength) | baseId,
+      overflow: baseOverflow,
+    };
   }
   return saved;
 }
@@ -143,18 +171,35 @@ export function restoreContext(snap: { tree: TreeContext; localId: number }) {
   st.localIdCounter = snap.localId;
 }
 
+/**
+ * Produce the base-32 tree path string from the current context.
+ * Strips the sentinel bit then concatenates stripped_id + overflow —
+ * the same formula React 19 uses in both its Fizz SSR renderer and
+ * the client-side `mountId`.
+ */
 function getTreeId(): string {
-  const { id, overflow, bits } = s().currentTreeContext;
-  return bits > 0 ? overflow + id.toString(32) : overflow;
+  const { id, overflow } = s().currentTreeContext;
+  if (id === 1) return overflow; // sentinel only → no local path segment
+  const stripped = (id & ~(1 << (31 - Math.clz32(id)))).toString(32);
+  return stripped + overflow;
 }
 
+/**
+ * Generate a `useId`-compatible ID for the current call site.
+ *
+ * Format: `_<idPrefix>R_<treeId>_`
+ *   with an optional `H<n>` suffix when the same component calls useId
+ *   more than once (matching React 19's `localIdCounter` behaviour).
+ *
+ * This matches React 19's `mountId` output on both the Fizz SSR renderer
+ * and the client hydration path, so the IDs produced here will agree with
+ * the real React runtime during `hydrateRoot`.
+ */
 export function makeId(): string {
   const st = s();
   const treeId = getTreeId();
   const n = st.localIdCounter++;
-  let id = ":" + st.idPrefix + "R";
-  if (treeId.length > 0) id += treeId;
-  id += ":";
-  if (n > 0) id += "H" + n.toString(32) + ":";
-  return id;
+  let id = "_" + st.idPrefix + "R_" + treeId;
+  if (n > 0) id += "H" + n.toString(32);
+  return id + "_";
 }

@@ -287,8 +287,13 @@ function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
       continue;
     }
     if (value === true) {
-      // Emit as attr="" to match React's server output exactly.
-      attrs += ` ${attrName}=""`;
+      // aria-* and data-* are string attributes: true must serialize to "true".
+      // HTML boolean attributes (disabled, hidden, checked, …) use attr="" (present-without-value).
+      if (attrName.startsWith("aria-") || attrName.startsWith("data-")) {
+        attrs += ` ${attrName}="true"`;
+      } else {
+        attrs += ` ${attrName}=""`;
+      }
       continue;
     }
     if (key === "style" && typeof value === "object") {

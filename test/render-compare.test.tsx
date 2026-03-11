@@ -149,6 +149,15 @@ describe("compare: attributes", () => {
     await compare(<p data-testid="x" aria-label="desc" aria-hidden={false} />);
   });
 
+  test("data-* and aria-* boolean true renders as string 'true', not empty attr", async () => {
+    // React renders data-* and aria-* true props as ="true" (string attributes),
+    // not as ="" (HTML boolean attributes like disabled). This is critical for
+    // hydration: the client produces data-foo="true" and aria-expanded="true".
+    await compare(<div data-overlay-container={true} aria-expanded={true} aria-busy={false} />);
+    // HTML boolean attrs still use ="" presence form
+    await compare(<input disabled={true} />);
+  });
+
   test("style object → inline CSS string", async () => {
     // Use string values to avoid React's number-to-px conversion rules
     // (e.g. React appends 'px' to numeric font-size; our renderer does not).
@@ -720,7 +729,7 @@ describe("slim: Suspense with renderToStream", () => {
 });
 
 describe("slim: useId", () => {
-  test("useId produces React-compatible colon-prefixed IDs", async () => {
+  test("useId produces React 19-compatible underscore-delimited IDs", async () => {
     function WithId() {
       const id = slimUseId();
       return React.createElement("label", { htmlFor: id }, id) as any;
@@ -728,8 +737,8 @@ describe("slim: useId", () => {
     const html = await slimRenderToString(
       React.createElement(WithId as any, null) as any
     );
-    // React useId format: ":R<base32tree>:" with optional "H<n>:" suffix
-    expect(html).toMatch(/for=":R[^"]*:".*:R[^"]*:/s);
+    // React 19 useId format: "_R_<base32tree>_" with optional "H<n>" suffix
+    expect(html).toMatch(/for="_R_[^"]*_".*_R_[^"]*_/s);
   });
 
   test("two useId calls in the same component produce different IDs", async () => {
