@@ -18,7 +18,7 @@ const loaderPath = existsSync(pathMod.resolve(packageDir, 'loader.cjs'))
     ? pathMod.resolve(packageDir, 'loader.cjs')
     : pathMod.resolve(packageDir, 'loader.ts');
 
-const getConfigBase = (mode: "development" | "production"): Omit<Configuration, "entry" | "output" | "plugins"> => {
+const getConfigBase = (mode: "development" | "production", isServerBuild = false): Omit<Configuration, "entry" | "output" | "plugins"> => {
     const isDev = mode === 'development';
     return {
         experiments: {
@@ -141,9 +141,12 @@ const buildCompilerConfig = (
     opts: EntryOptions,
     includeHotPlugin: boolean,
 ): Configuration => {
-    const Config = getConfigBase(opts.mode);
     const { base } = opts;
     const isDev = opts.mode === 'development';
+    const isServerBuild = Boolean(
+        (opts.output && typeof opts.output === 'object' && (opts.output.library || String(opts.output.filename || '').includes('ssr')))
+    );
+    const Config = getConfigBase(opts.mode, isServerBuild);
 
     // shallow-clone base config to avoid mutating shared Config while preserving RegExp and plugin instances
     const localConfig: any = {
@@ -202,15 +205,6 @@ const buildCompilerConfig = (
     if (opts.moduleRules && opts.moduleRules.length > 0) {
         localConfig.module.rules.push(...opts.moduleRules);
     }
-
-    // For server (SSR) builds we should avoid bundling react/react-dom so
-    // the runtime uses the same React instance as the host. If the output
-    // is a library/module (i.e. `opts.output.library` present or filename
-    // contains "ssr"), treat it as a server build and mark react/react-dom
-    // as externals and alias React imports to the project's node_modules.
-    const isServerBuild = Boolean(
-        (opts.output && typeof opts.output === 'object' && (opts.output.library || String(opts.output.filename || '').includes('ssr')))
-    );
 
     // slim-react: the SSR-only React-compatible renderer bundled with hadars.
     // On server builds we replace the real React with slim-react so that hooks
@@ -291,7 +285,7 @@ const buildCompilerConfig = (
         externals,
         ...(optimization !== undefined ? { optimization } : {}),
         plugins: [
-            new rspack.HtmlRspackPlugin({
+            !isServerBuild && new rspack.HtmlRspackPlugin({
                 publicPath: base || '/',
                 template: opts.htmlTemplate
                     ? pathMod.resolve(process.cwd(), opts.htmlTemplate)
@@ -301,12 +295,7 @@ const buildCompilerConfig = (
                 inject: 'head',
                 minify: opts.mode === 'production',
             }),
-            // Add `async` to the emitted module script so DOMContentLoaded fires
-            // as soon as HTML is parsed — without waiting for the bundle to execute.
-            // `<script type="module" async>` is valid: it downloads in parallel and
-            // executes without blocking DOMContentLoaded, while retaining module
-            // semantics (strict mode, ES imports, etc.).
-            {
+            !isServerBuild && {
                 apply(compiler: any) {
                     compiler.hooks.emit.tapAsync('HadarsAsyncModuleScript', (compilation: any, cb: () => void) => {
                         const asset = compilation.assets['out.html'];
@@ -327,7 +316,7 @@ const buildCompilerConfig = (
                 },
             },
             isDev && !isServerBuild && new ReactRefreshPlugin(),
-            includeHotPlugin && isDev && new rspack.HotModuleReplacementPlugin(),
+            includeHotPlugin && isDev && !isServerBuild && new rspack.HotModuleReplacementPlugin(),
             ...extraPlugins,
         ],
         ...localConfig,
