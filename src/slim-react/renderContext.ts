@@ -160,6 +160,11 @@ export function popComponentScope(saved: number) {
   s().localIdCounter = saved;
 }
 
+/** True if the current component has called useId at least once. */
+export function componentCalledUseId(): boolean {
+  return s().localIdCounter > 0;
+}
+
 export function snapshotContext(): { tree: TreeContext; localId: number } {
   const st = s();
   return { tree: { ...st.currentTreeContext }, localId: st.localIdCounter };
@@ -187,19 +192,20 @@ function getTreeId(): string {
 /**
  * Generate a `useId`-compatible ID for the current call site.
  *
- * Format: `_<idPrefix>R_<treeId>_`
- *   with an optional `H<n>` suffix when the same component calls useId
- *   more than once (matching React 19's `localIdCounter` behaviour).
+ * Format: `«<idPrefix>R<treeId>»`  (React 19.1+)
+ *   with an optional `H<n>` suffix for the n-th useId call in the same
+ *   component (matching React 19's `localIdCounter` behaviour).
  *
- * This matches React 19's `mountId` output on both the Fizz SSR renderer
- * and the client hydration path, so the IDs produced here will agree with
- * the real React runtime during `hydrateRoot`.
+ * React 19.1 switched from `_R_<id>_` to `«R<id>»` (U+00AB / U+00BB).
+ * This matches React 19.1's `mountId` output on the Fizz SSR renderer and
+ * the client hydration path, so the IDs produced here will agree with the
+ * real React runtime during `hydrateRoot`.
  */
 export function makeId(): string {
   const st = s();
   const treeId = getTreeId();
   const n = st.localIdCounter++;
-  let id = "_" + st.idPrefix + "R_" + treeId;
+  let id = "\u00ab" + st.idPrefix + "R" + treeId;
   if (n > 0) id += "H" + n.toString(32);
-  return id + "_";
+  return id + "\u00bb";
 }

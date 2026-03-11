@@ -737,8 +737,8 @@ describe("slim: useId", () => {
     const html = await slimRenderToString(
       React.createElement(WithId as any, null) as any
     );
-    // React 19 useId format: "_R_<base32tree>_" with optional "H<n>" suffix
-    expect(html).toMatch(/for="_R_[^"]*_".*_R_[^"]*_/s);
+    // React 19.1+ useId format: «R<base32tree>» with optional "H<n>" suffix
+    expect(html).toMatch(/for="«R[^"]*»".*«R[^"]*»/s);
   });
 
   test("two useId calls in the same component produce different IDs", async () => {
@@ -898,6 +898,130 @@ describe("slim: context isolation", () => {
       React.createElement(Reader as any, null) as any
     );
     expect(html).toBe("<span>default</span>");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// compare: useId – React.useId() parity
+//
+// Components call React.useId() directly.  When rendered by react-dom/server,
+// React's own dispatcher runs.  When rendered by slim-react, the dispatcher
+// shim routes React.useId() through slim-react's tree-aware makeId().
+// Both must produce byte-for-byte identical HTML.
+// ---------------------------------------------------------------------------
+
+describe("compare: useId parity with React", () => {
+  // Shared components — call React.useId() with no injection needed.
+
+  function FormField({ label }: { label: string }) {
+    const id = React.useId();
+    return (
+      <div className="field">
+        <label htmlFor={id}>{label}</label>
+        <input id={id} type="text" />
+      </div>
+    );
+  }
+
+  function Dialog({ title, children }: { title: string; children?: React.ReactNode }) {
+    const titleId = React.useId();
+    const descId  = React.useId();
+    return (
+      <div role="dialog" aria-labelledby={titleId} aria-describedby={descId}>
+        <h2 id={titleId}>{title}</h2>
+        <p id={descId}>Fill in your details below.</p>
+        {children}
+      </div>
+    );
+  }
+
+  function AccordionItem({ heading, body }: { heading: string; body: string }) {
+    const panelId = React.useId();
+    return (
+      <div>
+        <button aria-controls={panelId}>{heading}</button>
+        <div id={panelId} role="region">{body}</div>
+      </div>
+    );
+  }
+
+  function StaticBanner({ text }: { text: string }) {
+    return <aside>{text}</aside>;
+  }
+
+  test("complex form/dialog tree", async () => {
+    const el = (
+      <main>
+        <Dialog title="Account Settings">
+          <FormField label="Full name" />
+          <FormField label="Email address" />
+          <FormField label="Bio" />
+        </Dialog>
+        <StaticBanner text="No IDs here" />
+        <section>
+          <AccordionItem heading="Privacy" body="Your data is safe." />
+          <AccordionItem heading="Security" body="Enable 2FA." />
+        </section>
+      </main>
+    );
+    await compare(el as any);
+  });
+
+  test("deeply nested components with useId", async () => {
+    function Inner() {
+      const id = React.useId();
+      return <span id={id}>inner</span>;
+    }
+    function Middle({ children }: { children?: React.ReactNode }) {
+      const id = React.useId();
+      return <div aria-owns={id}>{children}</div>;
+    }
+
+    await compare(
+      <section>
+        <Middle><Inner /><Inner /></Middle>
+        <Middle><Inner /></Middle>
+      </section> as any
+    );
+  });
+
+  test("sibling components each calling useId twice", async () => {
+    function Card({ title }: { title: string }) {
+      const headingId = React.useId();
+      const bodyId    = React.useId();
+      return (
+        <article aria-labelledby={headingId}>
+          <h3 id={headingId}>{title}</h3>
+          <div id={bodyId}>content</div>
+        </article>
+      );
+    }
+
+    await compare(
+      <div>
+        <Card title="Alpha" />
+        <Card title="Beta" />
+        <Card title="Gamma" />
+      </div> as any
+    );
+  });
+
+  test("component without useId between siblings that have it", async () => {
+    function WithId({ label }: { label: string }) {
+      const id = React.useId();
+      return <span id={id}>{label}</span>;
+    }
+    function NoId() {
+      return <span>no id</span>;
+    }
+
+    await compare(
+      <div>
+        <WithId label="first" />
+        <NoId />
+        <WithId label="second" />
+      </div> as any
+    );
   });
 });
 

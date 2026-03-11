@@ -28,6 +28,7 @@ import {
   popTreeContext,
   pushComponentScope,
   popComponentScope,
+  componentCalledUseId,
   snapshotContext,
   restoreContext,
   pushContextValue,
@@ -35,7 +36,9 @@ import {
   getContextValue,
   swapContextMap,
   captureMap,
+  type TreeContext,
 } from "./renderContext";
+import { installDispatcher, restoreDispatcher } from "./dispatcher";
 
 // ---------------------------------------------------------------------------
 // HTML helpers
@@ -630,6 +633,7 @@ function renderComponent(
   }
 
   let result: SlimNode;
+  const prevDispatcher = installDispatcher();
   try {
     if (type.prototype && typeof type.prototype.render === "function") {
       const instance = new (type as any)(props);
@@ -643,12 +647,25 @@ function renderComponent(
       result = type(props);
     }
   } catch (e) {
+    restoreDispatcher(prevDispatcher);
     popComponentScope(savedScope);
     if (isProvider) popContextValue(ctx, prevCtxValue);
     throw e;
   }
+  restoreDispatcher(prevDispatcher);
+
+  // React 19 finishFunctionComponent: if the component called useId, push a
+  // tree-context slot for the component's OUTPUT children — matching React 19's
+  // `pushTreeContext(keyPath, 1, 0)` call inside finishFunctionComponent.
+  // This ensures that useId IDs produced by child components of a useId-calling
+  // component are tree-positioned identically to React's own renderer.
+  let savedIdTree: TreeContext | undefined;
+  if (!(result instanceof Promise) && componentCalledUseId()) {
+    savedIdTree = pushTreeContext(1, 0);
+  }
 
   const finish = () => {
+    if (savedIdTree !== undefined) popTreeContext(savedIdTree);
     popComponentScope(savedScope);
     if (isProvider) popContextValue(ctx, prevCtxValue);
   };
@@ -658,15 +675,25 @@ function renderComponent(
     const m = captureMap();
     return result.then((resolved) => {
       swapContextMap(m);
+      // Check useId after the async body has finished executing.
+      let asyncSavedIdTree: TreeContext | undefined;
+      if (componentCalledUseId()) {
+        asyncSavedIdTree = pushTreeContext(1, 0);
+      }
+      const asyncFinish = () => {
+        if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
+        popComponentScope(savedScope);
+        if (isProvider) popContextValue(ctx, prevCtxValue);
+      };
       const r = renderNode(resolved, writer, isSvg);
       if (r && typeof (r as any).then === "function") {
         const m2 = captureMap();
         return (r as Promise<void>).then(
-          () => { swapContextMap(m2); finish(); },
-          (e) => { swapContextMap(m2); finish(); throw e; },
+          () => { swapContextMap(m2); asyncFinish(); },
+          (e) => { swapContextMap(m2); asyncFinish(); throw e; },
         );
       }
-      finish();
+      asyncFinish();
     }, (e) => { swapContextMap(m); finish(); throw e; });
   }
 
