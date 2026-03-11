@@ -33,7 +33,8 @@ import {
   pushContextValue,
   popContextValue,
   getContextValue,
-  runWithContextStore,
+  swapContextMap,
+  captureMap,
 } from "./renderContext";
 
 // ---------------------------------------------------------------------------
@@ -613,7 +614,11 @@ function renderComponent(
     };
     const r = renderChildren(props.children, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      return (r as Promise<void>).then(finish, (e) => { finish(); throw e; });
+      const m = captureMap();
+      return (r as Promise<void>).then(
+        () => { swapContextMap(m); finish(); },
+        (e) => { swapContextMap(m); finish(); throw e; },
+      );
     }
     finish();
     return;
@@ -645,19 +650,29 @@ function renderComponent(
 
   // Async component
   if (result instanceof Promise) {
+    const m = captureMap();
     return result.then((resolved) => {
+      swapContextMap(m);
       const r = renderNode(resolved, writer, isSvg);
       if (r && typeof (r as any).then === "function") {
-        return (r as Promise<void>).then(finish, (e) => { finish(); throw e; });
+        const m2 = captureMap();
+        return (r as Promise<void>).then(
+          () => { swapContextMap(m2); finish(); },
+          (e) => { swapContextMap(m2); finish(); throw e; },
+        );
       }
       finish();
-    }, (e) => { finish(); throw e; });
+    }, (e) => { swapContextMap(m); finish(); throw e; });
   }
 
   const r = renderNode(result, writer, isSvg);
 
   if (r && typeof (r as any).then === "function") {
-    return (r as Promise<void>).then(finish, (e) => { finish(); throw e; });
+    const m = captureMap();
+    return (r as Promise<void>).then(
+      () => { swapContextMap(m); finish(); },
+      (e) => { swapContextMap(m); finish(); throw e; },
+    );
   }
   finish();
 }
@@ -691,7 +706,9 @@ function renderChildArray(
     const r = renderNode(children[i], writer, isSvg);
     if (r && typeof (r as any).then === "function") {
       // One child went async – continue the rest asynchronously
+      const m = captureMap();
       return (r as Promise<void>).then(() => {
+        swapContextMap(m);
         popTreeContext(savedTree);
         // Continue with remaining children
         return renderChildArrayFrom(children, i + 1, writer, isSvg);
@@ -716,7 +733,9 @@ function renderChildArrayFrom(
     const savedTree = pushTreeContext(totalChildren, i);
     const r = renderNode(children[i], writer, isSvg);
     if (r && typeof (r as any).then === "function") {
+      const m = captureMap();
       return (r as Promise<void>).then(() => {
+        swapContextMap(m);
         popTreeContext(savedTree);
         return renderChildArrayFrom(children, i + 1, writer, isSvg);
       });
@@ -765,7 +784,7 @@ async function renderSuspense(
       const buffer = new BufferWriter();
       const r = renderNode(children, buffer, isSvg);
       if (r && typeof (r as any).then === "function") {
-        await r;
+        const m = captureMap(); await r; swapContextMap(m);
       }
       // Success – wrap with React's Suspense boundary markers so hydrateRoot
       // can locate the boundary in the DOM (<!--$--> … <!--/$-->).
@@ -775,7 +794,7 @@ async function renderSuspense(
       return;
     } catch (error: unknown) {
       if (error && typeof (error as any).then === "function") {
-        await (error as Promise<unknown>);
+        const m = captureMap(); await (error as Promise<unknown>); swapContextMap(m);
         attempts++;
       } else {
         throw error;
@@ -788,7 +807,9 @@ async function renderSuspense(
   writer.write("<!--$?-->");
   if (fallback) {
     const r = renderNode(fallback, writer, isSvg);
-    if (r && typeof (r as any).then === "function") await r;
+    if (r && typeof (r as any).then === "function") {
+      const m = captureMap(); await r; swapContextMap(m);
+    }
   }
   writer.write("<!--/$-->");
 }
@@ -806,9 +827,11 @@ async function renderSuspense(
 export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
 
-  return runWithContextStore(() => new ReadableStream({
+  const contextMap = new Map<object, unknown>();
+  return new ReadableStream({
     async start(controller) {
       resetRenderState();
+      const prev = swapContextMap(contextMap);
 
       const writer: Writer = {
         lastWasText: false,
@@ -824,13 +847,17 @@ export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
 
       try {
         const r = renderNode(element, writer);
-        if (r && typeof (r as any).then === "function") await r;
+        if (r && typeof (r as any).then === "function") {
+          const m = captureMap(); await r; swapContextMap(m);
+        }
         controller.close();
       } catch (error) {
         controller.error(error);
+      } finally {
+        swapContextMap(prev);
       }
     },
-  }));
+  });
 }
 
 /**
@@ -838,10 +865,13 @@ export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
  * Retries the full tree when a component throws a Promise (Suspense protocol),
  * so useServerData and similar hooks work without requiring explicit <Suspense>.
  */
-export function renderToString(element: SlimNode): Promise<string> {
-  return runWithContextStore(async () => {
+export async function renderToString(element: SlimNode): Promise<string> {
+  const contextMap = new Map<object, unknown>();
+  const prev = swapContextMap(contextMap);
+  try {
     for (let attempt = 0; attempt < MAX_SUSPENSE_RETRIES; attempt++) {
       resetRenderState();
+      swapContextMap(contextMap); // re-activate our map on each retry
       const chunks: string[] = [];
       const writer: Writer = {
         lastWasText: false,
@@ -850,18 +880,22 @@ export function renderToString(element: SlimNode): Promise<string> {
       };
       try {
         const r = renderNode(element, writer);
-        if (r && typeof (r as any).then === "function") await r;
+        if (r && typeof (r as any).then === "function") {
+          const m = captureMap(); await r; swapContextMap(m);
+        }
         return chunks.join("");
       } catch (error) {
         if (error && typeof (error as any).then === "function") {
-          await (error as Promise<unknown>);
+          const m = captureMap(); await (error as Promise<unknown>); swapContextMap(m);
           continue;
         }
         throw error;
       }
     }
     throw new Error("[slim-react] renderToString exceeded maximum retries");
-  });
+  } finally {
+    swapContextMap(prev);
+  }
 }
 
 /** Alias matching React 18+ server API naming. */

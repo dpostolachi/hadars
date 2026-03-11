@@ -227,9 +227,6 @@ const buildCompilerConfig = (
 
     const externals = isServerBuild ? [
         // Node.js built-ins — must not be bundled; resolved by the runtime.
-        // Both the bare name and the node: prefix are listed because rspack
-        // may encounter either form depending on how the import is written.
-        'node:async_hooks', 'async_hooks',
         'node:fs', 'node:path', 'node:os', 'node:stream', 'node:util',
         // react / react-dom are replaced by slim-react via alias above — not external.
         // emotion should be external on server builds to avoid client/browser code

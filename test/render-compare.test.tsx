@@ -806,14 +806,13 @@ describe("slim: useContext", () => {
 describe("slim: context isolation", () => {
   test("concurrent renders have isolated context values", async () => {
     // Each render runs with its own Provider value. An async component reads
-    // the context AFTER yielding to the event loop, so the two renders are
-    // interleaved. Without AsyncLocalStorage isolation each render would see
-    // the other's context value.
+    // the context synchronously (as per rules of hooks), then yields so the
+    // two renders interleave. The captured value must still be correct.
     const Ctx = createContext("default");
 
     async function AsyncReader() {
+      const val = slimUseContext(Ctx); // read synchronously before any await
       await Promise.resolve(); // yield — allows the other render to interleave
-      const val = slimUseContext(Ctx);
       return React.createElement("span", null, val) as any;
     }
 

@@ -5,66 +5,62 @@
  * multiple slim-react instances (the render worker's direct import and the
  * SSR bundle's bundled copy) share the same singletons without coordination.
  *
- * Context values are stored in an AsyncLocalStorage<Map> so each concurrent
- * SSR request gets its own isolated scope that propagates through all awaits.
- * Call `runWithContextStore` at the start of every render to establish the scope.
+ * Context values are stored in a plain Map that is created per render call.
+ * Node.js is single-threaded: only one render is executing between any two
+ * await points. The renderer captures the map reference before every await
+ * and restores it in the continuation, so concurrent renders stay isolated
+ * without any external dependencies.
  */
 
-// Shared AsyncLocalStorage instance — kept on globalThis so both copies of
-// slim-react (direct import + SSR bundle) use the same store.
-// The import is done with require() inside a try/catch so that bundlers that
-// cannot resolve node:async_hooks (e.g. rspack without target:node set) do
-// not fail at build time — the SSR render process always runs in Node.js and
-// will find the module at runtime regardless.
-const CONTEXT_STORE_KEY = "__slimReactContextStore";
+// The context map for the render that is currently executing (between awaits).
+// Kept on globalThis so both slim-react instances share the same slot.
+const MAP_KEY = "__slimReactContextMap";
 const _g = globalThis as any;
-if (!_g[CONTEXT_STORE_KEY]) {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { AsyncLocalStorage } = require("node:async_hooks") as typeof import("node:async_hooks");
-    _g[CONTEXT_STORE_KEY] = new AsyncLocalStorage<Map<object, unknown>>();
-  } catch {
-    // Fallback: no-op store — context values fall back to _defaultValue.
-    // This should never happen in a real SSR environment.
-    _g[CONTEXT_STORE_KEY] = null;
-  }
-}
-const _contextStore: { run<T>(store: Map<object,unknown>, fn: () => T): T; getStore(): Map<object,unknown> | undefined } | null = _g[CONTEXT_STORE_KEY];
-
-/** Wrap a render entry-point so it gets its own isolated context-value scope. */
-export function runWithContextStore<T>(fn: () => T): T {
-  return _contextStore ? _contextStore.run(new Map(), fn) : fn();
-}
+if (!("__slimReactContextMap" in _g)) _g[MAP_KEY] = null;
 
 /**
- * Read the current value for a context within the active render.
- * Falls back to `_defaultValue` (or `_currentValue` for external contexts).
+ * Swap in a new context map and return the previous one.
+ * Called at render entry-points and at every await/then continuation to
+ * restore the correct map for the resuming render.
  */
+export function swapContextMap(
+  map: Map<object, unknown> | null,
+): Map<object, unknown> | null {
+  const prev: Map<object, unknown> | null = _g[MAP_KEY];
+  _g[MAP_KEY] = map;
+  return prev;
+}
+
+/** Return the active map without changing it (used to capture before an await). */
+export function captureMap(): Map<object, unknown> | null {
+  return _g[MAP_KEY];
+}
+
+/** Read the current value for a context within the active render. */
 export function getContextValue<T>(context: object): T {
-  const store = _contextStore?.getStore();
-  if (store && store.has(context)) return store.get(context) as T;
+  const map: Map<object, unknown> | null = _g[MAP_KEY];
+  if (map && map.has(context)) return map.get(context) as T;
   const c = context as any;
   return ("_defaultValue" in c ? c._defaultValue : c._currentValue) as T;
 }
 
 /**
- * Push a new value for a context Provider onto the per-request store.
- * Returns the previous value so the caller can restore it later.
+ * Push a new Provider value into the active map.
+ * Returns the previous value so the caller can restore it on exit.
  */
 export function pushContextValue(context: object, value: unknown): unknown {
-  const store = _contextStore?.getStore();
+  const map: Map<object, unknown> | null = _g[MAP_KEY];
   const c = context as any;
-  const prev = store && store.has(context)
-    ? store.get(context)
+  const prev = map && map.has(context)
+    ? map.get(context)
     : ("_defaultValue" in c ? c._defaultValue : c._currentValue);
-  if (store) store.set(context, value);
+  map?.set(context, value);
   return prev;
 }
 
 /** Restore a previously saved context value (called by Provider on exit). */
 export function popContextValue(context: object, prev: unknown): void {
-  const store = _contextStore?.getStore();
-  if (store) store.set(context, prev);
+  (_g[MAP_KEY] as Map<object, unknown> | null)?.set(context, prev);
 }
 
 export interface TreeContext {
