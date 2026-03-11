@@ -30,6 +30,10 @@ import {
   popComponentScope,
   snapshotContext,
   restoreContext,
+  pushContextValue,
+  popContextValue,
+  getContextValue,
+  runWithContextStore,
 } from "./renderContext";
 
 // ---------------------------------------------------------------------------
@@ -566,7 +570,7 @@ function renderComponent(
   // React.Consumer (React 19) — call the children render prop with the current value
   if (typeOf === REACT_CONSUMER) {
     const ctx = (type as any)._context;
-    const value = ctx?._currentValue;
+    const value = ctx ? getContextValue(ctx) : undefined;
     const result: SlimNode =
       typeof props.children === "function" ? props.children(value) : null;
     const savedScope = pushComponentScope();
@@ -594,8 +598,7 @@ function renderComponent(
   if (isProvider) {
     // Resolve the actual context object from any provider variant
     ctx = (type as any)._context ?? type;
-    prevCtxValue = ctx._currentValue;
-    ctx._currentValue = props.value;
+    prevCtxValue = pushContextValue(ctx, props.value);
   }
 
   // Each component gets a fresh local-ID counter (for multiple useId calls).
@@ -606,11 +609,11 @@ function renderComponent(
   if (isProvider && typeof type !== "function") {
     const finish = () => {
       popComponentScope(savedScope);
-      ctx._currentValue = prevCtxValue;
+      popContextValue(ctx, prevCtxValue);
     };
     const r = renderChildren(props.children, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      return (r as Promise<void>).then(finish);
+      return (r as Promise<void>).then(finish, (e) => { finish(); throw e; });
     }
     finish();
     return;
@@ -631,13 +634,13 @@ function renderComponent(
     }
   } catch (e) {
     popComponentScope(savedScope);
-    if (isProvider) ctx._currentValue = prevCtxValue;
+    if (isProvider) popContextValue(ctx, prevCtxValue);
     throw e;
   }
 
   const finish = () => {
     popComponentScope(savedScope);
-    if (isProvider) ctx._currentValue = prevCtxValue;
+    if (isProvider) popContextValue(ctx, prevCtxValue);
   };
 
   // Async component
@@ -645,16 +648,16 @@ function renderComponent(
     return result.then((resolved) => {
       const r = renderNode(resolved, writer, isSvg);
       if (r && typeof (r as any).then === "function") {
-        return (r as Promise<void>).then(finish);
+        return (r as Promise<void>).then(finish, (e) => { finish(); throw e; });
       }
       finish();
-    });
+    }, (e) => { finish(); throw e; });
   }
 
   const r = renderNode(result, writer, isSvg);
 
   if (r && typeof (r as any).then === "function") {
-    return (r as Promise<void>).then(finish);
+    return (r as Promise<void>).then(finish, (e) => { finish(); throw e; });
   }
   finish();
 }
@@ -803,7 +806,7 @@ async function renderSuspense(
 export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
 
-  return new ReadableStream({
+  return runWithContextStore(() => new ReadableStream({
     async start(controller) {
       resetRenderState();
 
@@ -827,7 +830,7 @@ export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
         controller.error(error);
       }
     },
-  });
+  }));
 }
 
 /**
@@ -835,28 +838,30 @@ export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
  * Retries the full tree when a component throws a Promise (Suspense protocol),
  * so useServerData and similar hooks work without requiring explicit <Suspense>.
  */
-export async function renderToString(element: SlimNode): Promise<string> {
-  for (let attempt = 0; attempt < MAX_SUSPENSE_RETRIES; attempt++) {
-    resetRenderState();
-    const chunks: string[] = [];
-    const writer: Writer = {
-      lastWasText: false,
-      write(c) { chunks.push(c); this.lastWasText = false; },
-      text(s) { chunks.push(s); this.lastWasText = true; },
-    };
-    try {
-      const r = renderNode(element, writer);
-      if (r && typeof (r as any).then === "function") await r;
-      return chunks.join("");
-    } catch (error) {
-      if (error && typeof (error as any).then === "function") {
-        await (error as Promise<unknown>);
-        continue;
+export function renderToString(element: SlimNode): Promise<string> {
+  return runWithContextStore(async () => {
+    for (let attempt = 0; attempt < MAX_SUSPENSE_RETRIES; attempt++) {
+      resetRenderState();
+      const chunks: string[] = [];
+      const writer: Writer = {
+        lastWasText: false,
+        write(c) { chunks.push(c); this.lastWasText = false; },
+        text(s) { chunks.push(s); this.lastWasText = true; },
+      };
+      try {
+        const r = renderNode(element, writer);
+        if (r && typeof (r as any).then === "function") await r;
+        return chunks.join("");
+      } catch (error) {
+        if (error && typeof (error as any).then === "function") {
+          await (error as Promise<unknown>);
+          continue;
+        }
+        throw error;
       }
-      throw error;
     }
-  }
-  throw new Error("[slim-react] renderToString exceeded maximum retries");
+    throw new Error("[slim-react] renderToString exceeded maximum retries");
+  });
 }
 
 /** Alias matching React 18+ server API naming. */

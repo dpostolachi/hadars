@@ -9,7 +9,8 @@ import type { SlimNode } from "./types";
  */
 
 export interface Context<T> {
-  _currentValue: T;
+  _defaultValue: T;
+  _currentValue: T; // kept for external compat (real React contexts passed to useContext)
   Provider: ContextProvider<T>;
   Consumer: (props: { children: (value: T) => SlimNode }) => SlimNode;
 }
@@ -23,6 +24,7 @@ export type ContextProvider<T> = ((props: {
 
 export function createContext<T>(defaultValue: T): Context<T> {
   const context: Context<T> = {
+    _defaultValue: defaultValue,
     _currentValue: defaultValue,
     Provider: null!,
     Consumer: null!,

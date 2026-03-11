@@ -67,12 +67,10 @@ export {
 import { createContext } from "./context";
 export { createContext, type Context } from "./context";
 
-// Re-export useContext from hooks.ts? No – we have it in context.ts
-// Actually useContext reads from the context object, let's export a
-// single implementation that lives close to createContext:
+import { getContextValue } from "./renderContext";
 import type { Context } from "./context";
 export function useContext<T>(context: Context<T>): T {
-  return context._currentValue;
+  return getContextValue<T>(context);
 }
 
 // ---- Rendering ----

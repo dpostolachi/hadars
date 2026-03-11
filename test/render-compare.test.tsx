@@ -799,6 +799,100 @@ describe("slim: useContext", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// slim: context isolation — concurrent and sequential request safety
+// ---------------------------------------------------------------------------
+
+describe("slim: context isolation", () => {
+  test("concurrent renders have isolated context values", async () => {
+    // Each render runs with its own Provider value. An async component reads
+    // the context AFTER yielding to the event loop, so the two renders are
+    // interleaved. Without AsyncLocalStorage isolation each render would see
+    // the other's context value.
+    const Ctx = createContext("default");
+
+    async function AsyncReader() {
+      await Promise.resolve(); // yield — allows the other render to interleave
+      const val = slimUseContext(Ctx);
+      return React.createElement("span", null, val) as any;
+    }
+
+    const [html1, html2] = await Promise.all([
+      slimRenderToString(
+        React.createElement(Ctx.Provider, { value: "request-A" } as any,
+          React.createElement(AsyncReader as any, null)
+        ) as any
+      ),
+      slimRenderToString(
+        React.createElement(Ctx.Provider, { value: "request-B" } as any,
+          React.createElement(AsyncReader as any, null)
+        ) as any
+      ),
+    ]);
+
+    expect(html1).toBe("<span>request-A</span>");
+    expect(html2).toBe("<span>request-B</span>");
+  });
+
+  test("context values do not leak between sequential renders", async () => {
+    // After a render with a Provider completes, the next render must see the
+    // default value — not the previously provided value.
+    const Ctx = createContext("default");
+    function Reader() {
+      const val = slimUseContext(Ctx);
+      return React.createElement("span", null, val) as any;
+    }
+
+    const html1 = await slimRenderToString(
+      React.createElement(Ctx.Provider, { value: "provided" } as any,
+        React.createElement(Reader as any, null)
+      ) as any
+    );
+    expect(html1).toBe("<span>provided</span>");
+
+    // Second render has no Provider — must not inherit the previous value
+    const html2 = await slimRenderToString(
+      React.createElement(Reader as any, null) as any
+    );
+    expect(html2).toBe("<span>default</span>");
+  });
+
+  test("context value is not leaked when an async component inside a Provider throws", async () => {
+    // Regression: when finish() was only wired to the success path, a Provider
+    // whose async descendant threw an error would leave _currentValue set.
+    // The next render would then see the stale value instead of the default.
+    const Ctx = createContext("default");
+    function Reader() {
+      const val = slimUseContext(Ctx);
+      return React.createElement("span", null, val) as any;
+    }
+
+    let threw = false;
+    try {
+      await slimRenderToString(
+        React.createElement(Ctx.Provider, { value: "leaked-value" } as any,
+          React.createElement(
+            async function ThrowsAfterAwait() {
+              await Promise.resolve();
+              throw new Error("intentional failure");
+            } as any,
+            null
+          )
+        ) as any
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+
+    // Must see the default, not "leaked-value" from the failed render
+    const html = await slimRenderToString(
+      React.createElement(Reader as any, null) as any
+    );
+    expect(html).toBe("<span>default</span>");
+  });
+});
+
 describe("slim: React.lazy", () => {
   test("React.lazy component is resolved before rendering inside Suspense", async () => {
     // React.lazy uses the _init/_payload protocol; slim-react's renderer

@@ -6,7 +6,7 @@
  * compatible libraries to work during server-side rendering.
  */
 
-import { makeId } from "./renderContext";
+import { makeId, getContextValue } from "./renderContext";
 
 // ---- useState ----
 export function useState<T>(
@@ -115,9 +115,9 @@ export function use<T>(
   if (
     typeof usable === "object" &&
     usable !== null &&
-    "_currentValue" in usable
+    ("_currentValue" in usable || "_defaultValue" in usable)
   ) {
-    return (usable as { _currentValue: T })._currentValue;
+    return getContextValue<T>(usable as object);
   }
 
   // Promise – Suspense protocol
