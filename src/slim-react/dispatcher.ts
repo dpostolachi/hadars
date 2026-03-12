@@ -9,6 +9,18 @@
  * call so that `React.useId()` routes through slim-react's tree-aware
  * `makeId()`.  All other hooks already have working SSR stubs in hooks.ts;
  * they are forwarded here so libraries that call them via `React.*` also work.
+ *
+ * In the Rspack SSR bundle `react` is aliased to `slim-react`, which does NOT
+ * export `__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE`.
+ * Accessing that property via a namespace import (`import * as`) always returns
+ * `undefined` safely — `import default from "react"` would crash via interop
+ * because Rspack compiles it as `require("react").default`, and slim-react has
+ * no `default` export, so `.default` itself is `undefined` and the subsequent
+ * property access throws.
+ *
+ * With the namespace import, `_internals` is `undefined` in the SSR bundle and
+ * the install/restore functions become no-ops, which is correct: the SSR bundle
+ * already routes all `React.*` hook calls to slim-react's own implementations.
  */
 
 import { makeId, getContextValue } from "./renderContext";
@@ -19,11 +31,14 @@ import {
   useOptimistic, useActionState, use,
 } from "./hooks";
 
-import ReactPkg from "react";
+// Use namespace import so that when `react` is aliased to slim-react in the
+// Rspack SSR bundle, `ReactNS` is always an object (never undefined), and
+// accessing a missing property returns `undefined` rather than throwing.
+import * as ReactNS from "react";
 
 // React 19 exposes its shared internals under this key.
 const _internals: { H: object | null } | undefined =
-  (ReactPkg as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  (ReactNS as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
 
 // The dispatcher object we install. We keep a stable reference so the same
 // object is reused across every component call.

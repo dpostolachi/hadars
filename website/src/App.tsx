@@ -1,5 +1,5 @@
 import React from 'react';
-import { HadarsContext, HadarsHead, useServerData, loadModule, CacheSegment, type HadarsApp, type HadarsRequest } from 'hadars';
+import { HadarsContext, HadarsHead, useServerData, loadModule, type HadarsApp, type HadarsRequest } from 'hadars';
 import styled from '@emotion/styled';
 import { ThemeProvider, useTheme } from '@emotion/react';
 import { dehydrate, hydrate, QueryClient, QueryClientProvider, useSuspenseQuery, type DehydratedState } from '@tanstack/react-query'
@@ -121,23 +121,83 @@ const FeatureCard: React.FC<{ icon: string; title: string; desc: string }> = ({ 
 );
 
 const SuspenseQueryRow: React.FC = () => {
-    // useServerData catches the thrown promise from useSuspenseQuery,
-    // awaits it, then re-renders. On the second pass useSuspenseQuery
-    // returns synchronously and the value is immediately available.
-    const weatherData = useServerData(['data-fetch2'], () => useSuspenseQuery({
+    // On SSR, slim-react catches the thrown promise from useSuspenseQuery,
+    // awaits it, then re-renders — the result populates the QueryClient cache.
+    // getFinalProps dehydrates that cache; getClientProps rehydrates it, so
+    // useSuspenseQuery returns synchronously on the client with no second fetch.
+    const { data } = useSuspenseQuery({
         queryKey: ['data-fetch'],
         queryFn: async () => {
             const res = await fetch('http://localhost:9090/api/data');
             return res.json();
         },
-    }) ) || {};
-
-    const { data } = weatherData as any;
+        staleTime: Infinity,
+    });
 
     return (
         <div className="demo-row">
-            <span className="demo-label">useServerData + Suspense hook</span>
+            <span className="demo-label">useSuspenseQuery (dehydrated cache)</span>
             <span className="demo-value">{data ? JSON.stringify(data) : '—'}</span>
+        </div>
+    );
+};
+
+// ── useId demo components ─────────────────────────────────────────────────────
+
+// Simple component: single useId for a form field.
+const UseIdInput: React.FC<{ label: string }> = ({ label }) => {
+    const id = React.useId();
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label htmlFor={id}>{label}</label>
+            <input id={id} type="text" placeholder={label} className="btn" style={{ flex: 1 }} />
+            <code style={{ fontSize: '0.7rem', color: '#888' }}>{id}</code>
+        </div>
+    );
+};
+
+// Component with multiple useId calls — each gets a unique, stable ID.
+const MultiIdDemo: React.FC = () => {
+    const nameId = React.useId();
+    const emailId = React.useId();
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <label htmlFor={nameId}>Name</label>
+                <input id={nameId} type="text" placeholder="Name" className="btn" style={{ flex: 1 }} />
+                <code style={{ fontSize: '0.7rem', color: '#888' }}>{nameId}</code>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <label htmlFor={emailId}>Email</label>
+                <input id={emailId} type="email" placeholder="Email" className="btn" style={{ flex: 1 }} />
+                <code style={{ fontSize: '0.7rem', color: '#888' }}>{emailId}</code>
+            </div>
+        </div>
+    );
+};
+
+// Nested useId: parent and child each call useId, verifying tree-position encoding.
+const ChildWithId: React.FC<{ label: string }> = ({ label }) => {
+    const id = React.useId();
+    return (
+        <span style={{ fontSize: '0.85rem' }}>
+            {label}: <code style={{ color: '#9cdcfe' }}>{id}</code>
+        </span>
+    );
+};
+
+const NestedIdDemo: React.FC = () => {
+    const parentId = React.useId();
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <span style={{ fontSize: '0.85rem' }}>
+                Parent: <code style={{ color: '#4ec9b0' }}>{parentId}</code>
+            </span>
+            <div style={{ display: 'flex', gap: '1rem', paddingLeft: '1rem' }}>
+                <ChildWithId label="Child A" />
+                <ChildWithId label="Child B" />
+                <ChildWithId label="Child C" />
+            </div>
         </div>
     );
 };
@@ -154,9 +214,10 @@ interface ProcessStats {
 // for the client — no fetch is issued in the browser.
 const ServerStatsRow: React.FC = () => {
     const stats = useServerData<ProcessStats>('server_stats', async () => {
+        const proc = (globalThis as any).process;
         const res = {
-            pid: process.pid,
-            mem: Math.round(process.memoryUsage().rss / 1024 / 1024),
+            pid: proc?.pid ?? 0,
+            mem: Math.round((proc?.memoryUsage?.()?.rss ?? 0) / 1024 / 1024),
         };
         return res;
     });
@@ -280,7 +341,6 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                 </header>
 
                 {/* ── features ── */}
-                <CacheSegment cacheKey="features-grid">
                 <section className="features-grid">
                     <FeatureCard icon="⚡" title="React Fast Refresh" desc="Full HMR via rspack-dev-server. Module-level patches, no full-page reloads." />
                     <FeatureCard icon="🖥️" title="True SSR" desc="Components render on the server with your data, then hydrate on the client." />
@@ -289,10 +349,8 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                     <FeatureCard icon="🌐" title="Cross-runtime" desc="Runs on Bun, Node.js, and Deno. No Bun-specific APIs — uses the standard Fetch API throughout." />
                     <FeatureCard icon="⚙️" title="Multi-core production" desc="Set workers: os.cpus().length to fork a process per CPU core via node:cluster. Client and SSR bundles build in parallel too." />
                 </section>
-                </CacheSegment>
 
                 {/* ── quick start ── */}
-                <CacheSegment cacheKey="section-quickstart">
                 <Section id="quickstart" title="Quick start">
                     <p>Add hadars as a dependency, create a config, write a page component.</p>
 
@@ -351,10 +409,8 @@ hadars build
 hadars run           # multi-core when workers > 1
                     `}</Code> */}
                 </Section>
-                </CacheSegment>
 
                 {/* ── concepts ── */}
-                <CacheSegment cacheKey="section-concepts">
                 <Section id="concepts" title="Core concepts">
 
                     <h3>Data lifecycle</h3>
@@ -497,10 +553,8 @@ const Page: React.FC = () => {
 };
                     `}</Code> */}
                 </Section>
-                </CacheSegment>
 
                 {/* ── api ── */}
-                <CacheSegment cacheKey="section-api">
                 <Section id="api" title="API reference">
 
                     <h3>HadarsOptions (hadars.config.ts)</h3>
@@ -565,7 +619,6 @@ type HadarsProps<T> = T & {
 };
                     `}</Code> */}
                 </Section>
-                </CacheSegment>
 
                 {/* ── live demo ── */}
                 <Section id="demo" title="Live demo">
@@ -607,7 +660,49 @@ type HadarsProps<T> = T & {
                         Clicking the buttons proves the client-side React tree is live and hydrated.
                     </p>
                 </Section>
-                <SuspenseQueryRow />
+                <React.Suspense fallback={
+                    <div className="demo-row">
+                        <span className="demo-label">useSuspenseQuery</span>
+                        <span className="demo-value">loading…</span>
+                    </div>
+                }>
+                    <SuspenseQueryRow />
+                </React.Suspense>
+
+                {/* ── useId hydration test ── */}
+                <Section id="useid" title="useId() hydration test">
+                    <p>
+                        These components call <code>React.useId()</code> during SSR via slim-react.
+                        The IDs shown below are generated server-side and must match what React
+                        produces on the client during <code>hydrateRoot</code> — if they don't,
+                        you'll see a hydration mismatch warning in the console.
+                    </p>
+                    <div className="demo-box">
+                        <div className="demo-row">
+                            <span className="demo-label">Single useId</span>
+                            <span className="demo-value" style={{ flex: 1 }}>
+                                <UseIdInput label="Username" />
+                            </span>
+                        </div>
+                        <div className="demo-row">
+                            <span className="demo-label">Multiple useId calls</span>
+                            <span className="demo-value" style={{ flex: 1 }}>
+                                <MultiIdDemo />
+                            </span>
+                        </div>
+                        <div className="demo-row">
+                            <span className="demo-label">Nested components</span>
+                            <span className="demo-value" style={{ flex: 1 }}>
+                                <NestedIdDemo />
+                            </span>
+                        </div>
+                    </div>
+                    <p className="demo-note">
+                        The <code>«R…»</code> identifiers are React 19.1's tree-position-based IDs.
+                        Open the browser console — no hydration mismatch warnings means
+                        slim-react and React agree on every ID.
+                    </p>
+                </Section>
 
                 {/* ── footer ── */}
                 <footer className="footer">
@@ -623,7 +718,7 @@ export const getInitProps = async (_req: HadarsRequest): Promise<PageProps> => {
     const runtime =
         typeof (globalThis as any).Bun !== 'undefined' ? `Bun ${(globalThis as any).Bun.version}` :
         typeof (globalThis as any).Deno !== 'undefined' ? `Deno ${(globalThis as any).Deno.version.deno}` :
-        `Node.js ${process.version}`;
+        `Node.js ${(globalThis as any).process?.version ?? ''}`;
 
     const rcClient = new QueryClient();
     
@@ -637,11 +732,11 @@ export const getInitProps = async (_req: HadarsRequest): Promise<PageProps> => {
 export const getFinalProps = async ( { rcClient, ...props }: Partial<PageProps> ): Promise<Partial<PageProps>> => {
     const client = rcClient as QueryClient;
     const cache = dehydrate(client);
-    // Release the per-request QueryClient: clear() removes all cached queries
-    // (and cancels their internal GC timers), unmount() unregisters focus/online
-    // listeners — allowing the object to be GC'd immediately instead of after gcTime.
-    client.clear();
-    client.unmount();
+    // Note: do NOT call client.clear() / client.unmount() here.
+    // buildSsrResponse renders the final HTML after getFinalProps returns, and
+    // that render still needs the QueryClient cache to be populated so that
+    // useSuspenseQuery returns synchronously without re-fetching.
+    // The per-request QueryClient is GC'd when the request completes.
     return {
         ...props,
         cache,
@@ -650,7 +745,11 @@ export const getFinalProps = async ( { rcClient, ...props }: Partial<PageProps> 
 
 export const getClientProps = async ( props: Partial<PageProps> ): Promise<Partial<PageProps>> => {
 
-    const queryClient = new QueryClient({});
+    const queryClient = new QueryClient({
+        defaultOptions: {
+            queries: { staleTime: Infinity },
+        },
+    });
     hydrate(queryClient, props.cache as DehydratedState);
 
     return {

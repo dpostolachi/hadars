@@ -1,6 +1,6 @@
 import type React from "react";
 import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/hadars";
-import { renderToString, createElement, Fragment } from '../slim-react/index';
+import { renderToString, createElement } from '../slim-react/index';
 
 interface ReactResponseOptions {
     document: {
@@ -55,14 +55,12 @@ export const getReactResponse = async (
     req: HadarsRequest,
     opts: ReactResponseOptions,
 ): Promise<{
-    ReactPage: any,
+    App: React.FC<any>,
+    appProps: Record<string, unknown>,
+    clientProps: Record<string, unknown>,
     unsuspend: { cache: Map<string, any> },
     status: number,
     headHtml: string,
-    renderPayload: {
-        appProps: Record<string, unknown>;
-        clientProps: Record<string, unknown>;
-    };
 }> => {
     const App = opts.document.body;
     const { getInitProps, getAfterRenderProps, getFinalProps } = opts.document;
@@ -105,27 +103,14 @@ export const getReactResponse = async (
         ...(Object.keys(serverData).length > 0 ? { __serverData: serverData } : {}),
     };
 
-    const ReactPage = createElement(Fragment, null,
-        createElement('div', { id: 'app' },
-            createElement(App as any, { ...props, location: req.location, context } as any),
-        ),
-        createElement('script', {
-            id: 'hadars',
-            type: 'application/json',
-            dangerouslySetInnerHTML: {
-                __html: JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c'),
-            },
-        }),
-    );
+    const appProps = { ...props, location: req.location, context } as unknown as Record<string, unknown>;
 
     return {
-        ReactPage,
+        App: App as React.FC<any>,
+        appProps,
+        clientProps: clientProps as Record<string, unknown>,
         unsuspend,
         status: context.head.status,
         headHtml: getHeadHtml(context.head),
-        renderPayload: {
-            appProps: { ...props, location: req.location, context } as Record<string, unknown>,
-            clientProps: clientProps as Record<string, unknown>,
-        },
     };
 };

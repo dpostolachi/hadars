@@ -204,6 +204,9 @@ export function initServerDataCache(data: Record<string, unknown>) {
  *   awaited, the cache entry is then cleared so that the next render re-calls
  *   `fn()` — at that point the Suspense hook returns synchronously.
  *
+ * `fn` is **server-only**: it is never called in the browser. The resolved value
+ * is serialised into `__serverData` and returned from cache during hydration.
+ *
  * @example
  * const user = useServerData('current_user', () => db.getUser(id));
  * const post = useServerData(['post', postId], () => db.getPost(postId));
@@ -213,14 +216,9 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const cacheKey = Array.isArray(key) ? JSON.stringify(key) : key;
 
     if (typeof window !== 'undefined') {
-        // Client: if the server serialised a value for this key, return it directly
-        // (normal async case — no re-fetch in the browser).
-        if (clientServerDataCache.has(cacheKey)) {
-            return clientServerDataCache.get(cacheKey) as T | undefined;
-        }
-        // Key not serialised → Suspense hook case (e.g. useSuspenseQuery).
-        // Call fn() directly so the hook runs with its own hydrated cache.
-        return fn() as T | undefined;
+        // Client: if the server serialised a value for this key, return it directly.
+        // fn() is a server-only operation and must never run in the browser.
+        return clientServerDataCache.get(cacheKey) as T | undefined;
     }
 
     // Server: communicate via globalThis.__hadarsUnsuspend which is set by the

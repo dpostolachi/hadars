@@ -737,8 +737,8 @@ describe("slim: useId", () => {
     const html = await slimRenderToString(
       React.createElement(WithId as any, null) as any
     );
-    // React 19.1+ useId format: «R<base32tree>» with optional "H<n>" suffix
-    expect(html).toMatch(/for="«R[^"]*»".*«R[^"]*»/s);
+    // React 19.2+ useId format: _R_<base32tree>_ with optional "H<n>" suffix
+    expect(html).toMatch(/for="_R_[^"]*_".*_R_[^"]*_/s);
   });
 
   test("two useId calls in the same component produce different IDs", async () => {
@@ -1043,5 +1043,90 @@ describe("slim: React.lazy", () => {
       ) as any
     );
     expect(html).toBe("<!--$--><strong>lazy-loaded</strong><!--/$-->");
+  });
+});
+// ---------------------------------------------------------------------------
+// compare: identifierPrefix — useId parity when a custom prefix is used
+//
+// hydrateRoot and renderToReadableStream each accept `identifierPrefix`.
+// For IDs to round-trip without hydration mismatches the SSR and client
+// prefixes must agree.  These tests verify slim-react honours the option.
+// ---------------------------------------------------------------------------
+
+describe("compare: identifierPrefix", () => {
+  function FieldWithId({ label }: { label: string }) {
+    const id = React.useId();
+    return (
+      <div>
+        <label htmlFor={id}>{label}</label>
+        <input id={id} />
+      </div>
+    );
+  }
+
+  test("identifierPrefix is embedded in generated IDs", async () => {
+    const html = await slimRenderToString(
+      <FieldWithId label="Name" /> as any,
+      { identifierPrefix: "myapp" }
+    );
+    // All IDs must start with _R_myapp
+    const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      expect(id).toMatch(/^_R_myapp/);
+    }
+  });
+
+  test("identifierPrefix matches React's SSR renderer output", async () => {
+    const el = (
+      <main>
+        <FieldWithId label="First name" />
+        <FieldWithId label="Last name" />
+      </main>
+    );
+    const expected = reactRenderToString(el as any);
+    // React's default prefix is "" — slim-react must match with explicit ""
+    const actual = await slimRenderToString(el as any, { identifierPrefix: "" });
+    expect(actual).toBe(expected);
+  });
+
+  test("identifierPrefix does not leak between sequential renders", async () => {
+    function Comp() {
+      const id = React.useId();
+      return <span id={id} /> as any;
+    }
+    // First render with a custom prefix
+    const html1 = await slimRenderToString(<Comp /> as any, { identifierPrefix: "pfx" });
+    const ids1 = [...html1.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids1[0]).toMatch(/^_R_pfx/);
+
+    // Second render with NO prefix — must not inherit the previous "pfx"
+    const html2 = await slimRenderToString(<Comp /> as any);
+    const ids2 = [...html2.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids2[0]).not.toMatch(/^_R_pfx/);
+    expect(ids2[0]).toMatch(/^_R_[^p]/);  // prefix-less form: _R_<treeId>
+  });
+
+  test("renderToStream identifierPrefix is embedded in generated IDs", async () => {
+    const stream = renderToStream(<FieldWithId label="City" /> as any, { identifierPrefix: "stream" });
+    const html = await streamToString(stream);
+    const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      expect(id).toMatch(/^_R_stream/);
+    }
+  });
+
+  test("renderToStream identifierPrefix does not leak to subsequent renderToString", async () => {
+    function Comp() {
+      const id = React.useId();
+      return <span id={id} /> as any;
+    }
+    const stream = renderToStream(<Comp /> as any, { identifierPrefix: "st" });
+    await streamToString(stream); // consume the stream so the render completes
+
+    const html = await slimRenderToString(<Comp /> as any);
+    const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids[0]).not.toMatch(/^_R_st/);
   });
 });

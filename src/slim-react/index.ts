@@ -75,7 +75,7 @@ export function useContext<T>(context: Context<T>): T {
 
 // ---- Rendering ----
 import { renderToStream, renderToString, renderToReadableStream } from "./render";
-export { renderToStream, renderToString, renderToReadableStream };
+export { renderToStream, renderToString, renderToReadableStream, type RenderOptions } from "./render";
 
 // ---- Suspense (as a JSX tag) ----
 import { SUSPENSE_TYPE } from "./types";

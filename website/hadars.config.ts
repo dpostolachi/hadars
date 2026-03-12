@@ -16,6 +16,7 @@ const config: HadarsOptions = {
     },
     // Only cache /cache-test — the main page is always freshly rendered.
     cache: (req) => req.pathname === '/cache-test' ? { key: req.pathname, ttl: 30_000 } : null,
+    reactMode: 'development',
 };
 
 export default config;

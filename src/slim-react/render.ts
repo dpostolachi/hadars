@@ -812,8 +812,8 @@ async function renderSuspense(
   while (attempts < MAX_SUSPENSE_RETRIES) {
     // Restore context to the state it was in when we entered <Suspense>.
     restoreContext(snap);
+    let buffer = new BufferWriter();
     try {
-      const buffer = new BufferWriter();
       const r = renderNode(children, buffer, isSvg);
       if (r && typeof (r as any).then === "function") {
         const m = captureMap(); await r; swapContextMap(m);
@@ -850,19 +850,32 @@ async function renderSuspense(
 // Public API
 // ---------------------------------------------------------------------------
 
+export interface RenderOptions {
+  /**
+   * Must match the `identifierPrefix` option passed to `hydrateRoot` on the
+   * client so that `useId()` generates identical IDs on server and client.
+   * Defaults to `""` (React's default).
+   */
+  identifierPrefix?: string;
+}
+
 /**
  * Render a component tree to a `ReadableStream<Uint8Array>`.
  *
  * The stream pauses at `<Suspense>` boundaries until the suspended
  * promise resolves, then continues writing HTML.
  */
-export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
+export function renderToStream(
+  element: SlimNode,
+  options?: RenderOptions,
+): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
+  const idPrefix = options?.identifierPrefix ?? "";
 
   const contextMap = new Map<object, unknown>();
   return new ReadableStream({
     async start(controller) {
-      resetRenderState();
+      resetRenderState(idPrefix);
       const prev = swapContextMap(contextMap);
 
       const writer: Writer = {
@@ -897,12 +910,16 @@ export function renderToStream(element: SlimNode): ReadableStream<Uint8Array> {
  * Retries the full tree when a component throws a Promise (Suspense protocol),
  * so useServerData and similar hooks work without requiring explicit <Suspense>.
  */
-export async function renderToString(element: SlimNode): Promise<string> {
+export async function renderToString(
+  element: SlimNode,
+  options?: RenderOptions,
+): Promise<string> {
+  const idPrefix = options?.identifierPrefix ?? "";
   const contextMap = new Map<object, unknown>();
   const prev = swapContextMap(contextMap);
   try {
     for (let attempt = 0; attempt < MAX_SUSPENSE_RETRIES; attempt++) {
-      resetRenderState();
+      resetRenderState(idPrefix);
       swapContextMap(contextMap); // re-activate our map on each retry
       const chunks: string[] = [];
       const writer: Writer = {

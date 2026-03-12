@@ -13,7 +13,7 @@
 import { workerData, parentPort } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
 import { processSegmentCache } from './utils/segmentCache';
-import { renderToString, createElement, Fragment } from './slim-react/index';
+import { renderToString, createElement } from './slim-react/index';
 
 const { ssrBundlePath } = workerData as { ssrBundlePath: string };
 
@@ -145,26 +145,21 @@ parentPort!.on('message', async (msg: any) => {
 
         const Component = _ssrMod.default;
 
-        const page = createElement(Fragment, null,
-            createElement('div', { id: 'app' }, createElement(Component, finalAppProps)),
-            createElement('script', {
-                id: 'hadars',
-                type: 'application/json',
-                dangerouslySetInnerHTML: {
-                    __html: JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c'),
-                },
-            }),
-        );
-
-        // Re-use the same cache so useServerData returns immediately (no re-fetch).
+        // Render the Component as the direct root — matching hydrateRoot(div#app, <Component>)
+        // on the client.  Wrapping in Fragment(div#app(...), script) would add an extra
+        // pushTreeContext(2,0) from the Fragment's child array, shifting all tree-position
+        // useId values by 2 bits and causing a hydration mismatch.
         (globalThis as any).__hadarsUnsuspend = unsuspend;
-        let html: string;
+        let appHtml: string;
         try {
-            html = await renderToString(page);
+            appHtml = await renderToString(createElement(Component, finalAppProps));
         } finally {
             (globalThis as any).__hadarsUnsuspend = null;
         }
-        html = processSegmentCache(html);
+        appHtml = processSegmentCache(appHtml);
+
+        const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
+        const html = `<div id="app">${appHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>`;
 
         parentPort!.postMessage({ id, html, headHtml, status });
 

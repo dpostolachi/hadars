@@ -92,10 +92,11 @@ function s(): RenderState {
   return g[GLOBAL_KEY] as RenderState;
 }
 
-export function resetRenderState() {
+export function resetRenderState(idPrefix = "") {
   const st = s();
   st.currentTreeContext = { ...EMPTY };
   st.localIdCounter = 0;
+  st.idPrefix = idPrefix;
 }
 
 export function setIdPrefix(prefix: string) {
@@ -192,20 +193,19 @@ function getTreeId(): string {
 /**
  * Generate a `useId`-compatible ID for the current call site.
  *
- * Format: `«<idPrefix>R<treeId>»`  (React 19.1+)
+ * Format: `_R_<idPrefix><treeId>_`  (React 19.2+)
  *   with an optional `H<n>` suffix for the n-th useId call in the same
  *   component (matching React 19's `localIdCounter` behaviour).
  *
- * React 19.1 switched from `_R_<id>_` to `«R<id>»` (U+00AB / U+00BB).
- * This matches React 19.1's `mountId` output on the Fizz SSR renderer and
- * the client hydration path, so the IDs produced here will agree with the
- * real React runtime during `hydrateRoot`.
+ * React 19.2 uses `_R_<id>_` (underscore-delimited).
+ * This matches React 19.2's output from both renderToString (Fizz) and
+ * hydrateRoot, so SSR-generated IDs agree with client React during hydration.
  */
 export function makeId(): string {
   const st = s();
   const treeId = getTreeId();
   const n = st.localIdCounter++;
-  let id = "\u00ab" + st.idPrefix + "R" + treeId;
+  let id = "_R_" + st.idPrefix + treeId;
   if (n > 0) id += "H" + n.toString(32);
-  return id + "\u00bb";
+  return id + "_";
 }
