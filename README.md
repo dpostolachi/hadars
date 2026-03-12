@@ -16,6 +16,10 @@ hadars is an alternative to Next.js for apps that just need SSR.
 
 Bring your own router (or none), keep your components as plain React, and get SSR, HMR, and a production build from a single config file.
 
+## Benchmarks
+
+Benchmarks against an equivalent Next.js app show significantly faster server throughput (requests/second) and meaningfully better page load metrics (TTFB, FCP, DOMContentLoaded). Build times are also much lower due to rspack.
+
 ## Quick start
 
 Scaffold a new project in seconds:
@@ -114,7 +118,6 @@ const UserCard = ({ userId }: { userId: string }) => {
 - **`key`** - string or string array; must be stable and unique within the page
 - **Server** - calls `fn()`, awaits the result across render iterations, returns `undefined` until resolved
 - **Client** - reads the pre-resolved value from the hydration cache serialised by the server; `fn()` is never called in the browser
-- **Suspense libraries** - also works when `fn()` throws a thenable (e.g. Relay `useLazyLoadQuery` with `suspense: true`); the thrown promise is awaited and the next render re-calls `fn()` synchronously
 
 ## Data lifecycle hooks
 
@@ -182,21 +185,14 @@ export default config;
 
 ## slim-react
 
-hadars ships its own lightweight React-compatible SSR renderer called **slim-react** (`src/slim-react/`). It replaces `react-dom/server` entirely on the server side - no `renderToStaticMarkup`, no `renderToPipeableStream`, no react-dom dependency at all.
+hadars ships its own lightweight React-compatible SSR renderer called **slim-react** (`src/slim-react/`). It replaces `react-dom/server` on the server side entirely.
 
-For server builds, rspack aliases `react` and `react/jsx-runtime` to slim-react, so your components and any libraries they import render through it automatically without any code changes.
+For server builds, rspack aliases `react` and `react/jsx-runtime` to slim-react, so your components and any libraries they import render through it automatically without code changes.
 
-**What it does:**
-
-- Renders the full component tree to an HTML string with native `async/await` support - async components and hooks that return Promises are awaited directly without streaming workarounds
-- Implements the React Suspense protocol: when a component throws a Promise (e.g. from `useServerData` or a Suspense-enabled data library), slim-react awaits it and retries the tree automatically
-- Emits React-compatible hydration markers - `<!--$-->…<!--/$-->` for resolved Suspense boundaries, `<!-- -->` separators between adjacent text nodes - so `hydrateRoot` on the client works without mismatches
-- Supports `React.memo`, `React.forwardRef`, `React.lazy`, `Context.Provider`, `Context.Consumer`, and the React 18/19 element wire formats
-- Covers the full hook surface needed for SSR: `useState`, `useReducer`, `useContext`, `useRef`, `useMemo`, `useCallback`, `useId`, `useSyncExternalStore`, `use`, and more - all as lightweight SSR stubs
-
-**Why not react-dom/server?**
-
-`react-dom/server` cannot `await` arbitrary Promises thrown during render - it only handles Suspense via streaming and requires components to use `React.lazy` or Relay-style Suspense resources. slim-react's retry loop makes `useServerData` (and any hook that throws a Promise) work without wrapping every async component in a `<Suspense>` boundary.
+- Renders the full component tree to an HTML string with native `async/await` — async components are awaited directly
+- Implements the React Suspense protocol: thrown Promises (e.g. from `useSuspenseQuery`) are awaited and the component retried automatically
+- Compatible with `hydrateRoot` — output matches what React expects on the client
+- Supports `React.memo`, `React.forwardRef`, `React.lazy`, `Context.Provider`, `Context.Consumer`, and the React 19 element format
 
 ## License
 

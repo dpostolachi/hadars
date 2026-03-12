@@ -196,16 +196,11 @@ export function initServerDataCache(data: Record<string, unknown>) {
  * across all SSR render passes and client hydration — it must be stable and
  * unique within the page.
  *
- * `fn` may return a `Promise<T>` (normal async usage), return `T` synchronously,
- * or throw a thenable (React Suspense protocol). All three cases are handled:
- * - Async `Promise<T>`: awaited across render iterations, result cached.
- * - Synchronous return: value stored immediately, returned on the same pass.
- * - Thrown thenable (e.g. `useQuery({ suspense: true })`): the thrown promise is
- *   awaited, the cache entry is then cleared so that the next render re-calls
- *   `fn()` — at that point the Suspense hook returns synchronously.
+ * `fn` may return a `Promise<T>` (async usage) or return `T` synchronously.
+ * The resolved value is serialised into `__serverData` and returned from cache
+ * during hydration.
  *
- * `fn` is **server-only**: it is never called in the browser. The resolved value
- * is serialised into `__serverData` and returned from cache during hydration.
+ * `fn` is **server-only**: it is never called in the browser.
  *
  * @example
  * const user = useServerData('current_user', () => db.getUser(id));
@@ -230,51 +225,11 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
 
     const existing = unsuspend.cache.get(cacheKey);
 
-    // Suspense promise has resolved — re-call fn() so the hook returns its value
-    // synchronously from its own internal cache. Cache the result as
-    // 'suspense-cached' so later renders (e.g. the final renderToString in
-    // buildSsrResponse, which runs after getFinalProps may have cleared the
-    // user's QueryClient) can return the value without calling fn() again.
-    // NOT stored as 'fulfilled' so it is never included in serverData sent to
-    // the client — the Suspense library owns its own hydration.
-    if (existing?.status === 'suspense-resolved') {
-        try {
-            const value = fn() as T;
-            unsuspend.cache.set(cacheKey, { status: 'suspense-cached', value });
-            return value;
-        } catch {
-            return undefined;
-        }
-    }
-
-    // Return the cached Suspense value on all subsequent renders.
-    if (existing?.status === 'suspense-cached') {
-        return existing.value as T;
-    }
-
     if (!existing) {
         // First encounter — call fn(), which may:
-        //   (a) return a Promise<T>  — normal async usage (serialised for the client)
+        //   (a) return a Promise<T>  — async usage (serialised for the client)
         //   (b) return T synchronously — e.g. a sync data source
-        //   (c) throw a thenable     — Suspense protocol (e.g. useSuspenseQuery)
-        let result: Promise<T> | T;
-        try {
-            result = fn();
-        } catch (thrown) {
-            // (c) Suspense protocol: fn() threw a thenable. Await it, then mark the
-            // entry as 'suspense-resolved' so the next render re-calls fn() to get
-            // the synchronously available value. Not stored as 'fulfilled' → not
-            // serialised to the client (the Suspense library handles its own hydration).
-            if (thrown !== null && typeof thrown === 'object' && typeof (thrown as any).then === 'function') {
-                const suspensePromise = Promise.resolve(thrown as Promise<unknown>).then(
-                    () => { unsuspend.cache.set(cacheKey, { status: 'suspense-resolved' }); },
-                    () => { unsuspend.cache.set(cacheKey, { status: 'suspense-resolved' }); },
-                );
-                unsuspend.cache.set(cacheKey, { status: 'pending', promise: suspensePromise });
-                throw suspensePromise; // slim-react will await and retry
-            }
-            throw thrown;
-        }
+        const result = fn();
 
         const isThenable = result !== null && typeof result === 'object' && typeof (result as any).then === 'function';
 

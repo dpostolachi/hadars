@@ -26,14 +26,11 @@ export interface AppHead {
 export type UnsuspendEntry =
     | { status: 'pending'; promise: Promise<unknown> }
     | { status: 'fulfilled'; value: unknown }
-    | { status: 'suspense-resolved' }
-    | { status: 'suspense-cached'; value: unknown }
     | { status: 'rejected'; reason: unknown };
 
 /** @internal Populated by the framework's render loop — use useServerData() instead. */
 export interface AppUnsuspend {
     cache: Map<string, UnsuspendEntry>;
-    hasPending: boolean;
 }
 
 export interface AppContext {
