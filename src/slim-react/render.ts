@@ -300,7 +300,8 @@ function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
       continue;
     }
     if (key === "style" && typeof value === "object") {
-      attrs += ` style="${escapeAttr(styleObjectToString(value))}"`;
+      const styleStr = styleObjectToString(value);
+      if (styleStr) attrs += ` style="${escapeAttr(styleStr)}"`;
       continue;
     }
     attrs += ` ${attrName}="${escapeAttr(String(value))}"`;
