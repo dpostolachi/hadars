@@ -16,7 +16,6 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import cluster from 'node:cluster';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
-import { processSegmentCache } from "./utils/segmentCache";
 const encoder = new TextEncoder();
 
 /**
@@ -73,7 +72,7 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
 const HEAD_MARKER = '<meta name="HADARS_HEAD">';
 const BODY_MARKER = '<meta name="HADARS_BODY">';
 
-import { renderToString as slimRenderToString, createElement } from './slim-react/index';
+
 
 // Round-robin thread pool for SSR rendering — used on Bun/Deno where
 // node:cluster is not available but node:worker_threads is.
@@ -194,29 +193,19 @@ class RenderWorkerPool {
 }
 
 async function buildSsrResponse(
-    App: any,
-    appProps: Record<string, unknown>,
+    bodyHtml: string,
     clientProps: Record<string, unknown>,
     headHtml: string,
     status: number,
     getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
-    unsuspendForRender: any,
 ): Promise<Response> {
     const responseStream = new ReadableStream({
         async start(controller) {
             const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
             // Flush the shell (precontentHtml) immediately so the browser can
-            // start loading CSS/fonts before renderToString blocks the thread.
+            // start loading CSS/fonts before the body is assembled.
             controller.enqueue(encoder.encode(precontentHtml));
 
-            let bodyHtml: string;
-            try {
-                (globalThis as any).__hadarsUnsuspend = unsuspendForRender;
-                bodyHtml = await slimRenderToString(createElement(App, appProps));
-            } finally {
-                (globalThis as any).__hadarsUnsuspend = null;
-            }
-            bodyHtml = processSegmentCache(bodyHtml);
             const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
             controller.enqueue(encoder.encode(
                 `<div id="app">${bodyHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>` + postContent
@@ -690,7 +679,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 getFinalProps,
             } = (await import(importPath)) as HadarsEntryModule<any>;
 
-            const { App, appProps, clientProps, unsuspend, status, headHtml } = await getReactResponse(request, {
+            const { bodyHtml, clientProps, status, headHtml } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -700,7 +689,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 },
             });
 
-            return buildSsrResponse(App, appProps, clientProps, headHtml, status, getPrecontentHtml, unsuspend);
+            return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             const msg = (err?.stack ?? err?.message ?? String(err)).replace(/</g, '&lt;');
@@ -880,7 +869,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 });
             }
 
-            const { App, appProps, clientProps, unsuspend, status, headHtml } = await getReactResponse(request, {
+            const { bodyHtml, clientProps, status, headHtml } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -890,7 +879,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 },
             });
 
-            return buildSsrResponse(App, appProps, clientProps, headHtml, status, getPrecontentHtml, unsuspend);
+            return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             return new Response('Internal Server Error', { status: 500 });

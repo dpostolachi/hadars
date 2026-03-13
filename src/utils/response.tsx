@@ -1,6 +1,7 @@
 import type React from "react";
 import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/hadars";
 import { renderToString, createElement } from '../slim-react/index';
+import { processSegmentCache } from './segmentCache';
 
 interface ReactResponseOptions {
     document: {
@@ -55,10 +56,8 @@ export const getReactResponse = async (
     req: HadarsRequest,
     opts: ReactResponseOptions,
 ): Promise<{
-    App: React.FC<any>,
-    appProps: Record<string, unknown>,
+    bodyHtml: string,
     clientProps: Record<string, unknown>,
-    unsuspend: { cache: Map<string, any> },
     status: number,
     headHtml: string,
 }> => {
@@ -78,11 +77,12 @@ export const getReactResponse = async (
     // Create per-request cache for useServerData, active for all renders.
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
+    let bodyHtml: string;
     try {
-        let html = await renderToString(createElement(App as any, props as any));
+        bodyHtml = await renderToString(createElement(App as any, props as any));
         if (getAfterRenderProps) {
-            props = await getAfterRenderProps(props, html);
-            await renderToString(
+            props = await getAfterRenderProps(props, bodyHtml);
+            bodyHtml = await renderToString(
                 createElement(App as any, { ...props, location: req.location, context } as any),
             );
         }
@@ -103,13 +103,9 @@ export const getReactResponse = async (
         ...(Object.keys(serverData).length > 0 ? { __serverData: serverData } : {}),
     };
 
-    const appProps = { ...props, location: req.location, context } as unknown as Record<string, unknown>;
-
     return {
-        App: App as React.FC<any>,
-        appProps,
+        bodyHtml: processSegmentCache(bodyHtml),
         clientProps: clientProps as Record<string, unknown>,
-        unsuspend,
         status: context.head.status,
         headHtml: getHeadHtml(context.head),
     };

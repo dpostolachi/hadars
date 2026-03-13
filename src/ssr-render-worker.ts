@@ -102,17 +102,19 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
 
+    let prelimHtml: string;
     try {
-        let html = await renderToString(createElement(Component, props));
+        prelimHtml = await renderToString(createElement(Component, props));
 
         if (getAfterRenderProps) {
-            props = await getAfterRenderProps(props, html);
+            props = await getAfterRenderProps(props, prelimHtml);
             await renderToString(
                 createElement(Component, { ...props, location: serialReq.location, context }),
             );
         }
-    } finally {
+    } catch (e) {
         (globalThis as any).__hadarsUnsuspend = null;
+        throw e;
     }
 
     const { context: _ctx, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
@@ -129,7 +131,21 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     };
 
     const finalAppProps = { ...props, location: serialReq.location, context };
-    return { finalAppProps, clientProps, unsuspend, headHtml: buildHeadHtml(context.head), status: context.head.status ?? 200 };
+
+    // Final render — __hadarsUnsuspend is still set; cache is fully populated so
+    // useServerData calls return cached values without any async work.
+    let appHtml: string;
+    try {
+        appHtml = await renderToString(createElement(Component, finalAppProps));
+    } finally {
+        (globalThis as any).__hadarsUnsuspend = null;
+    }
+    appHtml = processSegmentCache(appHtml);
+
+    const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
+    const html = `<div id="app">${appHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>`;
+
+    return { html, headHtml: buildHeadHtml(context.head), status: context.head.status ?? 200 };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────
@@ -140,27 +156,7 @@ parentPort!.on('message', async (msg: any) => {
         await init();
         if (type !== 'renderFull') return;
 
-        const { finalAppProps, clientProps, unsuspend, headHtml, status } =
-            await runFullLifecycle(request as SerializableRequest);
-
-        const Component = _ssrMod.default;
-
-        // Render the Component as the direct root — matching hydrateRoot(div#app, <Component>)
-        // on the client.  Wrapping in Fragment(div#app(...), script) would add an extra
-        // pushTreeContext(2,0) from the Fragment's child array, shifting all tree-position
-        // useId values by 2 bits and causing a hydration mismatch.
-        (globalThis as any).__hadarsUnsuspend = unsuspend;
-        let appHtml: string;
-        try {
-            appHtml = await renderToString(createElement(Component, finalAppProps));
-        } finally {
-            (globalThis as any).__hadarsUnsuspend = null;
-        }
-        appHtml = processSegmentCache(appHtml);
-
-        const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
-        const html = `<div id="app">${appHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>`;
-
+        const { html, headHtml, status } = await runFullLifecycle(request as SerializableRequest);
         parentPort!.postMessage({ id, html, headHtml, status });
 
     } catch (err: any) {

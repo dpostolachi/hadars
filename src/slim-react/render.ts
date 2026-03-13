@@ -61,30 +61,25 @@ const VOID_ELEMENTS = new Set([
   "wbr",
 ]);
 
+const HTML_ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#x27;' };
 function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/'/g, "&#x27;");
+  return str.replace(/[&<>']/g, c => HTML_ESC[c]!);
 }
 
+const ATTR_ESC: Record<string, string> = { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' };
 function escapeAttr(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return str.replace(/[&"<>]/g, c => ATTR_ESC[c]!);
 }
 
 function styleObjectToString(style: Record<string, any>): string {
-  return Object.entries(style)
-    .map(([key, value]) => {
-      // camelCase → kebab-case
-      const cssKey = key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
-      return `${cssKey}:${value}`;
-    })
-    .join(";");
+  let result = '';
+  for (const key in style) {
+    if (result) result += ';';
+    // camelCase → kebab-case
+    const cssKey = key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+    result += cssKey + ':' + style[key];
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +242,8 @@ const SVG_ELEMENTS = new Set([
 
 function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
   let attrs = "";
-  for (const [key, value] of Object.entries(props)) {
+  for (const key in props) {
+    const value = props[key];
     // Skip internal / non-attribute props
     if (
       key === "children" ||
