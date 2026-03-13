@@ -1,34 +1,49 @@
 /**
- * Rspack/webpack loader that transforms `loadModule('path')` calls based on
- * the compilation target:
+ * Rspack/webpack loader that applies two source-level transforms based on the
+ * compilation target (web vs node):
  *
+ * ── loadModule('path') ────────────────────────────────────────────────────────
  *  - web  (browser): replaced with `import('./path')` — rspack treats this as
  *    a true dynamic import and splits the module into a separate chunk.
- *
  *  - node (SSR):     replaced with `Promise.resolve(require('./path'))` —
- *    rspack bundles the module statically so it is always available
- *    synchronously on the server, wrapped in Promise.resolve to keep the
- *    API shape identical to the client side.
+ *    bundled statically, wrapped in Promise.resolve to keep the API shape.
+ *
+ * ── useServerData(key, fn) ───────────────────────────────────────────────────
+ *  - web  (browser): the second argument `fn` is replaced with `()=>undefined`.
+ *    `fn` is a server-only callback that may reference internal endpoints,
+ *    credentials, or other sensitive information. It is never called in the
+ *    browser (the hook returns the SSR-cached value immediately), but without
+ *    this transform it would still be compiled into the client bundle — exposing
+ *    those details to anyone who inspects the JS. Stripping it at bundle time
+ *    prevents the leak entirely.
+ *  - node (SSR): kept as-is — the real fn is needed to fetch data.
  *
  * Transformation strategy:
  *   Primary  — SWC AST parsing via @swc/core. Handles any valid TS/JS syntax
  *              including arbitrarily-nested generics, comments, and string
- *              literals that contain the text "loadModule".
- *   Fallback — Regex transform used when @swc/core is unavailable.
+ *              literals that contain the function names.
+ *   Fallback — Scanner-based transform used when @swc/core is unavailable.
  *
- * Example usage:
+ * Example:
  *
- *   import { loadModule } from 'hadars';
+ *   // Source (shared component):
+ *   const user = useServerData('user', () => db.getUser(req.userId));
  *
- *   // Code-split React component (wrap with React.lazy + Suspense):
- *   const MyComp = React.lazy(() => loadModule('./MyComp'));
+ *   // Client bundle after transform:
+ *   const user = useServerData('user', ()=>undefined);
  *
- *   // Dynamic module load:
- *   const { default: fn } = await loadModule('./heavyUtil');
+ *   // Server bundle (unchanged):
+ *   const user = useServerData('user', () => db.getUser(req.userId));
  */
 
 export default function loader(this: any, source: string): string {
-    const isServer = this.target === 'node' || this.target === 'async-node';
+    // Prefer the explicit `server` option injected by rspack.ts over the legacy
+    // `this.target` heuristic (which is unreliable when `target` is not set in
+    // the rspack config — rspack then reports 'web' for every build).
+    const opts = this.getOptions?.() ?? {};
+    const isServer: boolean = (typeof opts.server === 'boolean')
+        ? opts.server
+        : (this.target === 'node' || this.target === 'async-node');
     const resourcePath: string = this.resourcePath ?? this.resource ?? '(unknown)';
 
     let swc: any;
@@ -80,7 +95,26 @@ function swcTransform(this: any, swc: any, source: string, isServer: boolean, re
         if (node.type !== 'CallExpression') return;
 
         const callee = node.callee;
-        if (!callee || callee.type !== 'Identifier' || callee.value !== 'loadModule') return;
+        if (!callee || callee.type !== 'Identifier') return;
+
+        const name: string = callee.value;
+
+        // ── useServerData(key, fn) — strip fn on client builds ────────────────
+        if (!isServer && name === 'useServerData') {
+            const args: any[] = node.arguments;
+            if (!args || args.length < 2) return;
+            const fnArg = args[1].expression ?? args[1];
+            // Normalise to 0-based local byte offsets and replace with stub.
+            replacements.push({
+                start: fnArg.span.start - fileOffset,
+                end: fnArg.span.end - fileOffset,
+                replacement: '()=>undefined',
+            });
+            return;
+        }
+
+        // ── loadModule(path) ─────────────────────────────────────────────────
+        if (name !== 'loadModule') return;
 
         const args: any[] = node.arguments;
         if (!args || args.length === 0) return;
@@ -199,12 +233,98 @@ const LOAD_MODULE_RE =
 // (i.e. a dynamic / non-literal path argument).
 const DYNAMIC_LOAD_MODULE_RE = /\bloadModule\s*(?:<(?:[^<>]|<[^<>]*>)*>\s*)?\(/g;
 
+/**
+ * Scan forward from `pos` in `source`, skipping over a balanced JS expression
+ * (handles nested parens/brackets/braces and string literals).
+ * Returns the index of the first character AFTER the expression
+ * (i.e. the position of the trailing `,` or `)` at depth 0).
+ */
+function scanExpressionEnd(source: string, pos: number): number {
+    let depth = 0;
+    let i = pos;
+    while (i < source.length) {
+        const ch = source[i]!;
+        if (ch === '(' || ch === '[' || ch === '{') { depth++; i++; continue; }
+        if (ch === ')' || ch === ']' || ch === '}') {
+            if (depth === 0) break; // end of expression — closing delimiter of outer call
+            depth--; i++; continue;
+        }
+        if (ch === ',' && depth === 0) break; // end of expression — next argument
+        // String / template literals
+        if (ch === '"' || ch === "'" || ch === '`') {
+            const q = ch; i++;
+            while (i < source.length && source[i] !== q) {
+                if (source[i] === '\\') i++; // escape sequence
+                i++;
+            }
+            i++; // closing quote
+            continue;
+        }
+        // Line comment
+        if (ch === '/' && source[i + 1] === '/') {
+            while (i < source.length && source[i] !== '\n') i++;
+            continue;
+        }
+        // Block comment
+        if (ch === '/' && source[i + 1] === '*') {
+            i += 2;
+            while (i + 1 < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
+            i += 2;
+            continue;
+        }
+        i++;
+    }
+    return i;
+}
+
+/**
+ * Strip the `fn` argument from `useServerData(key, fn)` calls in client builds.
+ * Uses a character-level scanner to handle arbitrary fn expressions (arrow
+ * functions with nested calls, async functions, object literals, etc.).
+ */
+function stripUseServerDataFns(source: string): string {
+    // Match `useServerData` + optional generic + opening paren
+    const CALL_RE = /\buseServerData\s*(?:<(?:[^<>]|<[^<>]*>)*>\s*)?\(/g;
+    let result = '';
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    CALL_RE.lastIndex = 0;
+    while ((match = CALL_RE.exec(source)) !== null) {
+        const callStart = match.index;
+        let i = match.index + match[0].length;
+        // Skip whitespace before first arg
+        while (i < source.length && /\s/.test(source[i]!)) i++;
+        // Skip first argument (key: string or array)
+        i = scanExpressionEnd(source, i);
+        // Expect comma separator
+        if (i >= source.length || source[i] !== ',') continue;
+        i++; // skip comma
+        // Skip whitespace before fn
+        while (i < source.length && /\s/.test(source[i]!)) i++;
+        const fnStart = i;
+        // Scan to end of fn argument
+        const fnEnd = scanExpressionEnd(source, i);
+        if (fnEnd <= fnStart) continue;
+        // Emit everything up to fn, then the stub, skip the original fn
+        result += source.slice(lastIndex, fnStart) + '()=>undefined';
+        lastIndex = fnEnd;
+        // Advance regex past this call to avoid re-matching
+        CALL_RE.lastIndex = fnEnd;
+    }
+    return lastIndex === 0 ? source : result + source.slice(lastIndex);
+}
+
 function regexTransform(this: any, source: string, isServer: boolean, resourcePath: string): string {
-    const transformed = source.replace(LOAD_MODULE_RE, (_match, quote, modulePath) =>
+    let transformed = source.replace(LOAD_MODULE_RE, (_match, quote, modulePath) =>
         isServer
             ? `Promise.resolve(require(${quote}${modulePath}${quote}))`
             : `import(${quote}${modulePath}${quote})`
     );
+
+    // Strip server-only fn arguments from useServerData on client builds.
+    if (!isServer) {
+        transformed = stripUseServerDataFns(transformed);
+    }
 
     // Warn for any remaining dynamic calls
     let match: RegExpExecArray | null;

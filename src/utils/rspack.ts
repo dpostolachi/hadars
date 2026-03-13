@@ -59,6 +59,7 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                         // Runs before swc-loader (loaders execute right-to-left).
                         {
                             loader: loaderPath,
+                            options: { server: isServerBuild },
                         },
                         {
                             loader: 'builtin:swc-loader',
@@ -90,6 +91,7 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     use: [
                         {
                             loader: loaderPath,
+                            options: { server: isServerBuild },
                         },
                         {
                             loader: 'builtin:swc-loader',

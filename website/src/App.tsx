@@ -232,6 +232,44 @@ const ServerStatsRow: React.FC = () => {
     );
 };
 
+// Demonstrates fn-stripping: the fetch URL and token below are server-only.
+// The hadars rspack loader replaces `fn` with `()=>undefined` in the client
+// bundle — so the secret endpoint and credentials never appear in browser JS.
+// To verify after `hadars build`: search the .hadars/static/ JS files for the
+// string "validate-token" — it will only be found in index.ssr.js (server),
+// never in the client chunks.
+const ServerOnlySecretRow: React.FC = () => {
+    const result = useServerData<{ user: string; role: string }>(
+        'internal_auth_demo',
+        async () => {
+            // Everything inside this callback is stripped from the browser bundle.
+            // In a real app this would reach an internal service with auth credentials.
+            // These literals stay in index.ssr.js but must NEVER appear in client chunks.
+            const TOKEN = 'Bearer ey_super_secret_internal_token';
+            const url = 'https://internal-auth.internal/validate-token';
+            // fetch() has observable I/O side-effects — minifiers keep the strings.
+            // (The demo domain doesn't exist; we swallow the error and return mocks.)
+            const data = await fetch(url, { headers: { Authorization: TOKEN } })
+                .then(r => r.json() as Promise<{ user: string; role: string }>)
+                .catch(() => null);
+            return data ?? { user: 'alice', role: 'admin' };
+        },
+    );
+
+    return (
+        <div className="demo-row">
+            <span className="demo-label">
+                useServerData — fn stripped from client bundle
+            </span>
+            <span className="demo-value">
+                {result
+                    ? `${result.user} (${result.role}) — fn was stripped from this bundle`
+                    : '—'}
+            </span>
+        </div>
+    );
+};
+
 // ── /cache-test page ──────────────────────────────────────────────────────────
 
 // This page is served with a 30-second SSR cache (see hadars.config.ts).
@@ -638,6 +676,7 @@ type HadarsProps<T> = T & {
                             <span className="demo-value">{location}</span>
                         </div>
                         <ServerStatsRow />
+                        <ServerOnlySecretRow />
                         <React.Suspense fallback={
                             <div className="demo-row">
                                 <span className="demo-label">loadModule — lazy chunk</span>

@@ -15,7 +15,7 @@
  */
 
 import { test, expect, beforeAll, afterAll } from 'bun:test';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const ROOT        = join(import.meta.dir, '..');
@@ -111,6 +111,27 @@ test('loadModule: LazyPanel is code-split into a separate JS chunk', async () =>
     const files     = await readdir(staticDir);
     const jsChunks  = files.filter(f => f.endsWith('.js'));
     expect(jsChunks.length).toBeGreaterThanOrEqual(2);
+});
+
+test('useServerData loader: fn argument is stripped from client bundles', async () => {
+    const staticDir = join(WEBSITE_DIR, '.hadars', 'static');
+    const ssrBundle = join(WEBSITE_DIR, '.hadars', 'index.ssr.js');
+
+    // Sensitive strings must be present in the SSR bundle (fn runs server-side).
+    const ssrContent = await readFile(ssrBundle, 'utf8');
+    expect(ssrContent).toContain('validate-token');
+    expect(ssrContent).toContain('ey_super_secret');
+
+    // The same strings must NOT appear in any client chunk.
+    const files = await readdir(staticDir);
+    const jsChunks = files.filter(f => f.endsWith('.js'));
+    expect(jsChunks.length).toBeGreaterThan(0);
+
+    for (const chunk of jsChunks) {
+        const content = await readFile(join(staticDir, chunk), 'utf8');
+        expect(content).not.toContain('validate-token');
+        expect(content).not.toContain('ey_super_secret');
+    }
 });
 
 // ── cache tests ───────────────────────────────────────────────────────────────
