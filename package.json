@@ -72,10 +72,10 @@
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "esbuild": "^0.19.12",
+    "esbuild": "^0.27.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "tsup": "^6.7.0",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   },
   "dependencies": {
