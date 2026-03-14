@@ -689,6 +689,18 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 },
             });
 
+            // Content negotiation: if the client only accepts JSON (client-side
+            // navigation via useServerData), return the resolved data map as JSON
+            // instead of a full HTML page. The same auth context applies — cookies
+            // and headers are forwarded unchanged, so no new attack surface is created.
+            if (request.headers.get('Accept') === 'application/json') {
+                const serverData = (clientProps as any).__serverData ?? {};
+                return new Response(JSON.stringify({ serverData }), {
+                    status,
+                    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                });
+            }
+
             return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
@@ -858,7 +870,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 getFinalProps,
             } = (await import(componentPath)) as HadarsEntryModule<any>;
 
-            if (renderPool) {
+            if (renderPool && request.headers.get('Accept') !== 'application/json') {
                 // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.
                 const serialReq = await serializeRequest(request);
                 const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
@@ -878,6 +890,17 @@ export const run = async (options: HadarsRuntimeOptions) => {
                     getFinalProps,
                 },
             });
+
+            // Content negotiation: if the client only accepts JSON (client-side
+            // navigation via useServerData), return the resolved data map as JSON
+            // instead of a full HTML page.
+            if (request.headers.get('Accept') === 'application/json') {
+                const serverData = (clientProps as any).__serverData ?? {};
+                return new Response(JSON.stringify({ serverData }), {
+                    status,
+                    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                });
+            }
 
             return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
         } catch (err: any) {

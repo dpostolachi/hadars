@@ -174,13 +174,46 @@ export const useApp = () => React.useContext(AppContext);
 // hydration. Keyed by the same React useId() values that the server used.
 const clientServerDataCache = new Map<string, unknown>();
 
+// Tracks in-flight data-only requests keyed by pathname+search so that all
+// useServerData calls within a single Suspense pass share one network request.
+const pendingDataFetch = new Map<string, Promise<void>>();
+// Paths for which a client data fetch has already completed. Prevents re-fetching
+// when a key is genuinely absent from the server response for this path.
+const fetchedPaths = new Set<string>();
+
+// Keys that were seeded from SSR data and not yet claimed by any useServerData
+// call on the client. Used to detect server↔client key mismatches.
+let ssrInitialKeys: Set<string> | null = null;
+let unclaimedKeyCheckScheduled = false;
+
+function scheduleUnclaimedKeyCheck() {
+    if (unclaimedKeyCheckScheduled) return;
+    unclaimedKeyCheckScheduled = true;
+    // Wait for the current synchronous hydration pass to finish, then check.
+    setTimeout(() => {
+        unclaimedKeyCheckScheduled = false;
+        if (ssrInitialKeys && ssrInitialKeys.size > 0) {
+            console.warn(
+                `[hadars] useServerData: ${ssrInitialKeys.size} server-resolved key(s) were ` +
+                `never claimed during client hydration: ${[...ssrInitialKeys].map(k => JSON.stringify(k)).join(', ')}. ` +
+                `This usually means the key passed to useServerData was different on the server ` +
+                `than on the client (e.g. it contains Date.now(), Math.random(), or another ` +
+                `value that changes between renders). Keys must be stable and deterministic.`,
+            );
+        }
+        ssrInitialKeys = null;
+    }, 0);
+}
+
 /** Call this before hydrating to seed the client cache from the server's data.
  *  Invoked automatically by the hadars client bootstrap.
  *  Always clears the existing cache before populating — call with `{}` to just clear. */
 export function initServerDataCache(data: Record<string, unknown>) {
     clientServerDataCache.clear();
+    ssrInitialKeys = new Set<string>();
     for (const [k, v] of Object.entries(data)) {
         clientServerDataCache.set(k, v);
+        ssrInitialKeys.add(k);
     }
 }
 
@@ -200,7 +233,10 @@ export function initServerDataCache(data: Record<string, unknown>) {
  * The resolved value is serialised into `__serverData` and returned from cache
  * during hydration.
  *
- * `fn` is **server-only**: it is never called in the browser.
+ * `fn` is **server-only**: it is never called in the browser. On client-side
+ * navigation (after the initial SSR load), hadars automatically fires a
+ * data-only request to the current URL (`X-Hadars-Data: 1`) and suspends via
+ * React Suspense until the server returns the JSON map of resolved values.
  *
  * @example
  * const user = useServerData('current_user', () => db.getUser(id));
@@ -211,9 +247,59 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const cacheKey = Array.isArray(key) ? JSON.stringify(key) : key;
 
     if (typeof window !== 'undefined') {
-        // Client: if the server serialised a value for this key, return it directly.
-        // fn() is a server-only operation and must never run in the browser.
-        return clientServerDataCache.get(cacheKey) as T | undefined;
+        // Cache hit — return the server-resolved value directly (covers both initial
+        // SSR hydration and values fetched during client-side navigation).
+        if (clientServerDataCache.has(cacheKey)) {
+            // Mark this SSR key as claimed so the unclaimed-key check doesn't warn about it.
+            ssrInitialKeys?.delete(cacheKey);
+            return clientServerDataCache.get(cacheKey) as T;
+        }
+
+        // Cache miss during the initial hydration pass (SSR data is present but
+        // this key wasn't in it) — schedule a deferred check for orphaned SSR keys
+        // which would signal a server↔client key mismatch.
+        if (ssrInitialKeys !== null && ssrInitialKeys.size > 0) {
+            scheduleUnclaimedKeyCheck();
+        }
+
+        // Cache miss — this component is mounting during client-side navigation
+        // (the server hasn't sent data for this path yet). Fire a data-only
+        // request to the server at the current URL and suspend via React Suspense
+        // until it completes. All useServerData calls within the same React render
+        // share one Promise so only one network request is made per navigation.
+        const pathKey = window.location.pathname + window.location.search;
+
+        // If we already fetched this path and the key is still missing, the server
+        // doesn't produce a value for it — return undefined rather than looping.
+        if (fetchedPaths.has(pathKey)) {
+            return undefined;
+        }
+
+        if (!pendingDataFetch.has(pathKey)) {
+            let resolve!: () => void;
+            const p = new Promise<void>(res => { resolve = res; });
+            pendingDataFetch.set(pathKey, p);
+            // Fire in a microtask so that every useServerData call in this React
+            // render is registered against the same deferred before the fetch starts.
+            queueMicrotask(async () => {
+                try {
+                    const res = await fetch(pathKey, {
+                        headers: { 'Accept': 'application/json' },
+                    });
+                    if (res.ok) {
+                        const json = await res.json() as { serverData: Record<string, unknown> };
+                        for (const [k, v] of Object.entries(json.serverData ?? {})) {
+                            clientServerDataCache.set(k, v);
+                        }
+                    }
+                } finally {
+                    fetchedPaths.add(pathKey);
+                    pendingDataFetch.delete(pathKey);
+                    resolve();
+                }
+            });
+        }
+        throw pendingDataFetch.get(pathKey)!;
     }
 
     // Server: communicate via globalThis.__hadarsUnsuspend which is set by the
@@ -226,6 +312,25 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const existing = unsuspend.cache.get(cacheKey);
 
     if (!existing) {
+        // Detect an unstable key: if this key is brand-new but ALL entries
+        // already in the cache are settled (fulfilled/rejected), the tree
+        // has already completed at least one full resolution pass.  A new key
+        // appearing now means its value changes between render passes — the
+        // render loop would spin indefinitely without this guard.
+        if (unsuspend.cache.size > 0) {
+            const allSettled = [...unsuspend.cache.values()].every(
+                e => e.status === 'fulfilled' || e.status === 'rejected',
+            );
+            if (allSettled) {
+                throw new Error(
+                    `[hadars] useServerData: key ${JSON.stringify(cacheKey)} first appeared after ` +
+                    `all previously registered keys were already resolved. This means the key is ` +
+                    `not stable across render passes (e.g. it contains Date.now(), Math.random(), ` +
+                    `or a value that changes on every render). Keys must be deterministic.`,
+                );
+            }
+        }
+
         // First encounter — call fn(), which may:
         //   (a) return a Promise<T>  — async usage (serialised for the client)
         //   (b) return T synchronously — e.g. a sync data source

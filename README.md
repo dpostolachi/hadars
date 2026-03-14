@@ -116,8 +116,9 @@ const UserCard = ({ userId }: { userId: string }) => {
 ```
 
 - **`key`** - string or string array; must be stable and unique within the page
-- **Server** - calls `fn()`, awaits the result across render iterations, returns `undefined` until resolved
-- **Client** - reads the pre-resolved value from the hydration cache serialised by the server; `fn()` is never called in the browser
+- **Server (SSR)** - calls `fn()`, awaits the result across render iterations, returns `undefined` until resolved
+- **Client (hydration)** - reads the pre-resolved value from the hydration cache serialised by the server; `fn()` is never called in the browser
+- **Client (navigation)** - when a component mounts during client-side navigation and its key is not in the cache, hadars fires a single `GET <current-url>` with `Accept: application/json`; all `useServerData` calls within the same render are batched into one request and suspended via React Suspense until the server returns the JSON data map
 
 ## Data lifecycle hooks
 

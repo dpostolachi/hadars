@@ -270,6 +270,169 @@ const ServerOnlySecretRow: React.FC = () => {
     );
 };
 
+// ── client-side navigation helper ────────────────────────────────────────────
+
+/** Push a new URL without a full page reload and fire a popstate event so the
+ *  App router re-renders.  Falls back gracefully when called on the server. */
+function navigate(to: string) {
+    if (typeof window === 'undefined') return;
+    history.pushState({}, '', to);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+// ── /data-demo page ───────────────────────────────────────────────────────────
+
+// Four independent components, each with their own useServerData key.
+// When this page is reached via client-side navigation (pushState), none of
+// these keys exist in clientServerDataCache yet.  The first component to
+// render triggers a batched GET /data-demo with Accept: application/json;
+// the remaining three join the same in-flight promise via pendingDataFetch.
+// A single network request, four values — the Suspense fallback below is
+// shown for the entire group until that one request completes.
+
+const DemoHostnameRow: React.FC = () => {
+    const val = useServerData<string>('demo_hostname', async () => {
+        const os = await import('node:os');
+        return (os as any).hostname?.() ?? 'unknown';
+    });
+    return (
+        <div className="demo-row">
+            <span className="demo-label">Hostname</span>
+            <span className="demo-value">{val ?? '—'}</span>
+        </div>
+    );
+};
+
+const DemoUptimeRow: React.FC = () => {
+    const val = useServerData<number>('demo_uptime', async () => {
+        return Math.round((globalThis as any).process?.uptime?.() ?? 0);
+    });
+    return (
+        <div className="demo-row">
+            <span className="demo-label">Process uptime (s)</span>
+            <span className="demo-value">{val !== undefined ? `${val} s` : '—'}</span>
+        </div>
+    );
+};
+
+const DemoEnvRow: React.FC = () => {
+    const val = useServerData<string>('demo_node_env', async () => {
+        return (globalThis as any).process?.env?.NODE_ENV ?? 'unknown';
+    });
+    return (
+        <div className="demo-row">
+            <span className="demo-label">NODE_ENV</span>
+            <span className="demo-value">{val ?? '—'}</span>
+        </div>
+    );
+};
+
+const DemoPlatformRow: React.FC = () => {
+    const val = useServerData<string>('demo_platform', async () => {
+        return (globalThis as any).process?.platform ?? 'unknown';
+    });
+    return (
+        <div className="demo-row">
+            <span className="demo-label">Platform</span>
+            <span className="demo-value">{val ?? '—'}</span>
+        </div>
+    );
+};
+
+const DataDemoPage: React.FC<{ context: any }> = ({ context }) => {
+    const [fetchCount, setFetchCount] = React.useState(0);
+    const [lastFetchTime, setLastFetchTime] = React.useState<string | null>(null);
+    const [intercepting, setIntercepting] = React.useState(false);
+
+    // On the client: intercept the fetch that useServerData will make and
+    // record how many times it fires — should always be exactly 1 per
+    // navigation, regardless of how many useServerData keys are in the tree.
+    React.useEffect(() => {
+        if (typeof window === 'undefined' || intercepting) return;
+        setIntercepting(true);
+        const original = window.fetch;
+        window.fetch = (async (...args: Parameters<typeof fetch>) => {
+            const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
+            const headers = args[1]?.headers as Record<string, string> | undefined;
+            const accept = headers?.['Accept'] ?? (args[0] instanceof Request ? args[0].headers.get('Accept') : null);
+            if (accept === 'application/json' && url.includes('/data-demo')) {
+                setFetchCount(c => c + 1);
+                setLastFetchTime(new Date().toLocaleTimeString());
+            }
+            return original.apply(window, args);
+        }) as typeof fetch;
+        return () => { window.fetch = original; };
+    }, [intercepting]);
+
+    return (
+        <HadarsContext context={context}>
+            <HadarsHead status={200}>
+                <title>Data fetch demo — hadars</title>
+            </HadarsHead>
+            <div className="layout">
+                <nav className="navbar">
+                    <a className="navbar-brand" href="/" onClick={e => { e.preventDefault(); navigate('/'); }}>hadars</a>
+                    <div className="navbar-links">
+                        <a href="/" onClick={e => { e.preventDefault(); navigate('/'); }}>← Home</a>
+                        <a href="/cache-test" onClick={e => { e.preventDefault(); navigate('/cache-test'); }}>Cache test</a>
+                    </div>
+                </nav>
+                <header className="hero" style={{ paddingBottom: '2rem' }}>
+                    <h1>Batched <code>useServerData</code> demo</h1>
+                    <p className="hero-sub">
+                        This page contains <strong>four independent components</strong>, each calling{' '}
+                        <code>useServerData</code> with a different key. When you arrive via{' '}
+                        client-side navigation (the link from Home), none of these keys exist in
+                        the client cache — a single <code>GET /data-demo</code> with{' '}
+                        <code>Accept: application/json</code> is fired, all four values are returned
+                        in one response, and all four components render simultaneously.
+                    </p>
+                </header>
+                <section className="doc-section">
+                    <h2>Server data (four keys, one request)</h2>
+                    <div className="demo-box">
+                        <React.Suspense fallback={
+                            <div className="demo-row">
+                                <span className="demo-label">Loading…</span>
+                                <span className="demo-value" style={{ color: '#888' }}>
+                                    fetching all four keys in one batched request
+                                </span>
+                            </div>
+                        }>
+                            <DemoHostnameRow />
+                            <DemoUptimeRow />
+                            <DemoEnvRow />
+                            <DemoPlatformRow />
+                        </React.Suspense>
+                    </div>
+                    <div className="demo-box" style={{ marginTop: '1rem' }}>
+                        <div className="demo-row">
+                            <span className="demo-label">
+                                <code>Accept: application/json</code> requests fired
+                            </span>
+                            <span className="demo-value" style={{ color: fetchCount === 1 ? '#4ec9b0' : fetchCount > 1 ? '#f97316' : '#888' }}>
+                                {fetchCount === 0
+                                    ? 'none yet (SSR-seeded — no fetch needed on first load)'
+                                    : fetchCount === 1
+                                        ? `1 (at ${lastFetchTime}) — batching works ✓`
+                                        : `${fetchCount} ← unexpected (should be 1)`}
+                            </span>
+                        </div>
+                        <div className="demo-row">
+                            <span className="demo-label">How to test batching</span>
+                            <span className="demo-value" style={{ color: '#888', fontSize: '0.85rem' }}>
+                                Navigate away (Home) then back here via the nav link. The counter
+                                should increment by exactly 1 each time you return.
+                            </span>
+                        </div>
+                    </div>
+                </section>
+                <footer className="footer"><p>hadars — MIT licence</p></footer>
+            </div>
+        </HadarsContext>
+    );
+};
+
 // ── /cache-test page ──────────────────────────────────────────────────────────
 
 // This page is served with a 30-second SSR cache (see hadars.config.ts).
@@ -294,7 +457,11 @@ const CacheTestPage: React.FC<{ serverTime: string; context: any }> = ({ serverT
             </HadarsHead>
             <div className="layout">
                 <nav className="navbar">
-                    <a className="navbar-brand" href="/">hadars</a>
+                    <a className="navbar-brand" href="/" onClick={e => { e.preventDefault(); navigate('/'); }}>hadars</a>
+                    <div className="navbar-links">
+                        <a href="/" onClick={e => { e.preventDefault(); navigate('/'); }}>← Home</a>
+                        <a href="/data-demo" onClick={e => { e.preventDefault(); navigate('/data-demo'); }}>Data fetch demo</a>
+                    </div>
                 </nav>
                 <header className="hero" style={{ paddingBottom: '2rem' }}>
                     <h1>SSR cache test</h1>
@@ -353,6 +520,8 @@ const Home: HadarsApp<PageProps> = ({ serverTime, bunVersion, location, context,
                         <a href="#concepts">Concepts</a>
                         <a href="#api">API</a>
                         <a href="#demo">Demo</a>
+                        <a href="/cache-test" onClick={e => { e.preventDefault(); navigate('/cache-test'); }}>Cache test</a>
+                        <a href="/data-demo" onClick={e => { e.preventDefault(); navigate('/data-demo'); }}>Data fetch demo</a>
                     </div>
                 </nav>
 
@@ -798,10 +967,24 @@ export const getClientProps = async ( props: Partial<PageProps> ): Promise<Parti
 }
 
 const App = ((props: any) => {
-    if (props.location === '/cache-test') {
+    // Track location in state so client-side navigation (pushState + popstate)
+    // triggers a re-render without a full page reload.
+    const [location, setLocation] = React.useState<string>(props.location);
+
+    React.useEffect(() => {
+        const handler = () =>
+            setLocation(window.location.pathname + window.location.search);
+        window.addEventListener('popstate', handler);
+        return () => window.removeEventListener('popstate', handler);
+    }, []);
+
+    if (location === '/cache-test') {
         return <CacheTestPage serverTime={props.serverTime} context={props.context} />;
     }
-    return <Home {...props} />;
+    if (location === '/data-demo') {
+        return <DataDemoPage context={props.context} />;
+    }
+    return <Home {...props} location={location} />;
 }) as HadarsApp<PageProps>;
 
 export default App;

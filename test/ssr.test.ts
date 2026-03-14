@@ -109,7 +109,9 @@ test('HTTP gzip compression is applied to HTML responses', async () => {
 test('loadModule: LazyPanel is code-split into a separate JS chunk', async () => {
     const staticDir = join(WEBSITE_DIR, '.hadars', 'static');
     const files     = await readdir(staticDir);
-    const jsChunks  = files.filter(f => f.endsWith('.js'));
+    const jsChunks  = files.filter(
+        f => f.endsWith('.js') && f !== 'index.js' && !f.endsWith('.hot-update.js'),
+    );
     expect(jsChunks.length).toBeGreaterThanOrEqual(2);
 });
 
@@ -124,7 +126,11 @@ test('useServerData loader: fn argument is stripped from client bundles', async 
 
     // The same strings must NOT appear in any client chunk.
     const files = await readdir(staticDir);
-    const jsChunks = files.filter(f => f.endsWith('.js'));
+    // Exclude dev-mode artifacts: bare index.js (dev bundle) and HMR hot-update files.
+    // Production chunks always have a content-hash in their filename.
+    const jsChunks = files.filter(
+        f => f.endsWith('.js') && f !== 'index.js' && !f.endsWith('.hot-update.js'),
+    );
     expect(jsChunks.length).toBeGreaterThan(0);
 
     for (const chunk of jsChunks) {
@@ -182,4 +188,28 @@ test('custom fetch handler: /api/data returns weather JSON', async () => {
     expect(res.headers.get('content-type')).toContain('application/json');
     const data = await res.json() as Record<string, unknown>;
     expect(data.current_weather).toBeDefined();
+});
+
+// ── Accept: application/json — client-side navigation data endpoint ──────────
+
+test('Accept: application/json returns JSON serverData map for the current route', async () => {
+    const res = await fetch(BASE_URL + '/', {
+        headers: { 'Accept': 'application/json' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+
+    const json = await res.json() as { serverData: Record<string, unknown> };
+    expect(json.serverData).toBeDefined();
+
+    // server_stats is a useServerData call on the home page
+    const stats = json.serverData.server_stats as { pid: number; mem: number } | undefined;
+    expect(stats).toBeDefined();
+    expect(typeof stats!.pid).toBe('number');
+    expect(stats!.pid).toBeGreaterThan(0);
+
+    // Should not return a full HTML document
+    const raw = JSON.stringify(json);
+    expect(raw).not.toContain('<!doctype');
+    expect(raw).not.toContain('<html');
 });
