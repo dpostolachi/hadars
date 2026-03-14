@@ -44,13 +44,21 @@ jobs:
       # and can see any startup errors in the log.
       - name: Start website server
         run: |
-          node node_modules/.bin/hadars run &
+          # bun is already on PATH (installed by setup-bun above).
+          # Invoke bun directly to avoid the node→bun re-exec dance in cli.ts.
+          bun node_modules/.bin/hadars run > /tmp/hadars-server.log 2>&1 &
           echo "HADARS_SERVER_PID=$!" >> "$GITHUB_ENV"
         working-directory: website
 
       - name: Wait for website server to be ready
         run: |
           for i in $(seq 1 60); do
+            # Bail early if the server process has already died.
+            if ! kill -0 "$HADARS_SERVER_PID" 2>/dev/null; then
+              echo "Server process exited prematurely. Log:"
+              cat /tmp/hadars-server.log
+              exit 1
+            fi
             if curl -sf http://localhost:9090/ -o /dev/null; then
               echo "Server is ready after ${i}s"
               exit 0
@@ -58,7 +66,8 @@ jobs:
             echo "Waiting... (${i}/60)"
             sleep 1
           done
-          echo "Server did not start within 60s"
+          echo "Server did not start within 60s. Log:"
+          cat /tmp/hadars-server.log
           exit 1
 
       - name: Run renderer comparison tests
