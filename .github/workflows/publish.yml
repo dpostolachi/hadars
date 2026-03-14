@@ -33,7 +33,6 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      # Install without running prepare/build scripts — we build explicitly below
       - name: Install dependencies
         run: npm install --ignore-scripts
 
@@ -59,7 +58,6 @@ jobs:
       - name: Build
         run: npm run build:all
 
-      # Commit the updated package.json, create an annotated tag, then push both
       - name: Commit, tag, and push
         run: |
           git add package.json
@@ -68,9 +66,6 @@ jobs:
           git push
           git push --tags
 
-      # dist/ is already built above; skip lifecycle scripts to avoid rebuilding.
-      # RCs are published under the "next" dist-tag so `npm install hadars` keeps
-      # getting the stable release and only `npm install hadars@next` gets the RC.
       - name: Publish to npm
         run: |
           if [ "${{ inputs.bump }}" = "rc" ]; then

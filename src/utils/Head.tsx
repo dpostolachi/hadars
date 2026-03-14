@@ -309,24 +309,50 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const unsuspend: AppUnsuspend | undefined = (globalThis as any).__hadarsUnsuspend;
     if (!unsuspend) return undefined;
 
+    // ── per-pass key tracking ────────────────────────────────────────────────
+    // We keep two sets: keys seen in the current pass and keys seen in the
+    // previous pass.  When a pass throws a promise, the *next* call to
+    // useServerData marks the start of a new pass and rotates the sets.
+    //
+    // A key is unstable when a key that WAS seen in the previous pass is now
+    // absent from the current pass while a new key appears instead.  This means
+    // a component produced a different key string between passes (e.g. Date.now()
+    // in the key).  We fire immediately — there is no need to wait for other
+    // entries to settle first, because a legitimately-new component always extends
+    // seenLastPass (all previous keys remain present in seenThisPass).
+    const _u = unsuspend as any;
+    if (!_u.seenThisPass) _u.seenThisPass = new Set<string>();
+    if (!_u.seenLastPass) _u.seenLastPass = new Set<string>();
+
+    if (_u.newPassStarting) {
+        // This is the first useServerData call after a thrown promise — rotate.
+        _u.seenLastPass = new Set(_u.seenThisPass);
+        _u.seenThisPass.clear();
+        _u.newPassStarting = false;
+    }
+    _u.seenThisPass.add(cacheKey);
+    // ────────────────────────────────────────────────────────────────────────
+
     const existing = unsuspend.cache.get(cacheKey);
 
     if (!existing) {
-        // Detect an unstable key: if this key is brand-new but ALL entries
-        // already in the cache are settled (fulfilled/rejected), the tree
-        // has already completed at least one full resolution pass.  A new key
-        // appearing now means its value changes between render passes — the
-        // render loop would spin indefinitely without this guard.
-        if (unsuspend.cache.size > 0) {
-            const allSettled = [...unsuspend.cache.values()].every(
-                e => e.status === 'fulfilled' || e.status === 'rejected',
+        // Detect an unstable key: a key that was called in the previous pass is
+        // now absent while a new key has appeared.  This means a component
+        // generated a different key between passes — it will loop forever.
+        //
+        // We intentionally do NOT fire when seenLastPass is empty (first pass
+        // ever) or when all previous keys are still present (legitimate
+        // "new component reached for the first time" scenario).
+        if (_u.seenLastPass.size > 0) {
+            const hasVanishedKey = [..._u.seenLastPass as Set<string>].some(
+                (k: string) => !(_u.seenThisPass as Set<string>).has(k),
             );
-            if (allSettled) {
+            if (hasVanishedKey) {
                 throw new Error(
-                    `[hadars] useServerData: key ${JSON.stringify(cacheKey)} first appeared after ` +
-                    `all previously registered keys were already resolved. This means the key is ` +
-                    `not stable across render passes (e.g. it contains Date.now(), Math.random(), ` +
-                    `or a value that changes on every render). Keys must be deterministic.`,
+                    `[hadars] useServerData: key ${JSON.stringify(cacheKey)} appeared in this pass ` +
+                    `but a key that was present in the previous pass is now missing. This means ` +
+                    `the key is not stable across render passes (e.g. it contains Date.now(), ` +
+                    `Math.random(), or a value that changes on every render). Keys must be deterministic.`,
                 );
             }
         }
@@ -351,9 +377,11 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
             reason => { unsuspend.cache.set(cacheKey, { status: 'rejected', reason }); },
         );
         unsuspend.cache.set(cacheKey, { status: 'pending', promise });
+        _u.newPassStarting = true; // next useServerData call opens a new pass
         throw promise; // slim-react will await and retry
     }
     if (existing.status === 'pending') {
+        _u.newPassStarting = true;
         throw existing.promise; // slim-react will await and retry
     }
     if (existing.status === 'rejected') throw existing.reason;

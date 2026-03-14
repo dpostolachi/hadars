@@ -12,40 +12,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
-      # ── 1. Build the hadars library ─────────────────────────────────────────
-
       - name: Install hadars dependencies
-        run: npm install --ignore-scripts
+        run: bun install --ignore-scripts
 
       - name: Build hadars
-        run: npm run build:all
-
-      # ── 2. Build the website (uses hadars as file:..) ───────────────────────
+        run: bun run build:all
 
       - name: Install website dependencies
-        run: npm install --ignore-scripts
+        run: bun install --ignore-scripts
         working-directory: website
 
       - name: Build website
-        run: node node_modules/.bin/hadars build
+        run: bun node_modules/.bin/hadars build
         working-directory: website
 
-      # ── 3. Run SSR integration tests with Bun ───────────────────────────────
-      # Start the website server as a background step so we control its lifecycle
-      # and can see any startup errors in the log.
       - name: Start website server
         run: |
-          # bun is already on PATH (installed by setup-bun above).
-          # Invoke bun directly to avoid the node→bun re-exec dance in cli.ts.
           bun node_modules/.bin/hadars run > /tmp/hadars-server.log 2>&1 &
           echo "HADARS_SERVER_PID=$!" >> "$GITHUB_ENV"
         working-directory: website
@@ -53,7 +38,6 @@ jobs:
       - name: Wait for website server to be ready
         run: |
           for i in $(seq 1 60); do
-            # Bail early if the server process has already died.
             if ! kill -0 "$HADARS_SERVER_PID" 2>/dev/null; then
               echo "Server process exited prematurely. Log:"
               cat /tmp/hadars-server.log
@@ -70,8 +54,8 @@ jobs:
           cat /tmp/hadars-server.log
           exit 1
 
-      - name: Run renderer comparison tests
-        run: bun test test/render-compare.test.tsx
+      - name: Run unit tests
+        run: bun test test/render-compare.test.tsx test/unstable-key.test.ts
 
       - name: Run SSR tests
         run: bun test --timeout 60000 test/ssr.test.ts

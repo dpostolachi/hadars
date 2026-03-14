@@ -3,10 +3,10 @@
  *
  * Two failure modes are exercised:
  *
- *  1. Server-side: a key first appears AFTER all existing cache entries are already
- *     fulfilled/rejected (i.e. the key must be changing between render passes).
- *     → useServerData throws an actionable Error immediately instead of looping
- *       25 times and then surfacing a generic "exceeded maximum retries" message.
+ *  1. Server-side: a key that was seen in the previous render pass is absent from
+ *     the current pass while a new key appears (i.e. the key is changing between
+ *     passes). → useServerData throws an actionable Error immediately instead of
+ *     looping 25 times and surfacing a generic "exceeded maximum retries" message.
  *
  *  2. Client-side (hydration time): SSR serialised data under key A, but the
  *     component asks for key B during hydration (e.g. the key was a module-level
@@ -38,27 +38,58 @@ function endServerRender() {
 
 // ── server-side detection ─────────────────────────────────────────────────────
 
-test('server-side: throws immediately when a new key appears after all existing keys are resolved', () => {
-    startServerRender({
-        // Simulate: a previous render pass already resolved 'stable_key'
-        stable_key: { status: 'fulfilled', value: 42 },
-    });
+test('server-side: throws when key changes between passes (unstable key)', async () => {
+    startServerRender();
 
+    // Pass 0: component renders with 'old_key', it goes pending and throws.
+    let pending0: unknown;
+    try { useServerData('old_key', async () => 'value'); } catch (e) { pending0 = e; }
+    expect(typeof (pending0 as any)?.then).toBe('function'); // threw a Promise, not Error
+
+    // Allow old_key to resolve.
+    await pending0;
+
+    // Pass 1: the SAME component now renders with 'new_key' (e.g. Date.now() changed).
+    // The detection sees that 'old_key' (from seenLastPass) is absent and fires.
     try {
-        // 'brand_new_key' has never been seen before, yet the cache has only
-        // fulfilled entries → indicates an unstable key
-        useServerData('brand_new_key', () => Promise.resolve('x'));
-        throw new Error('expected useServerData to throw');
+        useServerData('new_key', () => Promise.resolve('x'));
+        throw new Error('expected useServerData to throw an Error');
     } catch (err: unknown) {
         expect(err).toBeInstanceOf(Error);
         const msg = (err as Error).message;
         expect(msg).toContain('[hadars] useServerData');
-        expect(msg).toContain('brand_new_key');
-        expect(msg).toContain('not stable across render passes');
+        expect(msg).toContain('new_key');
+        expect(msg).toContain('not stable');
         expect(msg).toContain('Date.now()');
     } finally {
         endServerRender();
     }
+});
+
+test('server-side: does NOT throw for a legitimate new key reached for the first time', async () => {
+    // Scenario: ComponentA uses 'key_a', ComponentB (comes after in the tree)
+    // uses 'key_b'.  Pass 0 throws at key_a before ever reaching key_b.
+    // Pass 1 resolves key_a and reaches key_b for the first time — not unstable.
+    startServerRender();
+
+    // Pass 0: key_a goes pending.
+    let pending0: unknown;
+    try { useServerData('key_a', async () => 1); } catch (e) { pending0 = e; }
+    await pending0; // key_a resolves
+
+    // Pass 1: key_a returns its value, key_b is seen for the first time.
+    const valA = useServerData('key_a', async () => 99); // cache hit
+    expect(valA).toBe(1);
+
+    let caught: unknown = null;
+    try { useServerData('key_b', async () => 2); } catch (e) { caught = e; }
+
+    // Should throw a Promise (pending async fn), not an Error
+    expect(caught).not.toBeNull();
+    expect(typeof (caught as any)?.then).toBe('function');
+    expect(caught).not.toBeInstanceOf(Error);
+
+    endServerRender();
 });
 
 test('server-side: does NOT throw when the cache is empty (first render pass)', async () => {
@@ -79,31 +110,8 @@ test('server-side: does NOT throw when the cache is empty (first render pass)', 
     expect(caught).not.toBeInstanceOf(Error);
 });
 
-test('server-side: does NOT throw when other pending entries exist alongside the new key', async () => {
-    startServerRender({
-        // At least one entry is still pending → we are mid-pass, not post-pass
-        pending_key: { status: 'pending', promise: Promise.resolve() },
-    });
-
-    let caught: unknown = null;
-    try {
-        useServerData('another_new_key', async () => 'data');
-    } catch (e) {
-        caught = e;
-    } finally {
-        endServerRender();
-    }
-
-    // Should throw a Promise, not an Error — the detection guard must not fire here
-    expect(caught).not.toBeNull();
-    expect(typeof (caught as any)?.then).toBe('function');
-    expect(caught).not.toBeInstanceOf(Error);
-});
-
 test('server-side: returns resolved value on subsequent pass once promise is fulfilled', async () => {
     startServerRender();
-
-    const unsuspend = (globalThis as any).__hadarsUnsuspend;
 
     // First encounter — throws the pending promise
     let pendingPromise: unknown;
