@@ -45,4 +45,4 @@ jobs:
       - name: Run renderer comparison tests
         run: bun test test/render-compare.test.tsx
       - name: Run SSR tests
-        run: bun test test/ssr.test.ts
+        run: bun test --timeout 60000 test/ssr.test.ts

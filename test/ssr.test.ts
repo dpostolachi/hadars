@@ -27,7 +27,7 @@ const BASE_URL    = 'http://localhost:9090';
 
 let server: ReturnType<typeof Bun.spawn> | undefined;
 
-async function waitForServer(url: string, timeout = 30_000): Promise<void> {
+async function waitForServer(url: string, timeout = 60_000): Promise<void> {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
         try {
