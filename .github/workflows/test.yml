@@ -40,9 +40,33 @@ jobs:
         working-directory: website
 
       # ── 3. Run SSR integration tests with Bun ───────────────────────────────
-      # The test file starts the website server, waits for it to be ready,
-      # runs all assertions, then kills it on teardown.
+      # Start the website server as a background step so we control its lifecycle
+      # and can see any startup errors in the log.
+      - name: Start website server
+        run: |
+          node node_modules/.bin/hadars run &
+          echo "HADARS_SERVER_PID=$!" >> "$GITHUB_ENV"
+        working-directory: website
+
+      - name: Wait for website server to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:9090/ -o /dev/null; then
+              echo "Server is ready after ${i}s"
+              exit 0
+            fi
+            echo "Waiting... (${i}/60)"
+            sleep 1
+          done
+          echo "Server did not start within 60s"
+          exit 1
+
       - name: Run renderer comparison tests
         run: bun test test/render-compare.test.tsx
+
       - name: Run SSR tests
         run: bun test --timeout 60000 test/ssr.test.ts
+
+      - name: Stop website server
+        if: always()
+        run: kill "$HADARS_SERVER_PID" 2>/dev/null || true

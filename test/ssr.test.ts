@@ -26,7 +26,9 @@ const BASE_URL    = 'http://localhost:9090';
 // ── server lifecycle ──────────────────────────────────────────────────────────
 
 let server: ReturnType<typeof Bun.spawn> | undefined;
+let serverOwnedByTest = false;
 
+/** Poll url until it responds with a non-5xx status or the timeout elapses. */
 async function waitForServer(url: string, timeout = 60_000): Promise<void> {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
@@ -34,22 +36,40 @@ async function waitForServer(url: string, timeout = 60_000): Promise<void> {
             const res = await fetch(url);
             if (res.status < 500) return;
         } catch { /* not up yet */ }
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 500));
     }
     throw new Error(`Server at ${url} did not start within ${timeout}ms`);
 }
 
+/** Returns true when the server is already accepting connections. */
+async function isServerRunning(url: string): Promise<boolean> {
+    try {
+        const res = await fetch(url);
+        return res.status < 500;
+    } catch {
+        return false;
+    }
+}
+
 beforeAll(async () => {
+    // If a server is already listening (e.g. started by the CI workflow as a
+    // separate step), skip spawning so we don't race or duplicate processes.
+    if (await isServerRunning(BASE_URL)) return;
+
+    // Local dev: spawn the server ourselves and wait for it to be ready.
+    serverOwnedByTest = true;
     server = Bun.spawn([BIN, 'run'], {
         cwd: WEBSITE_DIR,
-        stdout: 'pipe',
-        stderr: 'pipe',
+        // Use 'inherit' so any crash message is visible in test output instead
+        // of being silently swallowed by a pipe that nobody is reading.
+        stdout: 'inherit',
+        stderr: 'inherit',
     });
     await waitForServer(BASE_URL);
 });
 
 afterAll(() => {
-    server?.kill();
+    if (serverOwnedByTest) server?.kill();
 });
 
 // ── helpers ───────────────────────────────────────────────────────────────────
