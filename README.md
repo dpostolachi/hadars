@@ -88,6 +88,9 @@ hadars build
 
 # Serve the production build
 hadars run
+
+# Bundle the app into a single self-contained Lambda .mjs file
+hadars export lambda [output.mjs]
 ```
 
 ## Features
@@ -142,6 +145,8 @@ const UserCard = ({ userId }: { userId: string }) => {
 | `proxyCORS` | `boolean` | - | Inject CORS headers on proxied responses |
 | `define` | `Record` | - | Compile-time constants for rspack's DefinePlugin |
 | `swcPlugins` | `array` | - | Extra SWC plugins (e.g. Relay compiler) |
+
+> **Environment variables in client bundles:** `process.env.*` references in client-side code are replaced at build time by rspack's DefinePlugin. They are **not** read at runtime in the browser. Use the `define` option to expose specific values, or keep env var access inside `getInitProps` / `fetch` (server-only code) so they are resolved at request time.
 | `moduleRules` | `array` | - | Extra rspack module rules appended to the built-in set (client + SSR) |
 | `fetch` | `function` | - | Custom fetch handler; return a `Response` to short-circuit SSR |
 | `websocket` | `object` | - | WebSocket handler (Bun only) |
@@ -183,6 +188,78 @@ const config: HadarsOptions = {
 
 export default config;
 ```
+
+## AWS Lambda
+
+hadars apps can be deployed to AWS Lambda backed by API Gateway (HTTP API v2 or REST API v1).
+
+### File-based deployment
+
+Run `hadars build`, then create a Lambda entry file that imports `createLambdaHandler` from `hadars/lambda`:
+
+```ts
+// lambda-entry.ts
+import { createLambdaHandler } from 'hadars/lambda';
+import config from './hadars.config';
+
+export const handler = createLambdaHandler(config);
+```
+
+Deploy the entire project directory (including the `.hadars/` output folder) as your Lambda package. Static assets (JS, CSS, fonts) under `.hadars/static/` are served directly by the Lambda handler — for production, front the function with CloudFront and route static paths to an S3 origin instead.
+
+### Single-file bundle
+
+`hadars export lambda` produces a completely self-contained `.mjs` file that requires no `.hadars/` directory on disk. The SSR module and HTML template are inlined at build time. Static assets must be served separately (S3 + CloudFront).
+
+```bash
+# Outputs lambda.mjs in the current directory
+hadars export lambda
+
+# Custom output path
+hadars export lambda dist/lambda.mjs
+```
+
+The command:
+1. Runs `hadars build`
+2. Generates a temporary entry shim with static imports of the SSR module and `out.html`
+3. Bundles everything into a single ESM `.mjs` with esbuild (`.html` files loaded as text, Node built-ins kept external)
+4. Prints deploy instructions
+
+**Deploy steps:**
+1. Upload the output `.mjs` as your Lambda function code
+2. Set the handler to `index.handler`
+3. Upload `.hadars/static/` assets to S3 and serve via CloudFront
+
+### `createLambdaHandler` API
+
+```ts
+import { createLambdaHandler, type LambdaBundled } from 'hadars/lambda';
+
+// File-based (reads .hadars/ at runtime)
+export const handler = createLambdaHandler(config);
+
+// Bundled (zero I/O — for use with `hadars export lambda` output)
+import * as ssrModule from './.hadars/index.ssr.js';
+import outHtml from './.hadars/static/out.html';
+export const handler = createLambdaHandler(config, { ssrModule, outHtml });
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `options` | `HadarsOptions` | Same config object used for `dev`/`run` |
+| `bundled` | `LambdaBundled` *(optional)* | Pre-loaded SSR module + HTML; eliminates all runtime file I/O |
+
+The handler accepts both **API Gateway HTTP API (v2)** and **REST API (v1)** event formats. Binary responses (images, fonts, pre-compressed assets) are automatically base64-encoded.
+
+### Environment variables on Lambda
+
+`process.env` is available in all server-side code (`getInitProps`, `fetch`, `cache`, etc.) and is resolved at runtime per invocation — Lambda injects env vars into the process before your handler runs.
+
+Client-side code (anything that runs in the browser) is an exception: `process.env.*` references are substituted **at build time** by rspack. They will not reflect Lambda env vars set after the build. Expose runtime values to the client by returning them from `getInitProps` instead, or use the `define` option for values that are known at build time.
+
+### `useServerData` on Lambda
+
+Client-side navigation sends a `GET <url>` request with `Accept: application/json` to refetch server data. The Lambda handler returns a JSON `{ serverData }` map for these requests — the same as the regular server does — so `useServerData` works identically in both deployment modes.
 
 ## slim-react
 

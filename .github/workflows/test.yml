@@ -58,7 +58,7 @@ jobs:
         run: bun test test/render-compare.test.tsx test/unstable-key.test.ts
 
       - name: Run SSR tests
-        run: bun test --timeout 60000 test/ssr.test.ts
+        run: bun test --timeout 60000 test/ssr.test.ts test/lambda.test.ts
 
       - name: Stop website server
         if: always()

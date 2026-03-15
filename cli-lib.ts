@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { mkdir, writeFile, unlink } from 'node:fs/promises'
+import { resolve, join, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
 import * as Hadars from './src/build'
 import type { HadarsOptions } from './src/types/hadars'
 
@@ -42,7 +43,73 @@ async function loadConfig(configPath: string): Promise<HadarsOptions> {
   return (mod && (mod.default ?? mod)) as HadarsOptions
 }
 
-// ── hadars new ────────────────────────────────────────────────────────────────
+// ── hadars export lambda ────────────────────────────────────────────────────
+
+async function bundleLambda(
+    config: HadarsOptions,
+    configPath: string,
+    outputFile: string,
+    cwd: string,
+): Promise<void> {
+    // 1. Ensure the hadars production build is up to date.
+    console.log('Building hadars project...')
+    await Hadars.build({ ...config, mode: 'production' })
+
+    // 2. Resolve paths.
+    const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
+    const outHtml   = resolve(cwd, '.hadars', 'static', 'out.html')
+
+    if (!existsSync(ssrBundle)) {
+        console.error(`SSR bundle not found: ${ssrBundle}`)
+        process.exit(1)
+    }
+    if (!existsSync(outHtml)) {
+        console.error(`HTML template not found: ${outHtml}`)
+        process.exit(1)
+    }
+
+    // 3. Write a temporary entry shim that statically imports the SSR module
+    //    and the HTML template so esbuild can inline both.
+    const shimPath = join(tmpdir(), `hadars-lambda-shim-${Date.now()}.ts`)
+    const shim = [
+        `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
+        `import outHtml from ${JSON.stringify(outHtml)};`,
+        `import { createLambdaHandler } from 'hadars/lambda';`,
+        `import config from ${JSON.stringify(configPath)};`,
+        `export const handler = createLambdaHandler(config as any, { ssrModule: ssrModule as any, outHtml });`,
+    ].join('\n') + '\n'
+    await writeFile(shimPath, shim, 'utf-8')
+
+    // 4. Bundle with esbuild.
+    try {
+        const { build: esbuild } = await import('esbuild')
+        console.log(`Bundling Lambda handler → ${outputFile}`)
+        await esbuild({
+            entryPoints: [shimPath],
+            bundle: true,
+            platform: 'node',
+            format: 'esm',
+            target: ['node20'],
+            outfile: outputFile,
+            sourcemap: false,
+            loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
+            // Node built-ins are available in Lambda — mark them all external.
+            packages: 'external',
+            // Keep React external so there's only one instance across the bundle.
+            external: ['react', 'react-dom', '@rspack/*'],
+        })
+        console.log(`Lambda bundle written to ${outputFile}`)
+        console.log(`\nDeploy instructions:`)
+        console.log(`  1. Upload ${outputFile} as your Lambda function code`)
+        console.log(`  2. Set handler to: index.handler`)
+        console.log(`  3. Upload .hadars/static/ assets to S3 and serve them via CloudFront`)
+        console.log(`     (the Lambda handler does not serve static JS/CSS — route those to S3)`)
+    } finally {
+        await unlink(shimPath).catch(() => {})
+    }
+}
+
+
 
 const TEMPLATES: Record<string, (name: string) => string> = {
   'package.json': (name: string) => JSON.stringify({
@@ -313,7 +380,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run>')
+  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -334,7 +401,7 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
     return
   }
 
-  if (!cmd || !['dev', 'build', 'run'].includes(cmd)) {
+  if (!cmd || !['dev', 'build', 'run', 'export'].includes(cmd)) {
     usage()
     process.exit(1)
   }
@@ -359,6 +426,16 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
             await build(cfg);
             console.log('Build complete')
             process.exit(0)
+        case 'export': {
+            const subCmd = argv[3]
+            if (subCmd !== 'lambda') {
+                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Did you mean: hadars export lambda`)
+                process.exit(1)
+            }
+            const outputFile = resolve(cwd, argv[4] ?? 'lambda.mjs')
+            await bundleLambda(cfg, configPath, outputFile, cwd)
+            process.exit(0)
+        }
         case 'run':
             console.log('Running project...')
             await run(cfg);
