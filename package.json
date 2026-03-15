@@ -19,18 +19,18 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     },
     "./cli": {
       "import": "./dist/cli.js",
       "require": "./dist/cli.js"
     },
     "./lambda": {
+      "types": "./dist/lambda.d.ts",
       "import": "./dist/lambda.js",
-      "require": "./dist/lambda.cjs",
-      "types": "./dist/lambda.d.ts"
+      "require": "./dist/lambda.cjs"
     }
   },
   "scripts": {
@@ -79,12 +79,12 @@
     "@types/react-dom": "^19.2.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "tsup": "^6.7.0",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "esbuild": "^0.19.12",
     "@svgr/webpack": "^8.1.0",
+    "esbuild": "^0.27.4",
     "postcss": "^8.5.8",
     "postcss-load-config": "^6.0.1",
     "postcss-loader": "^8.2.1"

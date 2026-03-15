@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AppContext, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
+import type { AppContext as HadarsAppContext, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
 
 interface InnerContext {
     setTitle: (title: string) => void;
@@ -31,7 +31,7 @@ const AppContext = React.createContext<InnerContext>({
 
 export const AppProviderSSR: React.FC<{
     children: React.ReactNode,
-    context: AppContext,
+    context: HadarsAppContext,
 }> = React.memo( ({ children, context }) => {
 
     const { head } = context;
