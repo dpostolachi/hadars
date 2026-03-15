@@ -61,26 +61,21 @@ jobs:
           aws-region: us-east-1
 
       # ── CDK deploy ───────────────────────────────────────────────────────────
-      - name: Set up Node.js (for CDK)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Install CDK dependencies
-        run: npm ci
+        run: bun install
         working-directory: infra
 
       - name: CDK Bootstrap
         # Bootstrapping is idempotent — safe to run on every deploy.
         # Account ID is resolved from the OIDC-assumed role, not a secret.
-        run: npx cdk bootstrap aws://${{ steps.aws-creds.outputs.aws-account-id }}/us-east-1
+        run: bunx cdk bootstrap aws://${{ steps.aws-creds.outputs.aws-account-id }}/us-east-1
         working-directory: infra
         env:
           CDK_DEFAULT_ACCOUNT: ${{ steps.aws-creds.outputs.aws-account-id }}
           CDK_DEFAULT_REGION: us-east-1
 
       - name: CDK Deploy
-        run: npx cdk deploy --require-approval never
+        run: bunx cdk deploy --require-approval never
         working-directory: infra
         env:
           CDK_DEFAULT_ACCOUNT: ${{ steps.aws-creds.outputs.aws-account-id }}
