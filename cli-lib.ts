@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
-import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import * as Hadars from './src/build'
 import type { HadarsOptions } from './src/types/hadars'
 
@@ -70,11 +70,16 @@ async function bundleLambda(
 
     // 3. Write a temporary entry shim that statically imports the SSR module
     //    and the HTML template so esbuild can inline both.
-    const shimPath = join(tmpdir(), `hadars-lambda-shim-${Date.now()}.ts`)
+    // Write the shim inside cwd so esbuild's module resolution finds local
+    // node_modules when walking up from the shim's directory.
+    // Use the absolute path to lambda.js (sibling of the CLI in dist/) so the
+    // shim doesn't depend on package name resolution at all.
+    const lambdaModule = resolve(dirname(fileURLToPath(import.meta.url)), 'lambda.js')
+    const shimPath = join(cwd, `.hadars-lambda-shim-${Date.now()}.ts`)
     const shim = [
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
-        `import { createLambdaHandler } from 'hadars/lambda';`,
+        `import { createLambdaHandler } from ${JSON.stringify(lambdaModule)};`,
         `import config from ${JSON.stringify(configPath)};`,
         `export const handler = createLambdaHandler(config as any, { ssrModule: ssrModule as any, outHtml });`,
     ].join('\n') + '\n'
