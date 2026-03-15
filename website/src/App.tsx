@@ -128,7 +128,7 @@ const SuspenseQueryRow: React.FC = () => {
     const { data } = useSuspenseQuery({
         queryKey: ['data-fetch'],
         queryFn: async () => {
-            const res = await fetch('http://localhost:9090/api/data');
+            const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=53.5569&longitude=9.9946&current_weather=true');
             return res.json();
         },
         staleTime: Infinity,
