@@ -1,0 +1,87 @@
+name: Deploy Website
+
+on:
+  workflow_dispatch:
+
+# OIDC: allow the job to request a short-lived AWS token.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Build hadars ─────────────────────────────────────────────────────────
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install hadars dependencies
+        run: bun install --ignore-scripts
+
+      - name: Build hadars
+        run: bun run build:all
+
+      # ── Build & bundle the website ───────────────────────────────────────────
+      - name: Install website dependencies
+        run: bun install --ignore-scripts
+        working-directory: website
+
+      - name: Bundle Lambda
+        # hadars export lambda internally runs `hadars build` then esbuild.
+        # Outputs a self-contained ESM bundle with React and the hadars runtime
+        # inlined — no node_modules needed in the Lambda package.
+        run: bun node_modules/.bin/hadars export lambda lambda.mjs
+        working-directory: website
+
+      - name: Prepare Lambda staging directory
+        # CDK Code.fromAsset requires a directory, so copy the single-file
+        # bundle into a dedicated staging dir with no extra files.
+        run: mkdir -p website/lambda-deploy && cp website/lambda.mjs website/lambda-deploy/lambda.mjs
+
+      # ── AWS credentials (OIDC) ───────────────────────────────────────────────
+      # Prerequisites (one-time setup in your AWS account):
+      #   1. Create an OIDC provider for token.actions.githubusercontent.com
+      #   2. Create an IAM role with the following trust policy condition:
+      #        "token.actions.githubusercontent.com:sub": "repo:<owner>/<repo>:*"
+      #   3. Attach AdministratorAccess (or a scoped policy) to that role.
+      #   4. Add the role ARN as the AWS_ROLE_ARN secret in this repository.
+      #
+      # Required secrets:
+      #   AWS_ROLE_ARN  — IAM role ARN to assume via OIDC
+      - name: Configure AWS credentials
+        id: aws-creds
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # ── CDK deploy ───────────────────────────────────────────────────────────
+      - name: Set up Node.js (for CDK)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install CDK dependencies
+        run: npm ci
+        working-directory: infra
+
+      - name: CDK Bootstrap
+        # Bootstrapping is idempotent — safe to run on every deploy.
+        # Account ID is resolved from the OIDC-assumed role, not a secret.
+        run: npx cdk bootstrap aws://${{ steps.aws-creds.outputs.aws-account-id }}/us-east-1
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ steps.aws-creds.outputs.aws-account-id }}
+          CDK_DEFAULT_REGION: us-east-1
+
+      - name: CDK Deploy
+        run: npx cdk deploy --require-approval never
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ steps.aws-creds.outputs.aws-account-id }}
+          CDK_DEFAULT_REGION: us-east-1

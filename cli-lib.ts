@@ -93,16 +93,19 @@ async function bundleLambda(
             outfile: outputFile,
             sourcemap: false,
             loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
-            // Node built-ins are available in Lambda — mark them all external.
-            packages: 'external',
-            // Keep React external so there's only one instance across the bundle.
-            external: ['react', 'react-dom', '@rspack/*'],
+            // @rspack/* contains native binaries and is build-time only —
+            // it is never imported at Lambda runtime, so mark it external.
+            // Everything else (React, hadars runtime, etc.) is bundled in to
+            // produce a truly self-contained single-file deployment.
+            external: ['@rspack/*'],
         })
         console.log(`Lambda bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
-        console.log(`  1. Upload ${outputFile} as your Lambda function code`)
-        console.log(`  2. Set handler to: index.handler`)
-        console.log(`  3. Upload .hadars/static/ assets to S3 and serve them via CloudFront`)
+        console.log(`  1. Create a staging directory with just this file:`)
+        console.log(`       mkdir -p lambda-deploy && cp ${outputFile} lambda-deploy/lambda.mjs`)
+        console.log(`  2. Upload lambda-deploy/ as your Lambda function code`)
+        console.log(`  3. Set handler to: lambda.handler  (runtime: Node.js 20.x)`)
+        console.log(`  4. Upload .hadars/static/ assets to S3 and serve via CloudFront`)
         console.log(`     (the Lambda handler does not serve static JS/CSS — route those to S3)`)
     } finally {
         await unlink(shimPath).catch(() => {})
