@@ -32,7 +32,7 @@ export class WebsiteStack extends cdk.Stack {
             code: lambda.Code.fromAsset(
                 path.join(__dirname, '../../website/lambda-deploy'),
             ),
-            memorySize: 512,
+            memorySize: 1769, // 1769 MB = 1 full vCPU on Lambda
             timeout: cdk.Duration.seconds(30),
             description: 'hadars SSR handler',
         });
