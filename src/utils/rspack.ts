@@ -278,20 +278,23 @@ const buildCompilerConfig = (
                     compilation.hooks.childCompiler.tap(
                         'HadarsWorkerChunkLoading',
                         (childCompiler: any) => {
-                            // Skip internal rspack child compilers that already have an
-                            // explicit library type (e.g. HtmlRspackPlugin template
-                            // compilations use library: { type: 'module', name: '' }).
-                            // Forcing outputModule:false on those triggers the rspack
-                            // ModuleLibraryPlugin "name can't be empty" panic in production.
-                            const libType = childCompiler.options?.output?.library?.type;
-                            if (libType === 'module' || libType === 'commonjs' || libType === 'commonjs2') {
-                                return;
-                            }
+                            // Only target child compilers that have no explicit library
+                            // configuration — those are the ones rspack creates for
+                            // `new Worker(new URL(...))` entries.  Internal rspack child
+                            // compilers (HtmlRspackPlugin, chunk-splitting, etc.) carry a
+                            // library config (often { type: 'module', name: '' }) and
+                            // must be left untouched: forcing outputModule:false on them
+                            // while library.type === 'module' triggers the rspack
+                            // ModuleLibraryPlugin "name can't be empty" panic.
+                            // NOTE: we intentionally do NOT set experiments.outputModule
+                            // here — that field lives on internal compilations and
+                            // modifying it is what causes the panic. Setting
+                            // chunkLoading alone is sufficient to fix classic workers.
+                            const lib = childCompiler.options?.output?.library;
+                            const libType = typeof lib === 'string' ? lib : lib?.type;
+                            if (libType) return;
                             if (childCompiler.options?.output) {
                                 childCompiler.options.output.chunkLoading = 'import-scripts';
-                            }
-                            if (childCompiler.options?.experiments) {
-                                childCompiler.options.experiments.outputModule = false;
                             }
                         },
                     );
