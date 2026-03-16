@@ -342,6 +342,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         define: options.define,
         moduleRules: options.moduleRules,
         plugins: options.plugins,
+        postcssPlugins: options.postcssPlugins,
         reactMode: options.reactMode,
         htmlTemplate: resolvedHtmlTemplate,
     });
@@ -598,6 +599,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             define: options.define,
             moduleRules: options.moduleRules,
             plugins: options.plugins,
+            postcssPlugins: options.postcssPlugins,
             optimization: options.optimization,
             reactMode: options.reactMode,
             htmlTemplate: resolvedHtmlTemplate,
@@ -617,6 +619,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             define: options.define,
             moduleRules: options.moduleRules,
             plugins: options.plugins,
+            postcssPlugins: options.postcssPlugins,
         }),
     ]);
     await fs.rm(tmpFilePath);

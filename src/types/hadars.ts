@@ -91,6 +91,19 @@ export interface HadarsOptions {
      */
     optimization?: Record<string, unknown>;
     /**
+     * PostCSS plugins to pass to `postcss-loader`.
+     *
+     * When set, replaces the default `builtin:lightningcss-loader` with `postcss-loader`
+     * configured with these plugins, allowing full PostCSS transforms (e.g. Tailwind CSS v4).
+     *
+     * @example
+     * ```ts
+     * import tailwindcss from '@tailwindcss/postcss';
+     * export default { postcssPlugins: [tailwindcss()] } satisfies HadarsOptions;
+     * ```
+     */
+    postcssPlugins?: any[];
+    /**
      * Path to a custom HTML template file (relative to the project root).
      * Replaces the built-in minimal template used to generate the HTML shell.
      *

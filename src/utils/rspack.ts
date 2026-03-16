@@ -40,7 +40,7 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
             rules: [
                 {
                     test: /\.css$/,
-                    use: ["postcss-loader"],
+                    use: [{ loader: "builtin:lightningcss-loader" }],
                     type: "css",
                 },
                 {
@@ -138,6 +138,9 @@ interface EntryOptions {
     moduleRules?: Record<string, any>[];
     // additional rspack/webpack-compatible plugins (applied after built-in plugins)
     plugins?: Array<{ apply(compiler: any): void }>;
+    // PostCSS plugins to pass to postcss-loader (replaces the default builtin:lightningcss-loader).
+    // Use this when you need PostCSS transforms such as Tailwind CSS v4 (@tailwindcss/postcss).
+    postcssPlugins?: any[];
     // force React runtime mode independently of build mode (client only)
     reactMode?: 'development' | 'production';
 }
@@ -204,6 +207,21 @@ const buildCompilerConfig = (
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // If postcssPlugins are provided, swap the default lightningcss-loader CSS rule
+    // for postcss-loader with the given plugins.
+    if (opts.postcssPlugins && opts.postcssPlugins.length > 0) {
+        const rules: any[] = localConfig.module?.rules ?? [];
+        for (const rule of rules) {
+            if (rule?.test instanceof RegExp && rule.test.source === '\\.css$') {
+                rule.use = [{
+                    loader: 'postcss-loader',
+                    options: { postcssOptions: { plugins: opts.postcssPlugins } },
+                }];
+                break;
             }
         }
     }
