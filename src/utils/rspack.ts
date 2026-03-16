@@ -278,6 +278,15 @@ const buildCompilerConfig = (
                     compilation.hooks.childCompiler.tap(
                         'HadarsWorkerChunkLoading',
                         (childCompiler: any) => {
+                            // Skip internal rspack child compilers that already have an
+                            // explicit library type (e.g. HtmlRspackPlugin template
+                            // compilations use library: { type: 'module', name: '' }).
+                            // Forcing outputModule:false on those triggers the rspack
+                            // ModuleLibraryPlugin "name can't be empty" panic in production.
+                            const libType = childCompiler.options?.output?.library?.type;
+                            if (libType === 'module' || libType === 'commonjs' || libType === 'commonjs2') {
+                                return;
+                            }
                             if (childCompiler.options?.output) {
                                 childCompiler.options.output.chunkLoading = 'import-scripts';
                             }
