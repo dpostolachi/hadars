@@ -267,41 +267,6 @@ const buildCompilerConfig = (
 
     const extraPlugins: any[] = [];
 
-    // Built-in plugin: force classic chunk loading for web worker sub-compilations.
-    // Without this, worker child compilers inherit the parent's outputModule:true context
-    // and may emit ES module chunks that cannot be loaded inside classic workers
-    // via importScripts. Applied to client builds only — SSR doesn't spawn workers.
-    if (!isServerBuild) {
-        extraPlugins.push({
-            apply(compiler: any) {
-                compiler.hooks.compilation.tap('HadarsWorkerChunkLoading', (compilation: any) => {
-                    compilation.hooks.childCompiler.tap(
-                        'HadarsWorkerChunkLoading',
-                        (childCompiler: any) => {
-                            // Only target child compilers that have no explicit library
-                            // configuration — those are the ones rspack creates for
-                            // `new Worker(new URL(...))` entries.  Internal rspack child
-                            // compilers (HtmlRspackPlugin, chunk-splitting, etc.) carry a
-                            // library config (often { type: 'module', name: '' }) and
-                            // must be left untouched: forcing outputModule:false on them
-                            // while library.type === 'module' triggers the rspack
-                            // ModuleLibraryPlugin "name can't be empty" panic.
-                            // NOTE: we intentionally do NOT set experiments.outputModule
-                            // here — that field lives on internal compilations and
-                            // modifying it is what causes the panic. Setting
-                            // chunkLoading alone is sufficient to fix classic workers.
-                            const lib = childCompiler.options?.output?.library;
-                            const libType = typeof lib === 'string' ? lib : lib?.type;
-                            if (libType) return;
-                            if (childCompiler.options?.output) {
-                                childCompiler.options.output.chunkLoading = 'import-scripts';
-                            }
-                        },
-                    );
-                });
-            },
-        });
-    }
     const defineValues: Record<string, string> = { ...(opts.define ?? {}) };
     // When reactMode overrides the React runtime we must also set process.env.NODE_ENV
     // so React picks its dev/prod bundle, independently of the rspack build mode.

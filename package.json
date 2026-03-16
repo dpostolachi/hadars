@@ -67,7 +67,7 @@
     }
   },
   "optionalDependencies": {
-    "@rspack/core": "1.4.9",
+    "@rspack/core": "1.7.8",
     "@rspack/dev-server": "^1.2.1",
     "@rspack/plugin-react-refresh": "^1.6.1",
     "@swc/core": "^1.15.18",
