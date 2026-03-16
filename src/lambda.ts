@@ -24,7 +24,7 @@ import { createProxyHandler } from './utils/proxyHandler';
 import { parseRequest } from './utils/request';
 import { tryServeFile } from './utils/staticFile';
 import { getReactResponse } from './utils/response';
-import { buildSsrResponse, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
+import { buildSsrResponse, buildSsrHtml, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
 import type { HadarsOptions, HadarsEntryModule, HadarsProps } from './types/hadars';
 
 // ── Lambda event / response types ────────────────────────────────────────────
@@ -189,6 +189,21 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
         ? makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml))
         : makePrecontentHtmlGetter(fs.readFile(pathMod.join(cwd, StaticPath, 'out.html'), 'utf-8'));
 
+    // Hoist the SSR module reference so it is resolved once, not on every
+    // request. In bundled mode the module is already in-memory; in file-based
+    // mode we lazily import it and cache the promise so Node's module cache is
+    // only consulted once.
+    let ssrModulePromise: Promise<HadarsEntryModule<any>> | null = null;
+    const getSsrModule = (): Promise<HadarsEntryModule<any>> => {
+        if (bundled) return Promise.resolve(bundled.ssrModule);
+        if (!ssrModulePromise) {
+            ssrModulePromise = import(
+                pathToFileURL(pathMod.resolve(cwd, HadarsFolder, SSR_FILENAME)).href
+            ) as Promise<HadarsEntryModule<any>>;
+        }
+        return ssrModulePromise;
+    };
+
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
 
@@ -227,9 +242,7 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
                 getInitProps,
                 getAfterRenderProps,
                 getFinalProps,
-            } = bundled
-                ? bundled.ssrModule
-                : (await import(pathToFileURL(pathMod.resolve(cwd, HadarsFolder, SSR_FILENAME)).href)) as HadarsEntryModule<any>;
+            } = await getSsrModule();
 
             const { bodyHtml, clientProps, status, headHtml } = await getReactResponse(request, {
                 document: {
@@ -249,7 +262,13 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
                 });
             }
 
-            return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
+            // Build the HTML string directly — avoids creating a ReadableStream
+            // that would immediately be drained by the Lambda response serialiser.
+            const html = await buildSsrHtml(bodyHtml, clientProps, headHtml, getPrecontentHtml);
+            return new Response(html, {
+                status,
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             return new Response('Internal Server Error', { status: 500 });

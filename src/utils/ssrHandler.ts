@@ -37,6 +37,27 @@ export async function buildSsrResponse(
 }
 
 /**
+ * Like {@link buildSsrResponse} but returns the complete HTML string directly
+ * instead of wrapping it in a streaming Response. Use this in environments
+ * where streaming is not beneficial (e.g. AWS Lambda) to avoid the
+ * ReadableStream allocation and the subsequent `.text()` drain overhead.
+ */
+export async function buildSsrHtml(
+    bodyHtml: string,
+    clientProps: Record<string, unknown>,
+    headHtml: string,
+    getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
+): Promise<string> {
+    const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
+    const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
+    return (
+        precontentHtml +
+        `<div id="app">${bodyHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>` +
+        postContent
+    );
+}
+
+/**
  * Returns a function that parses `out.html` into pre-head, post-head, and
  * post-content segments and caches the result. Call the returned function with
  * the per-request headHtml to produce the full HTML prefix and suffix.
