@@ -136,6 +136,8 @@ interface EntryOptions {
     optimization?: Record<string, unknown>;
     // additional module rules appended after the built-in rules
     moduleRules?: Record<string, any>[];
+    // additional rspack/webpack-compatible plugins (applied after built-in plugins)
+    plugins?: Array<{ apply(compiler: any): void }>;
     // force React runtime mode independently of build mode (client only)
     reactMode?: 'development' | 'production';
 }
@@ -264,6 +266,30 @@ const buildCompilerConfig = (
     }
 
     const extraPlugins: any[] = [];
+
+    // Built-in plugin: force classic chunk loading for web worker sub-compilations.
+    // Without this, worker child compilers inherit the parent's outputModule:true context
+    // and may emit ES module chunks that cannot be loaded inside classic workers
+    // via importScripts. Applied to client builds only — SSR doesn't spawn workers.
+    if (!isServerBuild) {
+        extraPlugins.push({
+            apply(compiler: any) {
+                compiler.hooks.compilation.tap('HadarsWorkerChunkLoading', (compilation: any) => {
+                    compilation.hooks.childCompiler.tap(
+                        'HadarsWorkerChunkLoading',
+                        (childCompiler: any) => {
+                            if (childCompiler.options?.output) {
+                                childCompiler.options.output.chunkLoading = 'import-scripts';
+                            }
+                            if (childCompiler.options?.experiments) {
+                                childCompiler.options.experiments.outputModule = false;
+                            }
+                        },
+                    );
+                });
+            },
+        });
+    }
     const defineValues: Record<string, string> = { ...(opts.define ?? {}) };
     // When reactMode overrides the React runtime we must also set process.env.NODE_ENV
     // so React picks its dev/prod bundle, independently of the rspack build mode.
@@ -352,6 +378,7 @@ const buildCompilerConfig = (
             isDev && !isServerBuild && new ReactRefreshPlugin(),
             includeHotPlugin && isDev && !isServerBuild && new rspack.HotModuleReplacementPlugin(),
             ...extraPlugins,
+            ...(opts.plugins ?? []),
         ],
         ...localConfig,
         // Merge base resolve (modules, tsConfig, extensions) with per-build resolve

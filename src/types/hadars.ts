@@ -143,6 +143,16 @@ export interface HadarsOptions {
      */
     moduleRules?: Record<string, any>[];
     /**
+     * Additional rspack/webpack-compatible plugins applied to both the client
+     * and SSR bundles. Any object that implements the `apply(compiler)` method
+     * (the standard webpack/rspack plugin interface) is accepted.
+     *
+     * @example
+     * import { SubresourceIntegrityPlugin } from 'webpack-subresource-integrity';
+     * plugins: [new SubresourceIntegrityPlugin()]
+     */
+    plugins?: Array<{ apply(compiler: any): void }>;
+    /**
      * SSR response cache for `run()` mode. Has no effect in `dev()` mode.
      *
      * Receives the incoming request and should return `{ key, ttl? }` to cache
