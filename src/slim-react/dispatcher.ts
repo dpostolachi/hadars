@@ -37,8 +37,11 @@ import {
 import * as ReactNS from "react";
 
 // React 19 exposes its shared internals under this key.
+// Bracket notation prevents rspack from treating this as a named-export access
+// on the "react" module (which would produce an ESModulesLinkingWarning).
+const _reactInternalsKey = "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE";
 const _internals: { H: object | null } | undefined =
-  (ReactNS as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  (ReactNS as any)[_reactInternalsKey];
 
 // The dispatcher object we install. We keep a stable reference so the same
 // object is reused across every component call.
