@@ -24,10 +24,11 @@ const ATTR: Record<string, string> = {
     className: 'class', htmlFor: 'for', httpEquiv: 'http-equiv',
     charSet: 'charset', crossOrigin: 'crossorigin', noModule: 'nomodule',
     referrerPolicy: 'referrerpolicy', fetchPriority: 'fetchpriority',
+    hrefLang: 'hreflang',
 };
 
-function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, selfClose = false): string {
-    let attrs = ` id="${escAttr(id)}"`;
+function renderHeadTag(tag: string, opts: Record<string, unknown>, selfClose = false): string {
+    let attrs = '';
     let inner = '';
     for (const [k, v] of Object.entries(opts)) {
         if (k === 'key' || k === 'children') continue;
@@ -41,14 +42,14 @@ function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, s
 
 const getHeadHtml = (seoData: AppHead): string => {
     let html = `<title>${escText(seoData.title ?? '')}</title>`;
-    for (const [id, opts] of Object.entries(seoData.meta))
-        html += renderHeadTag('meta', id, opts as Record<string, unknown>, true);
-    for (const [id, opts] of Object.entries(seoData.link))
-        html += renderHeadTag('link', id, opts as Record<string, unknown>, true);
-    for (const [id, opts] of Object.entries(seoData.style))
-        html += renderHeadTag('style', id, opts as Record<string, unknown>);
-    for (const [id, opts] of Object.entries(seoData.script))
-        html += renderHeadTag('script', id, opts as Record<string, unknown>);
+    for (const opts of Object.values(seoData.meta))
+        html += renderHeadTag('meta', opts as Record<string, unknown>, true);
+    for (const opts of Object.values(seoData.link))
+        html += renderHeadTag('link', opts as Record<string, unknown>, true);
+    for (const opts of Object.values(seoData.style))
+        html += renderHeadTag('style', opts as Record<string, unknown>);
+    for (const opts of Object.values(seoData.script))
+        html += renderHeadTag('script', opts as Record<string, unknown>);
     return html;
 };
 

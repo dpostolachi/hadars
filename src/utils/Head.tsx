@@ -3,11 +3,42 @@ import type { AppContext as HadarsAppContext, AppUnsuspend, LinkProps, MetaProps
 
 interface InnerContext {
     setTitle: (title: string) => void;
-    addMeta: (id: string, props: MetaProps) => void;
-    addLink: (id: string, props: LinkProps) => void;
-    addStyle: (id: string, props: StyleProps) => void;
-    addScript: (id: string, props: ScriptProps) => void;
+    addMeta: (props: MetaProps) => void;
+    addLink: (props: LinkProps) => void;
+    addStyle: (props: StyleProps) => void;
+    addScript: (props: ScriptProps) => void;
     setStatus: (status: number) => void;
+}
+
+// Derive a stable dedup key from an element's natural identifying attributes.
+function deriveKey(tag: string, props: Record<string, any>): string {
+    switch (tag) {
+        case 'meta': {
+            if (props.name) return `meta:name:${props.name}`;
+            if (props.property) return `meta:property:${props.property}`;
+            const httpEquiv = props.httpEquiv ?? props['http-equiv'];
+            if (httpEquiv) return `meta:http-equiv:${httpEquiv}`;
+            if ('charSet' in props || 'charset' in props) return 'meta:charset';
+            return `meta:${JSON.stringify(props)}`;
+        }
+        case 'link': {
+            const rel = props.rel ?? '';
+            const href = props.href ?? '';
+            const as_ = props.as ? `:as:${props.as}` : '';
+            return href ? `link:${rel}:${href}${as_}` : `link:${rel}${as_}`;
+        }
+        case 'script': {
+            if (props.src) return `script:src:${props.src}`;
+            if (props['data-id']) return `script:id:${props['data-id']}`;
+            return `script:${JSON.stringify(props)}`;
+        }
+        case 'style': {
+            if (props['data-id']) return `style:id:${props['data-id']}`;
+            return `style:${JSON.stringify(props)}`;
+        }
+        default:
+            return `${tag}:${JSON.stringify(props)}`;
+    }
 }
 
 const AppContext = React.createContext<InnerContext>({
@@ -40,17 +71,17 @@ export const AppProviderSSR: React.FC<{
     const setTitle = React.useCallback((title: string) => {
         head.title = title;
     }, [head]);
-    const addMeta = React.useCallback((id: string, props: MetaProps) => {
-        head.meta[id] = props;
+    const addMeta = React.useCallback((props: MetaProps) => {
+        head.meta[deriveKey('meta', props as any)] = props;
     }, [head]);
-    const addLink = React.useCallback((id: string, props: LinkProps) => {
-        head.link[id] = props;
+    const addLink = React.useCallback((props: LinkProps) => {
+        head.link[deriveKey('link', props as any)] = props;
     }, [head]);
-    const addStyle = React.useCallback((id: string, props: StyleProps) => {
-        head.style[id] = props;
+    const addStyle = React.useCallback((props: StyleProps) => {
+        head.style[deriveKey('style', props as any)] = props;
     }, [head]);
-    const addScript = React.useCallback((id: string, props: ScriptProps) => {
-        head.script[id] = props;
+    const addScript = React.useCallback((props: ScriptProps) => {
+        head.script[deriveKey('script', props as any)] = props;
     }, [head]);
 
     const setStatus = React.useCallback((status: number) => {
@@ -80,74 +111,53 @@ export const AppProviderCSR: React.FC<{
         document.title = title;
     }, []);
 
-    const addMeta = React.useCallback((id: string, props: MetaProps) => {
-        let meta = document.querySelector(`#${id}`) as HTMLMetaElement | null;
-        if (!meta) {
-            meta = document.createElement('meta');
-            meta.setAttribute('id', id);
-            document.head.appendChild(meta);
+    const addMeta = React.useCallback((props: MetaProps) => {
+        const p = props as Record<string, any>;
+        let meta: HTMLMetaElement | null = null;
+        if (p.name) meta = document.querySelector(`meta[name="${CSS.escape(p.name)}"]`);
+        else if (p.property) meta = document.querySelector(`meta[property="${CSS.escape(p.property)}"]`);
+        else if (p.httpEquiv ?? p['http-equiv']) meta = document.querySelector(`meta[http-equiv="${CSS.escape(p.httpEquiv ?? p['http-equiv'])}"]`);
+        else if ('charSet' in p || 'charset' in p) meta = document.querySelector('meta[charset]');
+        if (!meta) { meta = document.createElement('meta'); document.head.appendChild(meta); }
+        for (const [k, v] of Object.entries(p)) {
+            if (v != null && v !== false) meta.setAttribute(k === 'charSet' ? 'charset' : k === 'httpEquiv' ? 'http-equiv' : k, String(v));
         }
-        Object.keys(props).forEach(key => {
-            const value = (props)[key as keyof MetaProps];
-            if (value) {
-                meta!.setAttribute(key, value);
-            }
-        });
     }, []);
 
-    const addLink = React.useCallback((id: string, props: LinkProps) => {
-        let link = document.querySelector(`#${id}`) as HTMLLinkElement | null;
-        if (!link) {
-            link = document.createElement('link');
-            link.setAttribute('id', id);
-            document.head.appendChild(link);
+    const addLink = React.useCallback((props: LinkProps) => {
+        const p = props as Record<string, any>;
+        let link: HTMLLinkElement | null = null;
+        const asSel = p.as ? `[as="${CSS.escape(p.as)}"]` : '';
+        if (p.rel && p.href) link = document.querySelector(`link[rel="${CSS.escape(p.rel)}"][href="${CSS.escape(p.href)}"]${asSel}`);
+        else if (p.rel) link = document.querySelector(`link[rel="${CSS.escape(p.rel)}"]${asSel}`);
+        if (!link) { link = document.createElement('link'); document.head.appendChild(link); }
+        const LINK_ATTR: Record<string, string> = { crossOrigin: 'crossorigin', referrerPolicy: 'referrerpolicy', fetchPriority: 'fetchpriority', hrefLang: 'hreflang' };
+        for (const [k, v] of Object.entries(p)) {
+            if (v != null && v !== false) link.setAttribute(LINK_ATTR[k] ?? k, String(v));
         }
-        Object.keys(props).forEach(key => {
-            const value = (props)[key as keyof LinkProps];
-            if (value) {
-                link!.setAttribute(key, value);
-            }
-        });
     }, []);
 
-    const addStyle = React.useCallback((id: string, props: StyleProps) => {
-        let style = document.getElementById(id) as HTMLStyleElement | null;
-        if (!style) {
-            style = document.createElement('style');
-            style.setAttribute('id', id);
-            document.head.appendChild(style);
+    const addStyle = React.useCallback((props: StyleProps) => {
+        const p = props as Record<string, any>;
+        let style: HTMLStyleElement | null = null;
+        if (p['data-id']) style = document.querySelector(`style[data-id="${CSS.escape(p['data-id'])}"]`);
+        if (!style) { style = document.createElement('style'); document.head.appendChild(style); }
+        for (const [k, v] of Object.entries(p)) {
+            if (k === 'dangerouslySetInnerHTML') { style.innerHTML = (v as any).__html ?? ''; continue; }
+            if (v != null && v !== false) style.setAttribute(k, String(v));
         }
-        Object.keys(props).forEach(key => {
-            // handle dangerouslySetInnerHTML
-            if (key === 'dangerouslySetInnerHTML' && (props as any)[key] && (props as any)[key].__html) {
-                style!.innerHTML = (props as any)[key].__html;
-                return;
-            }
-            const value = (props)[key as keyof StyleProps];
-            if (value) {
-                (style as any)[key] = value;
-            }
-        });
     }, []);
 
-    const addScript = React.useCallback((id: string, props: ScriptProps) => {
-        let script = document.getElementById(id) as HTMLScriptElement | null;
-        if (!script) {
-            script = document.createElement('script');
-            script.setAttribute('id', id);
-            document.body.appendChild(script);
+    const addScript = React.useCallback((props: ScriptProps) => {
+        const p = props as Record<string, any>;
+        let script: HTMLScriptElement | null = null;
+        if (p.src) script = document.querySelector(`script[src="${CSS.escape(p.src)}"]`);
+        else if (p['data-id']) script = document.querySelector(`script[data-id="${CSS.escape(p['data-id'])}"]`);
+        if (!script) { script = document.createElement('script'); document.body.appendChild(script); }
+        for (const [k, v] of Object.entries(p)) {
+            if (k === 'dangerouslySetInnerHTML') { script.innerHTML = (v as any).__html ?? ''; continue; }
+            if (v != null && v !== false) script.setAttribute(k, String(v));
         }
-        Object.keys(props).forEach(key => {
-            // handle dangerouslySetInnerHTML
-            if (key === 'dangerouslySetInnerHTML' && (props as any)[key] && (props as any)[key].__html) {
-                script!.innerHTML = (props as any)[key].__html;
-                return;
-            }
-            const value = (props)[key as keyof ScriptProps];
-            if (value) {
-                (script as any)[key] = value;
-            }
-        });
     }, []);
 
     const contextValue: InnerContext = React.useMemo(() => ({
@@ -389,10 +399,6 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
 }
 
 
-const genRandomId = () => {
-    return 'head-' + Math.random().toString(36).substr(2, 9);
-}
-
 export const Head: React.FC<{
     children?: React.ReactNode;
     status?: number;
@@ -418,7 +424,6 @@ export const Head: React.FC<{
         // React 19 types element.props as unknown; cast here since we
         // inspect props dynamically based on the element type below.
         const childProps = child.props as Record<string, any>;
-        const id = childProps['id'] || genRandomId();
 
         switch ( childType ) {
             case 'title': {
@@ -426,19 +431,25 @@ export const Head: React.FC<{
                 return;
             }
             case 'meta': {
-                addMeta(id.toString(), childProps as MetaProps);
+                addMeta(childProps as MetaProps);
                 return;
             }
             case 'link': {
-                addLink(id.toString(), childProps as LinkProps);
+                addLink(childProps as LinkProps);
                 return;
             }
             case 'script': {
-                addScript(id.toString(), childProps as ScriptProps);
+                if (!childProps['src'] && !childProps['data-id']) {
+                    console.warn('[hadars] <Head>: inline <script> is missing a "data-id" prop — deduplication is not guaranteed across re-renders. Add data-id="unique-key" to ensure it.');
+                }
+                addScript(childProps as ScriptProps);
                 return;
             }
             case 'style': {
-                addStyle(id.toString(), childProps as StyleProps);
+                if (!childProps['data-id']) {
+                    console.warn('[hadars] <Head>: inline <style> is missing a "data-id" prop — deduplication is not guaranteed across re-renders. Add data-id="unique-key" to ensure it.');
+                }
+                addStyle(childProps as StyleProps);
                 return;
             }
             default: {
