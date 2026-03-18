@@ -119,7 +119,11 @@ async function responseToLambda(response: Response): Promise<LambdaResponse> {
     response.headers.forEach((v, k) => { headers[k] = v; });
 
     const contentType = response.headers.get('Content-Type') ?? '';
-    if (TEXT_RE.test(contentType)) {
+    // A Content-Encoding header means the body is already compressed (binary).
+    // Calling .text() on gzip/br/deflate bytes would corrupt the data, so always
+    // treat compressed responses as binary regardless of Content-Type.
+    const encoding = response.headers.get('Content-Encoding') ?? '';
+    if (!encoding && TEXT_RE.test(contentType)) {
         return {
             statusCode: response.status,
             headers,
@@ -128,7 +132,7 @@ async function responseToLambda(response: Response): Promise<LambdaResponse> {
         };
     }
 
-    // Binary response (images, fonts, pre-compressed assets, etc.)
+    // Binary response (images, fonts, pre-compressed assets, gzip cache hits, etc.)
     return {
         statusCode: response.status,
         headers,
@@ -215,24 +219,24 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
         const proxied = await handleProxy(request);
         if (proxied) return proxied;
 
-        const urlPath = new URL(request.url).pathname;
+        // parseRequest already extracted pathname — no need to re-parse the URL.
+        const urlPath = request.pathname;
 
         if (!bundled) {
             // File-based deployment: serve static assets from disk.
-            const staticRes = await tryServeFile(pathMod.join(cwd, StaticPath, urlPath));
-            if (staticRes) return staticRes;
-
+            // Run the three candidate lookups in parallel to avoid sequential stat() syscalls.
             const projectStaticPath = pathMod.resolve(cwd, 'static');
-            const projectRes = await tryServeFile(pathMod.join(projectStaticPath, urlPath));
-            if (projectRes) return projectRes;
-
             const routeClean = urlPath.replace(/(^\/|\/$)/g, '');
-            if (routeClean) {
-                const routeRes = await tryServeFile(
-                    pathMod.join(cwd, StaticPath, routeClean, 'index.html'),
-                );
-                if (routeRes) return routeRes;
-            }
+            const [staticRes, projectRes, routeRes] = await Promise.all([
+                tryServeFile(pathMod.join(cwd, StaticPath, urlPath)),
+                tryServeFile(pathMod.join(projectStaticPath, urlPath)),
+                routeClean
+                    ? tryServeFile(pathMod.join(cwd, StaticPath, routeClean, 'index.html'))
+                    : Promise.resolve(null),
+            ]);
+            if (staticRes) return staticRes;
+            if (projectRes) return projectRes;
+            if (routeRes)   return routeRes;
         }
         // bundled mode: static assets are not served from Lambda — route them to S3/CDN.
 
