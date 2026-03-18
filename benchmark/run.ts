@@ -28,12 +28,17 @@ const NEXTJS_URL  = `http://localhost:${NEXTJS_PORT}/`;
 const args        = process.argv.slice(2);
 const skipInstall = args.includes('--skip-install');
 const skipBuild   = args.includes('--skip-build');
-const DURATION      = Number(args.find(a => a.startsWith('--duration='))?.split('=')[1] ?? 10);
+const DURATION      = Number(args.find(a => a.startsWith('--duration='))?.split('=')[1] ?? 30);
 const CONNECTIONS   = Number(args.find(a => a.startsWith('--connections='))?.split('=')[1] ?? 100);
 const PW_ITERATIONS = Number(args.find(a => a.startsWith('--pw-iterations='))?.split('=')[1] ?? 50);
 const JSON_OUT      = args.find(a => a.startsWith('--json-out='))?.split('=')[1];
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+// Suppress the spurious TimeoutNegativeWarning emitted by autocannon's retimer
+// dependency when connection timers expire at the exact end of a benchmark run.
+// The warning is cosmetic — results are unaffected.
+process.on('warning', (w) => { if (w.name !== 'TimeoutNegativeWarning') console.warn(w); });
 
 const c = {
     bold:  (s: string | number) => `\x1b[1m${s}\x1b[0m`,
@@ -226,70 +231,79 @@ async function main() {
         nextBuildMs = Date.now() - t1;
     }
 
-    // 3. Start servers
-    log('Starting servers');
-    let hadarsProc = startServer('bunx', ['hadars', 'run'], HADARS_DIR);
-    let nextProc   = startServer('bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR);
-
-    // Surface server stderr so crashes are visible in the benchmark output.
-    hadarsProc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [hadars] ${d}`));
-    nextProc.stderr?.on('data',   (d: Buffer) => process.stderr.write(`  [next]   ${d}`));
+    // Keep mutable refs so cleanup() always kills whatever is currently running.
+    let hadarsProc: ChildProcess | undefined;
+    let nextProc:   ChildProcess | undefined;
 
     const cleanup = () => {
-        hadarsProc.kill('SIGTERM');
-        nextProc.kill('SIGTERM');
+        hadarsProc?.kill('SIGTERM');
+        nextProc?.kill('SIGTERM');
     };
     process.on('exit', cleanup);
     process.on('SIGINT', () => { cleanup(); process.exit(0); });
 
-    // 4. Wait for readiness
-    await Promise.all([
-        waitForPort(HADARS_PORT, 'hadars'),
-        waitForPort(NEXTJS_PORT, 'Next.js'),
-    ]);
-
-    // 5. Warm up (uncounted)
-    log('Warming up (3s each)');
-    await Promise.all([warmup(HADARS_URL), warmup(NEXTJS_URL)]);
-    console.log('  Warmup complete');
-
-    // Helper: kill a server and wait a moment for the OS to release the port.
-    const stopServer = async (proc: ChildProcess) => {
+    // Kill a server and wait until the OS has released its port.
+    const stopServer = async (proc: ChildProcess, port: number) => {
         proc.kill('SIGTERM');
-        await sleep(600);
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+            await sleep(250);
+            try { await fetch(`http://localhost:${port}/`); }
+            catch { return; } // connection refused — port is free
+        }
     };
 
-    // 6. Throughput benchmark — run each server in isolation for a fair measurement.
-    log(`Benchmarking hadars (${DURATION}s · Next.js stopped)…`);
-    await stopServer(nextProc);
+    const startHadars = async (): Promise<ChildProcess> => {
+        const proc = startServer('bunx', ['hadars', 'run'], HADARS_DIR);
+        proc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [hadars] ${d}`));
+        hadarsProc = proc;
+        await waitForPort(HADARS_PORT, 'hadars');
+        return proc;
+    };
+
+    const startNextjs = async (): Promise<ChildProcess> => {
+        const proc = startServer('bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR);
+        proc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [next]   ${d}`));
+        nextProc = proc;
+        await waitForPort(NEXTJS_PORT, 'Next.js');
+        return proc;
+    };
+
+    // 4–6. Throughput benchmark — one server alive at a time, warmed up individually.
+    log('Starting hadars…');
+    await startHadars();
+    log('Warming up hadars (3s)…');
+    await warmup(HADARS_URL);
+
+    log(`Benchmarking hadars (${DURATION}s)…`);
     const hResult = await bench(HADARS_URL);
+    await sleep(500); // let autocannon internals settle before killing the server
+    await stopServer(hadarsProc!, HADARS_PORT);
 
-    log('Restarting Next.js for its benchmark…');
-    nextProc = startServer('bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR);
-    nextProc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [next]   ${d}`));
-    await waitForPort(NEXTJS_PORT, 'Next.js');
+    log('Starting Next.js…');
+    await startNextjs();
+    log('Warming up Next.js (3s)…');
+    await warmup(NEXTJS_URL);
 
-    log(`Benchmarking Next.js (${DURATION}s · hadars stopped)…`);
-    await stopServer(hadarsProc);
+    log(`Benchmarking Next.js (${DURATION}s)…`);
     const nResult = await bench(NEXTJS_URL);
+    await sleep(500);
+    await stopServer(nextProc!, NEXTJS_PORT);
 
-    // 7. Page load benchmark (Playwright) — also isolated for fair TTFB.
-    log('Restarting hadars for Playwright phase…');
-    hadarsProc = startServer('bunx', ['hadars', 'run'], HADARS_DIR);
-    hadarsProc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [hadars] ${d}`));
-    await waitForPort(HADARS_PORT, 'hadars');
+    // 7. Playwright — also isolated, with a brief warmup before each.
+    log('Starting hadars for Playwright phase…');
+    await startHadars();
+    await warmup(HADARS_URL);
 
-    log(`Playwright hadars (${PW_ITERATIONS} iterations · Next.js stopped)…`);
-    await stopServer(nextProc);
+    log(`Playwright hadars (${PW_ITERATIONS} iterations)…`);
     const hPw = await benchPlaywright(HADARS_URL, 'hadars', PW_ITERATIONS);
+    await stopServer(hadarsProc!, HADARS_PORT);
 
-    log('Restarting Next.js for Playwright phase…');
-    nextProc = startServer('bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR);
-    nextProc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [next]   ${d}`));
-    await waitForPort(NEXTJS_PORT, 'Next.js');
+    log('Starting Next.js for Playwright phase…');
+    await startNextjs();
+    await warmup(NEXTJS_URL);
 
-    log(`Playwright Next.js (${PW_ITERATIONS} iterations · hadars stopped)…`);
-    await stopServer(hadarsProc);
+    log(`Playwright Next.js (${PW_ITERATIONS} iterations)…`);
     const nPw = await benchPlaywright(NEXTJS_URL, 'Next.js', PW_ITERATIONS);
 
     // 8. Teardown + print results

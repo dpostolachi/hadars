@@ -5,13 +5,17 @@ on:
     inputs:
       duration:
         description: Autocannon duration per server (seconds)
-        default: '10'
+        default: '30'
       connections:
         description: Autocannon concurrent connections
-        default: '50'
+        default: '100'
       pw_iterations:
         description: Playwright page-load iterations
-        default: '20'
+        default: '50'
+      update_readme:
+        description: Commit benchmark results to README.md
+        type: boolean
+        default: false
 
 jobs:
   benchmark:
@@ -47,18 +51,20 @@ jobs:
         run: |
           set -o pipefail
           bun run run.ts \
-            --duration=${{ inputs.duration || '10' }} \
-            --connections=${{ inputs.connections || '50' }} \
-            --pw-iterations=${{ inputs.pw_iterations || '20' }} \
+            --duration=${{ inputs.duration || '30' }} \
+            --connections=${{ inputs.connections || '100' }} \
+            --pw-iterations=${{ inputs.pw_iterations || '50' }} \
             --json-out=/tmp/bench-results.json \
             2>&1 | tee /tmp/bench-raw.txt
         working-directory: benchmark
 
       - name: Update README benchmark section
+        if: inputs.update_readme
         run: bun update-readme.ts --json=/tmp/bench-results.json --readme=../README.md
         working-directory: benchmark
 
       - name: Commit updated README
+        if: inputs.update_readme
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
