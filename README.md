@@ -123,6 +123,60 @@ const UserCard = ({ userId }: { userId: string }) => {
 - **Client (hydration)** - reads the pre-resolved value from the hydration cache serialised by the server; `fn()` is never called in the browser
 - **Client (navigation)** - when a component mounts during client-side navigation and its key is not in the cache, hadars fires a single `GET <current-url>` with `Accept: application/json`; all `useServerData` calls within the same render are batched into one request and suspended via React Suspense until the server returns the JSON data map
 
+## HadarsHead
+
+`HadarsHead` (exported as `Head`) manages `<title>`, `<meta>`, `<link>`, `<script>`, and `<style>` tags across both SSR and client renders. On the server it collects tags into the HTML `<head>`; on the client it upserts them into `document.head`.
+
+```tsx
+import { HadarsHead } from 'hadars';
+
+const Page = ({ context }) => (
+    <HadarsContext context={context}>
+        <HadarsHead status={200}>
+            <title>My page</title>
+            <meta name="description" content="A great page" />
+            <meta property="og:title" content="My page" />
+            <link rel="canonical" href="https://example.com/page" />
+            <link rel="stylesheet" href="/styles/page.css" />
+            <style data-id="page-critical">{`body { margin: 0 }`}</style>
+            <script src="/vendor/analytics.js" async />
+            <script data-id="inline-config" dangerouslySetInnerHTML={{ __html: 'var X=1' }} />
+        </HadarsHead>
+        ...
+    </HadarsContext>
+);
+```
+
+### Deduplication
+
+Each element type has a natural dedup key derived from its identifying attributes. Rendering the same `<Head>` block on multiple components or re-renders will not produce duplicate tags.
+
+| Element | Dedup key |
+|---|---|
+| `<title>` | always singular — last write wins |
+| `<meta name="…">` | `name` value |
+| `<meta property="…">` | `property` value |
+| `<meta http-equiv="…">` | `http-equiv` value |
+| `<meta charSet>` | singular — one charset per page |
+| `<link rel="…" href="…">` | `rel` + `href` (+ `as` when present) |
+| `<link rel="…">` (no href) | `rel` alone (e.g. `rel="preconnect"`) |
+| `<script src="…">` | `src` URL |
+| `<script data-id="…">` | `data-id` value |
+| `<style data-id="…">` | `data-id` value |
+
+### `data-id` for inline tags
+
+Inline `<script>` (no `src`) and `<style>` elements have no natural URL to key on. Provide a `data-id` prop so hadars can find and update the same element across re-renders rather than appending a duplicate:
+
+```tsx
+<HadarsHead>
+    <style data-id="critical-css">{criticalStyles}</style>
+    <script data-id="gtm-config" dangerouslySetInnerHTML={{ __html: gtmSnippet }} />
+</HadarsHead>
+```
+
+Omitting `data-id` on these elements triggers a console warning at render time and falls back to append-only behaviour (safe for one-time static tags, not for anything that re-renders).
+
 ## Data lifecycle hooks
 
 | Hook | Runs on | Purpose |
