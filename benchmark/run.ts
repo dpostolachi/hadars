@@ -31,6 +31,7 @@ const skipBuild   = args.includes('--skip-build');
 const DURATION      = Number(args.find(a => a.startsWith('--duration='))?.split('=')[1] ?? 10);
 const CONNECTIONS   = Number(args.find(a => a.startsWith('--connections='))?.split('=')[1] ?? 100);
 const PW_ITERATIONS = Number(args.find(a => a.startsWith('--pw-iterations='))?.split('=')[1] ?? 50);
+const JSON_OUT      = args.find(a => a.startsWith('--json-out='))?.split('=')[1];
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -227,8 +228,12 @@ async function main() {
 
     // 3. Start servers
     log('Starting servers');
-    const hadarsProc = startServer('bunx', ['hadars', 'run'], HADARS_DIR);
-    const nextProc   = startServer('bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR);
+    let hadarsProc = startServer('bunx', ['hadars', 'run'], HADARS_DIR);
+    let nextProc   = startServer('bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR);
+
+    // Surface server stderr so crashes are visible in the benchmark output.
+    hadarsProc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [hadars] ${d}`));
+    nextProc.stderr?.on('data',   (d: Buffer) => process.stderr.write(`  [next]   ${d}`));
 
     const cleanup = () => {
         hadarsProc.kill('SIGTERM');
@@ -236,6 +241,28 @@ async function main() {
     };
     process.on('exit', cleanup);
     process.on('SIGINT', () => { cleanup(); process.exit(0); });
+
+    // Restart a server that died and wait for it to become ready again.
+    const restartIfDead = async (
+        proc: ChildProcess,
+        cmd: string,
+        args: string[],
+        cwd: string,
+        port: number,
+        label: string,
+        stderrTag: string,
+    ): Promise<ChildProcess> => {
+        try {
+            const res = await fetch(`http://localhost:${port}/`);
+            if (res.status < 500) return proc; // still alive
+        } catch { /* unreachable */ }
+        console.log(`  ${label} appears down — restarting…`);
+        proc.kill('SIGTERM');
+        const fresh = startServer(cmd, args, cwd);
+        fresh.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [${stderrTag}] ${d}`));
+        await waitForPort(port, label);
+        return fresh;
+    };
 
     // 4. Wait for readiness
     await Promise.all([
@@ -256,6 +283,12 @@ async function main() {
     const nResult = await bench(NEXTJS_URL);
 
     // 7. Page load benchmark (Playwright)
+    // Re-verify both servers survived the autocannon load before Playwright starts.
+    log('Verifying server health before Playwright phase…');
+    hadarsProc = await restartIfDead(hadarsProc, 'bunx', ['hadars', 'run'], HADARS_DIR, HADARS_PORT, 'hadars', 'hadars');
+    nextProc   = await restartIfDead(nextProc,   'bunx', ['next', 'start', '-p', String(NEXTJS_PORT)], NEXTJS_DIR, NEXTJS_PORT, 'Next.js', 'next');
+    console.log('  Both servers healthy');
+
     log(`Playwright page load benchmark (${PW_ITERATIONS} iterations each)…`);
     const hPw = await benchPlaywright(HADARS_URL, 'hadars', PW_ITERATIONS);
     const nPw = await benchPlaywright(NEXTJS_URL, 'Next.js', PW_ITERATIONS);
@@ -309,6 +342,21 @@ async function main() {
         ? `hadars is ${c.green(speedup.toFixed(2) + 'x')} faster (req/s)`
         : `Next.js is ${c.green((1 / speedup).toFixed(2) + 'x')} faster (req/s)`;
     console.log(`\n  ${c.dim('(green = winner)')}  ·  ${winner}\n`);
+
+    // Optional JSON output for tooling (e.g. README auto-update).
+    if (JSON_OUT) {
+        const out = {
+            date:       new Date().toISOString().slice(0, 10),
+            duration:   DURATION,
+            connections: CONNECTIONS,
+            throughput: { hadars: { rps: hRps, latP50: hLatMed, latP99: hLatP99, mbps: hThroughput },
+                          nextjs: { rps: nRps, latP50: nLatMed, latP99: nLatP99, mbps: nThroughput } },
+            build:      { hadarsMs: hadarsBuildMs, nextjsMs: nextBuildMs },
+            playwright: { hadars: hPw, nextjs: nPw },
+        };
+        await Bun.write(JSON_OUT, JSON.stringify(out, null, 2) + '\n');
+        console.log(`  JSON results written to ${JSON_OUT}`);
+    }
 }
 
 main().catch(err => {

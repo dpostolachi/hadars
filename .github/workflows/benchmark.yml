@@ -1,0 +1,84 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Autocannon duration per server (seconds)
+        default: '10'
+      connections:
+        description: Autocannon concurrent connections
+        default: '50'
+      pw_iterations:
+        description: Playwright page-load iterations
+        default: '20'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # Build the hadars package so benchmark/hadars (file:../..) resolves correctly.
+      - name: Install root dependencies
+        run: bun install --ignore-scripts
+
+      - name: Build hadars
+        run: bun run build:all
+
+      # Install benchmark runner + both sub-app dependencies.
+      - name: Install benchmark dependencies
+        run: bun install
+        working-directory: benchmark
+
+      - name: Install Playwright Chromium
+        run: bunx playwright install chromium --with-deps
+        working-directory: benchmark
+
+      - name: Run benchmark
+        id: bench
+        run: |
+          set -o pipefail
+          bun run run.ts \
+            --duration=${{ inputs.duration || '10' }} \
+            --connections=${{ inputs.connections || '50' }} \
+            --pw-iterations=${{ inputs.pw_iterations || '20' }} \
+            --json-out=/tmp/bench-results.json \
+            2>&1 | tee /tmp/bench-raw.txt
+        working-directory: benchmark
+
+      - name: Update README benchmark section
+        run: bun update-readme.ts --json=/tmp/bench-results.json --readme=../README.md
+        working-directory: benchmark
+
+      - name: Commit updated README
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update benchmark results [skip ci]"
+            git push
+          fi
+
+      - name: Post results to Job Summary
+        if: always()
+        run: |
+          # Strip ANSI escape codes so the table renders cleanly in markdown.
+          CLEAN=$(sed 's/\x1B\[[0-9;]*[mGKHF]//g' /tmp/bench-raw.txt)
+          {
+            echo "## Benchmark results"
+            echo ""
+            echo '```'
+            echo "$CLEAN"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

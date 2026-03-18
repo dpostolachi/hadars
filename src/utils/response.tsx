@@ -1,7 +1,6 @@
 import type React from "react";
 import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/hadars";
 import { renderToString, createElement } from '../slim-react/index';
-import { processSegmentCache } from './segmentCache';
 
 interface ReactResponseOptions {
     document: {
@@ -98,7 +97,7 @@ export const getReactResponse = async (
     };
 
     return {
-        bodyHtml: processSegmentCache(bodyHtml),
+        bodyHtml,
         clientProps: clientProps as Record<string, unknown>,
         status: context.head.status,
         headHtml: getHeadHtml(context.head),

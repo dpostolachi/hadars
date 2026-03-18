@@ -11,4 +11,4 @@ export type {
     HadarsEntryModule,
     HadarsApp,
 } from "./src/types/hadars";
-export { HadarsHead, HadarsContext, loadModule, CacheSegment, deleteSegment, clearSegments } from "./src/index";
+export { HadarsHead, HadarsContext, loadModule } from "./src/index";

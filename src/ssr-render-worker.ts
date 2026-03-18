@@ -12,7 +12,6 @@
 
 import { workerData, parentPort } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
-import { processSegmentCache } from './utils/segmentCache';
 import { renderToString, createElement } from './slim-react/index';
 
 const { ssrBundlePath } = workerData as { ssrBundlePath: string };
@@ -102,14 +101,15 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
 
+    // renderToString internally retries until all Suspense/useServerData promises
+    // resolve, so its return value is already the final correct HTML — no second
+    // render pass needed.
+    let appHtml: string;
     try {
-        // First render: populates the useServerData cache via suspend/retry.
-        await renderToString(createElement(Component, props));
-    } catch (e) {
+        appHtml = await renderToString(createElement(Component, props));
+    } finally {
         (globalThis as any).__hadarsUnsuspend = null;
-        throw e;
     }
-
     const { context: _ctx, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
 
     // Collect fulfilled useServerData values for client-side hydration.
@@ -122,18 +122,6 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
         location: serialReq.location,
         ...(Object.keys(serverData).length > 0 ? { __serverData: serverData } : {}),
     };
-
-    const finalAppProps = { ...props, location: serialReq.location, context };
-
-    // Final render — __hadarsUnsuspend is still set; cache is fully populated so
-    // useServerData calls return cached values without any async work.
-    let appHtml: string;
-    try {
-        appHtml = await renderToString(createElement(Component, finalAppProps));
-    } finally {
-        (globalThis as any).__hadarsUnsuspend = null;
-    }
-    appHtml = processSegmentCache(appHtml);
 
     const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
     const html = `<div id="app">${appHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>`;
