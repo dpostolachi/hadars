@@ -18,8 +18,9 @@ Bring your own router (or none), keep your components as plain React, and get SS
 
 ## Benchmarks
 
-Benchmarks against an equivalent Next.js app show significantly faster server throughput (requests/second) and meaningfully better page load metrics (TTFB, FCP, DOMContentLoaded). Build times are also much lower due to rspack.
-
+<!-- BENCHMARK_START -->
+> Run the [Benchmark workflow](../../actions/workflows/benchmark.yml) to populate this section.
+<!-- BENCHMARK_END -->
 ## Quick start
 
 Scaffold a new project in seconds:
