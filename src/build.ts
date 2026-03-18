@@ -516,7 +516,6 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             const {
                 default: Component,
                 getInitProps,
-                getAfterRenderProps,
                 getFinalProps,
             } = (await import(importPath)) as HadarsEntryModule<any>;
 
@@ -525,7 +524,6 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
                     getInitProps,
-                    getAfterRenderProps,
                     getFinalProps,
                 },
             });
@@ -711,7 +709,6 @@ export const run = async (options: HadarsRuntimeOptions) => {
             const {
                 default: Component,
                 getInitProps,
-                getAfterRenderProps,
                 getFinalProps,
             } = (await import(componentPath)) as HadarsEntryModule<any>;
 
@@ -731,7 +728,6 @@ export const run = async (options: HadarsRuntimeOptions) => {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
                     getInitProps,
-                    getAfterRenderProps,
                     getFinalProps,
                 },
             });

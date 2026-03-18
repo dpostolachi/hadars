@@ -5,7 +5,6 @@ export type {
     HadarsOptions,
     HadarsProps,
     HadarsRequest,
-    HadarsGetAfterRenderProps,
     HadarsGetFinalProps,
     HadarsGetInitialProps,
     HadarsGetClientProps,

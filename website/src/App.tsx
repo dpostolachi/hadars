@@ -621,18 +621,12 @@ hadars run           # multi-core when workers > 1
                 <Section id="concepts" title="Core concepts">
 
                     <h3>Data lifecycle</h3>
-                    <p>Each request goes through up to four optional hooks before a response is sent:</p>
+                    <p>Each request goes through up to three optional hooks before a response is sent:</p>
                     <div className="lifecycle">
                         <div className="lifecycle-step">
                             <span className="step-label">server</span>
                             <strong>getInitProps</strong>
                             <span>Fetch server-side data. Has access to the full <code>HadarsRequest</code> (cookies, pathname, search).</span>
-                        </div>
-                        <div className="lifecycle-arrow">→</div>
-                        <div className="lifecycle-step">
-                            <span className="step-label">server</span>
-                            <strong>getAfterRenderProps</strong>
-                            <span>Inspect the rendered HTML string to derive additional props (e.g. extract inline styles for critical CSS).</span>
                         </div>
                         <div className="lifecycle-arrow">→</div>
                         <div className="lifecycle-step">

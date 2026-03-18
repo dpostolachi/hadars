@@ -2,14 +2,12 @@ import type { LinkHTMLAttributes, MetaHTMLAttributes, ScriptHTMLAttributes, Styl
 
 export type HadarsGetInitialProps<T extends {}> = (req: HadarsRequest) => Promise<T> | T;
 export type HadarsGetClientProps<T extends {}> = (props: T) => Promise<T> | T;
-export type HadarsGetAfterRenderProps<T extends {}> = (props: HadarsProps<T>, html: string) => Promise<HadarsProps<T>> | HadarsProps<T>;
 export type HadarsGetFinalProps<T extends {}> = (props: HadarsProps<T>) => Promise<T> | T;
 export type HadarsApp<T extends {}> = React.FC<HadarsProps<T>>;
 
 export type HadarsEntryModule<T extends {}> = {
     default: HadarsApp<T>;
     getInitProps?: HadarsGetInitialProps<T>;
-    getAfterRenderProps?: HadarsGetAfterRenderProps<T>;
     getFinalProps?: HadarsGetFinalProps<T>;
     getClientProps?: HadarsGetClientProps<T>;
 }

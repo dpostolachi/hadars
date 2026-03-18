@@ -9,7 +9,6 @@ interface ReactResponseOptions {
         head?: () => Promise<React.ReactNode>;
         lang?: string;
         getInitProps: HadarsEntryModule<HadarsEntryBase>['getInitProps'];
-        getAfterRenderProps: HadarsEntryModule<HadarsEntryBase>['getAfterRenderProps'];
         getFinalProps: HadarsEntryModule<HadarsEntryBase>['getFinalProps'];
     }
 }
@@ -63,7 +62,7 @@ export const getReactResponse = async (
     headHtml: string,
 }> => {
     const App = opts.document.body;
-    const { getInitProps, getAfterRenderProps, getFinalProps } = opts.document;
+    const { getInitProps, getFinalProps } = opts.document;
 
     const context: AppContext = {
         head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200 },
@@ -81,12 +80,6 @@ export const getReactResponse = async (
     let bodyHtml: string;
     try {
         bodyHtml = await renderToString(createElement(App as any, props as any));
-        if (getAfterRenderProps) {
-            props = await getAfterRenderProps(props, bodyHtml);
-            bodyHtml = await renderToString(
-                createElement(App as any, { ...props, location: req.location, context } as any),
-            );
-        }
     } finally {
         (globalThis as any).__hadarsUnsuspend = null;
     }

@@ -244,7 +244,6 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
             const {
                 default: Component,
                 getInitProps,
-                getAfterRenderProps,
                 getFinalProps,
             } = await getSsrModule();
 
@@ -253,7 +252,6 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
                     getInitProps,
-                    getAfterRenderProps,
                     getFinalProps,
                 },
             });

@@ -84,7 +84,7 @@ function buildHeadHtml(head: any): string {
 
 async function runFullLifecycle(serialReq: SerializableRequest) {
     const Component = _ssrMod.default;
-    const { getInitProps, getAfterRenderProps, getFinalProps } = _ssrMod;
+    const { getInitProps, getFinalProps } = _ssrMod;
 
     const parsedReq = deserializeRequest(serialReq);
 
@@ -102,16 +102,9 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
 
-    let prelimHtml: string;
     try {
-        prelimHtml = await renderToString(createElement(Component, props));
-
-        if (getAfterRenderProps) {
-            props = await getAfterRenderProps(props, prelimHtml);
-            await renderToString(
-                createElement(Component, { ...props, location: serialReq.location, context }),
-            );
-        }
+        // First render: populates the useServerData cache via suspend/retry.
+        await renderToString(createElement(Component, props));
     } catch (e) {
         (globalThis as any).__hadarsUnsuspend = null;
         throw e;
