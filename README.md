@@ -19,7 +19,27 @@ Bring your own router (or none), keep your components as plain React, and get SS
 ## Benchmarks
 
 <!-- BENCHMARK_START -->
-> Run the [Benchmark workflow](../../actions/workflows/benchmark.yml) to populate this section.
+> Last run: 2026-03-18 · 60s · 200 connections · Bun runtime
+> hadars is **7.8x faster** in requests/sec
+
+**Throughput** (autocannon, 60s)
+
+| Metric | hadars | Next.js |
+|---|---:|---:|
+| Requests/sec | **132** | 17 |
+| Latency median | **1490 ms** | 2757 ms |
+| Latency p99 | **2289 ms** | 6742 ms |
+| Throughput | **37.38** MB/s | 9.37 MB/s |
+| Build time | 0.7 s | 6.3 s |
+
+**Page load** (Playwright · Chromium headless · median)
+
+| Metric | hadars | Next.js |
+|---|---:|---:|
+| TTFB | **22 ms** | 42 ms |
+| FCP | **124 ms** | 136 ms |
+| DOMContentLoaded | **88 ms** | 126 ms |
+| Load | **155 ms** | 173 ms |
 <!-- BENCHMARK_END -->
 
 ## Quick start
