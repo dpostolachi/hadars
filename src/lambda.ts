@@ -23,7 +23,7 @@ import fs from 'node:fs/promises';
 import { createProxyHandler } from './utils/proxyHandler';
 import { parseRequest } from './utils/request';
 import { tryServeFile } from './utils/staticFile';
-import { getReactResponse } from './utils/response';
+import { getReactResponse, buildHeadHtml } from './utils/response';
 import { buildSsrResponse, buildSsrHtml, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
 import type { HadarsOptions, HadarsEntryModule, HadarsProps } from './types/hadars';
 
@@ -247,7 +247,7 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
                 getFinalProps,
             } = await getSsrModule();
 
-            const { bodyHtml, clientProps, status, headHtml } = await getReactResponse(request, {
+            const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -257,6 +257,7 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
             });
 
             if (request.headers.get('Accept') === 'application/json') {
+                const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {
                     status,
@@ -266,6 +267,9 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
 
             // Build the HTML string directly — avoids creating a ReadableStream
             // that would immediately be drained by the Lambda response serialiser.
+            const bodyHtml = await getAppBody();
+            const { clientProps } = await finalize();
+            const headHtml = buildHeadHtml(head);
             const html = await buildSsrHtml(bodyHtml, clientProps, headHtml, getPrecontentHtml);
             return new Response(html, {
                 status,

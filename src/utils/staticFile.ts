@@ -1,4 +1,4 @@
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 /** MIME type map keyed by lowercase file extension. */
 const MIME: Record<string, string> = {
@@ -33,15 +33,10 @@ const MIME: Record<string, string> = {
  */
 export async function tryServeFile(filePath: string): Promise<Response | null> {
     try {
-        await stat(filePath);
-    } catch {
-        return null;
-    }
-    try {
         const data = await readFile(filePath);
         const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
         const contentType = MIME[ext] ?? 'application/octet-stream';
-        return new Response(data.buffer as ArrayBuffer, { headers: { 'Content-Type': contentType } });
+        return new Response(data as BodyInit, { headers: { 'Content-Type': contentType } });
     } catch {
         return null;
     }

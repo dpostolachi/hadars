@@ -17,9 +17,8 @@ import { spawn } from 'node:child_process';
 import cluster from 'node:cluster';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
 import {
-    HEAD_MARKER, BODY_MARKER,
     buildSsrResponse, makePrecontentHtmlGetter,
-    CacheFetchHandler, createRenderCache,
+    type CacheFetchHandler, createRenderCache,
 } from './utils/ssrHandler';
 
 /**
@@ -519,7 +518,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 getFinalProps,
             } = (await import(importPath)) as HadarsEntryModule<any>;
 
-            const { bodyHtml, clientProps, status, headHtml } = await getReactResponse(request, {
+            const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -533,6 +532,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             // instead of a full HTML page. The same auth context applies — cookies
             // and headers are forwarded unchanged, so no new attack surface is created.
             if (request.headers.get('Accept') === 'application/json') {
+                const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {
                     status,
@@ -540,7 +540,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 });
             }
 
-            return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
+            return buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             const msg = (err?.stack ?? err?.message ?? String(err)).replace(/</g, '&lt;');
@@ -723,7 +723,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 });
             }
 
-            const { bodyHtml, clientProps, status, headHtml } = await getReactResponse(request, {
+            const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
@@ -736,6 +736,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
             // navigation via useServerData), return the resolved data map as JSON
             // instead of a full HTML page.
             if (request.headers.get('Accept') === 'application/json') {
+                const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {
                     status,
@@ -743,7 +744,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 });
             }
 
-            return buildSsrResponse(bodyHtml, clientProps, headHtml, status, getPrecontentHtml);
+            return buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             return new Response('Internal Server Error', { status: 500 });

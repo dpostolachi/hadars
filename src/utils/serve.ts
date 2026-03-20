@@ -46,31 +46,6 @@ const noopCtx: ServerContext = { upgrade: () => false };
  * The `fetchHandler` may return `undefined` to signal that the response was
  * handled out-of-band (e.g. a Bun WebSocket upgrade).
  */
-const COMPRESSIBLE_RE = /\b(?:text\/|application\/(?:json|javascript|xml)|image\/svg\+xml)/;
-
-function withCompression(handler: FetchHandler): FetchHandler {
-    return async (req, ctx) => {
-        const res = await handler(req, ctx);
-        if (!res?.body) return res;
-        if (!COMPRESSIBLE_RE.test(res.headers.get('Content-Type') ?? '')) return res;
-        if (res.headers.has('Content-Encoding')) return res; // already compressed
-
-        const accept = req.headers.get('Accept-Encoding') ?? '';
-        const encoding = accept.includes('br') ? 'br' : accept.includes('gzip') ? 'gzip' : null;
-        if (!encoding) return res;
-
-        try {
-            const compressed = res.body.pipeThrough(new (globalThis as any).CompressionStream(encoding));
-            const headers = new Headers(res.headers);
-            headers.set('Content-Encoding', encoding);
-            headers.delete('Content-Length');
-            return new Response(compressed, { status: res.status, statusText: res.statusText, headers });
-        } catch {
-            return res;
-        }
-    };
-}
-
 function withRequestLogging(handler: FetchHandler): FetchHandler {
     return async (req, ctx) => {
         const start = performance.now();
@@ -83,14 +58,41 @@ function withRequestLogging(handler: FetchHandler): FetchHandler {
     };
 }
 
+const COMPRESSIBLE_RE = /^text\/|\/json|\/javascript|\/xml|\/wasm/;
+
+/**
+ * Wraps a handler to apply on-the-fly gzip compression via CompressionStream.
+ * Unlike a buffering approach, this pipes the response ReadableStream through
+ * a CompressionStream so bytes are compressed and flushed as they arrive —
+ * streaming responses remain streaming.
+ */
+function withCompression(handler: FetchHandler): FetchHandler {
+    return async (req, ctx) => {
+        const res = await handler(req, ctx);
+        if (!res || !res.body) return res;
+        const accept = req.headers.get('Accept-Encoding') ?? '';
+        if (!accept.includes('gzip')) return res;
+        // Skip if already encoded (e.g. pre-compressed cache entry).
+        if (res.headers.has('content-encoding')) return res;
+        const ct = res.headers.get('content-type') ?? '';
+        if (!COMPRESSIBLE_RE.test(ct)) return res;
+        const compressed = res.body.pipeThrough(
+            new (globalThis as any).CompressionStream('gzip'),
+        );
+        const headers = new Headers(res.headers);
+        headers.set('content-encoding', 'gzip');
+        headers.delete('content-length'); // length is unknown after compression
+        return new Response(compressed, { status: res.status, headers });
+    };
+}
+
 export async function serve(
     port: number,
     fetchHandler: FetchHandler,
     /** Bun WebSocketHandler — ignored on Deno and Node.js. */
     websocket?: unknown,
 ): Promise<void> {
-    fetchHandler = withCompression(fetchHandler);
-    fetchHandler = withRequestLogging(fetchHandler);
+    fetchHandler = withCompression(withRequestLogging(fetchHandler));
 
     // ── Bun ────────────────────────────────────────────────────────────────
     if (isBun) {

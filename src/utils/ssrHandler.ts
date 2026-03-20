@@ -1,5 +1,6 @@
 import { parseRequest } from './request';
-import type { HadarsOptions } from '../types/hadars';
+import { buildHeadHtml } from './response';
+import type { AppHead, HadarsOptions } from '../types/hadars';
 
 export const HEAD_MARKER = '<meta name="HADARS_HEAD">';
 export const BODY_MARKER = '<meta name="HADARS_BODY">';
@@ -8,28 +9,50 @@ const encoder = new TextEncoder();
 
 // ── HTML response assembly ────────────────────────────────────────────────────
 
-export async function buildSsrResponse(
-    bodyHtml: string,
-    clientProps: Record<string, unknown>,
-    headHtml: string,
+export function buildSsrResponse(
+    head: AppHead,
     status: number,
-    getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
-): Promise<Response> {
+    getAppBody: () => Promise<string>,
+    finalize: () => Promise<{ clientProps: Record<string, unknown> }>,
+    getPrecontentHtml: (headHtml: string) => [string, string] | Promise<[string, string]>,
+): Response {
+    const headHtml = buildHeadHtml(head);
+    const precontentResult = getPrecontentHtml(headHtml);
+
     const responseStream = new ReadableStream({
         async start(controller) {
-            const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
-            // Flush the shell (precontentHtml) immediately so the browser can
-            // start loading CSS/fonts before the body is assembled.
-            controller.enqueue(encoder.encode(precontentHtml));
+            try {
+                // Resolve the template — sync on the hot path (every request after the first).
+                const [precontentHtml, postContent] = precontentResult instanceof Promise
+                    ? await precontentResult
+                    : precontentResult;
 
-            const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
-            controller.enqueue(encoder.encode(
-                `<div id="app">${bodyHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>` + postContent,
-            ));
-            controller.close();
+                // Chunk 1 — flush the full <head> shell immediately so the browser
+                // can start loading CSS / fonts / preload hints before the body arrives.
+                controller.enqueue(encoder.encode(precontentHtml));
+
+                // Chunk 2 — body HTML. getAppBody() triggers the actual renderToString
+                // now that head has been flushed. All data is cached from the preflight
+                // so this pass is fast (no async waits).
+                const bodyHtml = await getAppBody();
+                controller.enqueue(encoder.encode(`<div id="app">${bodyHtml}</div>`));
+
+                // Chunk 3 — JSON props script + post-content. Separated so the browser
+                // can parse/render the body while getFinalProps is still completing.
+                const { clientProps } = await finalize();
+                const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
+                controller.enqueue(encoder.encode(
+                    `<script id="hadars" type="application/json">${scriptContent}</script>` +
+                    postContent,
+                ));
+                controller.close();
+            } catch (err) {
+                // Head chunk may already be sent; signal a stream error so the
+                // connection is closed cleanly rather than hanging.
+                controller.error(err);
+            }
         },
     });
-
     return new Response(responseStream, {
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
         status,
@@ -46,9 +69,9 @@ export async function buildSsrHtml(
     bodyHtml: string,
     clientProps: Record<string, unknown>,
     headHtml: string,
-    getPrecontentHtml: (headHtml: string) => Promise<[string, string]>,
+    getPrecontentHtml: (headHtml: string) => [string, string] | Promise<[string, string]>,
 ): Promise<string> {
-    const [precontentHtml, postContent] = await getPrecontentHtml(headHtml);
+    const [precontentHtml, postContent] = await Promise.resolve(getPrecontentHtml(headHtml));
     const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
     return (
         precontentHtml +
@@ -66,16 +89,22 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     let preHead: string | null = null;
     let postHead: string | null = null;
     let postContent: string | null = null;
-    return async (headHtml: string): Promise<[string, string]> => {
-        if (preHead === null || postHead === null || postContent === null) {
-            const html = await htmlFilePromise;
+    // Returns synchronously once the template has been loaded and parsed
+    // (every request after the first).  Callers can check `instanceof Promise`
+    // to take a zero-await hot path.
+    return (headHtml: string): [string, string] | Promise<[string, string]> => {
+        if (preHead !== null) {
+            // Hot path — sync return, no Promise allocation.
+            return [preHead + headHtml + postHead!, postContent!];
+        }
+        return htmlFilePromise.then(html => {
             const headEnd = html.indexOf(HEAD_MARKER);
             const contentStart = html.indexOf(BODY_MARKER);
             preHead = html.slice(0, headEnd);
             postHead = html.slice(headEnd + HEAD_MARKER.length, contentStart);
             postContent = html.slice(contentStart + BODY_MARKER.length);
-        }
-        return [preHead! + headHtml + postHead!, postContent!];
+            return [preHead + headHtml + postHead, postContent];
+        });
     };
 };
 

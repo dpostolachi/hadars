@@ -1,4 +1,5 @@
 import type { SlimNode } from "./types";
+import { getContextValue } from "./renderContext";
 
 /**
  * Minimal Context implementation for SSR.
@@ -46,7 +47,7 @@ export function createContext<T>(defaultValue: T): Context<T> {
 
   context.Consumer = ({ children }) => {
     return (children as unknown as (value: T) => SlimNode)(
-      context._currentValue,
+      getContextValue<T>(context),
     );
   };
 

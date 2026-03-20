@@ -36,6 +36,23 @@ export function captureMap(): Map<object, unknown> | null {
   return _g[MAP_KEY];
 }
 
+const UNSUSPEND_KEY = "__hadarsUnsuspend";
+
+/**
+ * Capture the current __hadarsUnsuspend slot alongside captureMap() before
+ * an async boundary.  Because useServerData reads this global, concurrent
+ * renders would corrupt each other's cache if it weren't restored after every
+ * await continuation — exactly like the context map itself.
+ */
+export function captureUnsuspend(): unknown {
+  return _g[UNSUSPEND_KEY];
+}
+
+/** Restore a previously captured __hadarsUnsuspend slot after an await. */
+export function restoreUnsuspend(u: unknown): void {
+  _g[UNSUSPEND_KEY] = u;
+}
+
 /** Read the current value for a context within the active render. */
 export function getContextValue<T>(context: object): T {
   const map: Map<object, unknown> | null = _g[MAP_KEY];
@@ -49,12 +66,18 @@ export function getContextValue<T>(context: object): T {
  * Returns the previous value so the caller can restore it on exit.
  */
 export function pushContextValue(context: object, value: unknown): unknown {
-  const map: Map<object, unknown> | null = _g[MAP_KEY];
+  let map: Map<object, unknown> | null = _g[MAP_KEY];
+  // Lazily create the Map on the first Provider encountered — renders without
+  // any Context.Provider never allocate a Map at all.
+  if (map === null) {
+    map = new Map();
+    _g[MAP_KEY] = map;
+  }
   const c = context as any;
-  const prev = map && map.has(context)
+  const prev = map.has(context)
     ? map.get(context)
     : ("_defaultValue" in c ? c._defaultValue : c._currentValue);
-  map?.set(context, value);
+  map.set(context, value);
   return prev;
 }
 
@@ -84,19 +107,46 @@ const GLOBAL_KEY = "__slimReactRenderState";
 // React 19's initial context is { id: 1, overflow: "" } — sentinel bit only.
 const EMPTY: TreeContext = { id: 1, overflow: "" };
 
+/**
+ * Module-level cache for the shared RenderState singleton.
+ * Avoids a `globalThis[key]` property lookup on every push/pop/reset call
+ * (which happens multiple times per component during rendering).
+ * Both slim-react instances (direct import + SSR bundle copy) initialise the
+ * same `globalThis[GLOBAL_KEY]` object and then each cache that same reference,
+ * so correctness is preserved.
+ */
+let _stateCache: RenderState | null = null;
+
 function s(): RenderState {
-  const g = globalThis as any;
-  if (!g[GLOBAL_KEY]) {
-    g[GLOBAL_KEY] = { currentTreeContext: { ...EMPTY }, localIdCounter: 0, idPrefix: "" };
+  if (_stateCache !== null) return _stateCache;
+  if (!_g[GLOBAL_KEY]) {
+    _g[GLOBAL_KEY] = { currentTreeContext: { ...EMPTY }, localIdCounter: 0, idPrefix: "" };
   }
-  return g[GLOBAL_KEY] as RenderState;
+  _stateCache = _g[GLOBAL_KEY] as RenderState;
+  return _stateCache;
 }
+
+/**
+ * Flat primitive stacks for pushTreeContext / popTreeContext.
+ *
+ * Instead of allocating a new `{ id, overflow }` object on every array child
+ * (which is the hot path — called once per child in every array render), we
+ * save the two scalar fields into parallel pre-allocated arrays and return a
+ * numeric depth index.  No heap objects are allocated in the push. Both arrays
+ * grow lazily and are never shrunk, so after a few renders they stop growing.
+ */
+const _treeIdStack: number[]       = [];
+const _treeOvStack: string[]        = [];
+let   _treeDepth   = 0;
 
 export function resetRenderState(idPrefix = "") {
   const st = s();
-  st.currentTreeContext = { ...EMPTY };
+  // Mutate in place — avoids allocating a new TreeContext object each render.
+  st.currentTreeContext.id       = EMPTY.id;
+  st.currentTreeContext.overflow = EMPTY.overflow;
   st.localIdCounter = 0;
-  st.idPrefix = idPrefix;
+  st.idPrefix       = idPrefix;
+  _treeDepth        = 0;
 }
 
 export function setIdPrefix(prefix: string) {
@@ -110,44 +160,48 @@ export function setIdPrefix(prefix: string) {
  *   - on overflow, the LOWEST bits of the old data move to the overflow string
  *     (rounded to a multiple of 5 so base-32 digits align on byte boundaries)
  */
-export function pushTreeContext(totalChildren: number, index: number): TreeContext {
-  const st = s();
-  const saved: TreeContext = { ...st.currentTreeContext };
+/**
+ * Push a new tree-context level.  Returns a numeric depth token (not an
+ * object) so the caller can pop with zero heap allocation in the common case.
+ */
+export function pushTreeContext(totalChildren: number, index: number): number {
+  const st  = s();
+  const ctx = st.currentTreeContext;
+  const depth = _treeDepth++;
 
-  const baseIdWithLeadingBit = st.currentTreeContext.id;
-  const baseOverflow = st.currentTreeContext.overflow;
-  // Number of data bits currently stored (excludes the sentinel bit).
+  // Save current scalars into the flat stacks — no object allocation.
+  _treeIdStack[depth] = ctx.id;
+  _treeOvStack[depth] = ctx.overflow;
+
+  const baseIdWithLeadingBit = ctx.id;
+  const baseOverflow         = ctx.overflow;
   const baseLength = 31 - Math.clz32(baseIdWithLeadingBit);
-  // Strip the sentinel to get the pure data portion.
-  let baseId = baseIdWithLeadingBit & ~(1 << baseLength);
+  let   baseId     = baseIdWithLeadingBit & ~(1 << baseLength);
 
-  const slot = index + 1; // 1-indexed
-  const newBits = 32 - Math.clz32(totalChildren); // bits required for the new slot
-  const length = newBits + baseLength;             // total data bits after push
+  const slot    = index + 1;
+  const newBits = 32 - Math.clz32(totalChildren);
+  const length  = newBits + baseLength;
 
+  // Mutate currentTreeContext in place — avoids allocating a new object.
   if (30 < length) {
-    // Overflow: flush the lowest bits of the old data to the overflow string.
-    // Round down to a multiple of 5 so each base-32 character covers exactly
-    // 5 bits (no fractional digits that would corrupt adjacent chars).
-    const numberOfOverflowBits = baseLength - (baseLength % 5);
-    const overflowStr = (baseId & ((1 << numberOfOverflowBits) - 1)).toString(32);
-    baseId >>= numberOfOverflowBits;
-    const newBaseLength = baseLength - numberOfOverflowBits;
-    st.currentTreeContext = {
-      id: (1 << (newBits + newBaseLength)) | (slot << newBaseLength) | baseId,
-      overflow: overflowStr + baseOverflow,
-    };
+    const overflowBits = baseLength - (baseLength % 5);
+    const overflowStr  = (baseId & ((1 << overflowBits) - 1)).toString(32);
+    baseId >>= overflowBits;
+    const newBaseLength = baseLength - overflowBits;
+    ctx.id       = (1 << (newBits + newBaseLength)) | (slot << newBaseLength) | baseId;
+    ctx.overflow = overflowStr + baseOverflow;
   } else {
-    st.currentTreeContext = {
-      id: (1 << length) | (slot << baseLength) | baseId,
-      overflow: baseOverflow,
-    };
+    ctx.id       = (1 << length) | (slot << baseLength) | baseId;
+    ctx.overflow = baseOverflow;
   }
-  return saved;
+  return depth;
 }
 
-export function popTreeContext(saved: TreeContext) {
-  s().currentTreeContext = saved;
+export function popTreeContext(depth: number): void {
+  const ctx    = s().currentTreeContext;
+  ctx.id       = _treeIdStack[depth]!;
+  ctx.overflow = _treeOvStack[depth]!;
+  _treeDepth   = depth;
 }
 
 export function pushComponentScope(): number {
@@ -166,15 +220,21 @@ export function componentCalledUseId(): boolean {
   return s().localIdCounter > 0;
 }
 
-export function snapshotContext(): { tree: TreeContext; localId: number } {
-  const st = s();
-  return { tree: { ...st.currentTreeContext }, localId: st.localIdCounter };
+export function snapshotContext(): { tree: TreeContext; localId: number; treeDepth: number } {
+  const st  = s();
+  const ctx = st.currentTreeContext;
+  // Copy scalars directly — avoids a spread allocation.
+  return { tree: { id: ctx.id, overflow: ctx.overflow }, localId: st.localIdCounter, treeDepth: _treeDepth };
 }
 
-export function restoreContext(snap: { tree: TreeContext; localId: number }) {
-  const st = s();
-  st.currentTreeContext = { ...snap.tree };
-  st.localIdCounter = snap.localId;
+export function restoreContext(snap: { tree: TreeContext; localId: number; treeDepth: number }): void {
+  const st  = s();
+  const ctx = st.currentTreeContext;
+  // Mutate in place — avoids allocating a new TreeContext object.
+  ctx.id             = snap.tree.id;
+  ctx.overflow       = snap.tree.overflow;
+  st.localIdCounter  = snap.localId;
+  _treeDepth         = snap.treeDepth;
 }
 
 /**

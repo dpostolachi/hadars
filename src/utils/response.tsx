@@ -1,6 +1,6 @@
 import type React from "react";
 import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/hadars";
-import { renderToString, createElement } from '../slim-react/index';
+import { renderToString, renderPreflight, createElement } from '../slim-react/index';
 
 interface ReactResponseOptions {
     document: {
@@ -25,8 +25,8 @@ const ATTR: Record<string, string> = {
     hrefLang: 'hreflang',
 };
 
-function renderHeadTag(tag: string, opts: Record<string, unknown>, selfClose = false): string {
-    let attrs = '';
+function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, selfClose = false): string {
+    let attrs = ` id="${escAttr(id)}"`;
     let inner = '';
     for (const [k, v] of Object.entries(opts)) {
         if (k === 'key' || k === 'children') continue;
@@ -38,16 +38,16 @@ function renderHeadTag(tag: string, opts: Record<string, unknown>, selfClose = f
     return selfClose ? `<${tag}${attrs}>` : `<${tag}${attrs}>${inner}</${tag}>`;
 }
 
-const getHeadHtml = (seoData: AppHead): string => {
+export function buildHeadHtml(seoData: AppHead): string {
     let html = `<title>${escText(seoData.title ?? '')}</title>`;
-    for (const opts of Object.values(seoData.meta))
-        html += renderHeadTag('meta', opts as Record<string, unknown>, true);
-    for (const opts of Object.values(seoData.link))
-        html += renderHeadTag('link', opts as Record<string, unknown>, true);
-    for (const opts of Object.values(seoData.style))
-        html += renderHeadTag('style', opts as Record<string, unknown>);
-    for (const opts of Object.values(seoData.script))
-        html += renderHeadTag('script', opts as Record<string, unknown>);
+    for (const [id, opts] of Object.entries(seoData.meta))
+        html += renderHeadTag('meta', id, opts as Record<string, unknown>, true);
+    for (const [id, opts] of Object.entries(seoData.link))
+        html += renderHeadTag('link', id, opts as Record<string, unknown>, true);
+    for (const [id, opts] of Object.entries(seoData.style))
+        html += renderHeadTag('style', id, opts as Record<string, unknown>);
+    for (const [id, opts] of Object.entries(seoData.script))
+        html += renderHeadTag('script', id, opts as Record<string, unknown>);
     return html;
 };
 
@@ -55,10 +55,13 @@ export const getReactResponse = async (
     req: HadarsRequest,
     opts: ReactResponseOptions,
 ): Promise<{
-    bodyHtml: string,
-    clientProps: Record<string, unknown>,
+    /** Head object — populated by the preflight walk, ready for buildHeadHtml(). */
+    head: AppHead,
     status: number,
-    headHtml: string,
+    /** Renders the App to an HTML string. Call AFTER flushing head. */
+    getAppBody: () => Promise<string>,
+    /** Call after streaming the body to assemble the final client props. */
+    finalize: () => Promise<{ clientProps: Record<string, unknown> }>,
 }> => {
     const App = opts.document.body;
     const { getInitProps, getFinalProps } = opts.document;
@@ -73,33 +76,59 @@ export const getReactResponse = async (
         context,
     } as HadarsEntryBase;
 
-    // Create per-request cache for useServerData, active for all renders.
+    // Per-request cache for useServerData — set before rendering so every
+    // component in the tree that calls useServerData finds the same cache.
+    // captureUnsuspend / restoreUnsuspend in the renderer ensure it survives
+    // await continuations even when concurrent requests are in flight.
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
-    let bodyHtml: string;
+
+    const element = createElement(App as any, props as any);
+
+    // Phase 1 — preflight: walk the tree with a null writer (no HTML output).
+    // This resolves all useServerData promises into the cache and populates
+    // context.head so head can be flushed to the client immediately.
     try {
-        bodyHtml = await renderToString(createElement(App as any, props as any));
+        await renderPreflight(element);
     } finally {
+        // Clear the global immediately — the closure-captured `unsuspend`
+        // keeps the cache alive. Re-set inside getAppBody() for the second pass.
         (globalThis as any).__hadarsUnsuspend = null;
     }
 
-    const { context: _, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
+    // Head is fully populated — status is known.
+    const status = context.head.status;
 
-    // Collect fulfilled useServerData values for client-side hydration.
-    const serverData: Record<string, unknown> = {};
-    for (const [key, entry] of unsuspend.cache) {
-        if (entry.status === 'fulfilled') serverData[key] = entry.value;
-    }
-    const clientProps = {
-        ...restProps,
-        location: req.location,
-        ...(Object.keys(serverData).length > 0 ? { __serverData: serverData } : {}),
+    // Phase 2 is deferred: getAppBody() triggers the actual HTML render.
+    // All data is cached from the preflight, so the second pass is fast
+    // (no async waits). The caller flushes head BEFORE calling this.
+    const getAppBody = async (): Promise<string> => {
+        (globalThis as any).__hadarsUnsuspend = unsuspend;
+        try {
+            return await renderToString(element);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
+        }
     };
 
-    return {
-        bodyHtml,
-        clientProps: clientProps as Record<string, unknown>,
-        status: context.head.status,
-        headHtml: getHeadHtml(context.head),
+    const finalize = async (): Promise<{ clientProps: Record<string, unknown> }> => {
+        const { context: _, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
+        const serverData: Record<string, unknown> = {};
+        let hasServerData = false;
+        for (const [key, entry] of unsuspend.cache) {
+            if ((entry as any).status === 'fulfilled') {
+                serverData[key] = (entry as any).value;
+                hasServerData = true;
+            }
+        }
+        return {
+            clientProps: {
+                ...restProps,
+                location: req.location,
+                ...(hasServerData ? { __serverData: serverData } : {}),
+            } as Record<string, unknown>,
+        };
     };
+
+    return { head: context.head, status, getAppBody, finalize };
 };

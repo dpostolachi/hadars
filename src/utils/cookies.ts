@@ -9,7 +9,7 @@ export const parseCookies = (cookieString: string): Record<string, string> => {
         if (index > -1) {
             const key = pair.slice(0, index).trim();
             const value = pair.slice(index + 1).trim();
-            cookies[key] = decodeURIComponent(value);
+            try { cookies[key] = decodeURIComponent(value); } catch { cookies[key] = value; }
         }
     }
     return cookies;

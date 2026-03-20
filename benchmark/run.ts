@@ -63,7 +63,76 @@ function run(cmd: string, args: string[], cwd: string, label: string) {
 }
 
 function startServer(cmd: string, args: string[], cwd: string): ChildProcess {
-    return spawn(cmd, args, { cwd, shell: true, stdio: 'pipe' });
+    return spawn(cmd, args, { cwd, shell: false, stdio: 'pipe' });
+}
+
+// ── memory sampler ────────────────────────────────────────────────────────────
+
+/**
+ * Walk the entire process tree rooted at `rootPid` and return the sum of
+ * VmRSS (KB) across all processes in that tree.  This is necessary because
+ * both Bun and Next.js spawn worker/render child processes — reading only the
+ * direct child gives just the thin launcher (~10 MB) instead of the real total.
+ */
+function rssTreeKb(rootPid: number): number {
+    const fs = require('node:fs') as typeof import('fs');
+    // Build pid → { ppid, rss } map in one pass over /proc
+    const procs = new Map<number, { ppid: number; rss: number }>();
+    try {
+        for (const entry of fs.readdirSync('/proc')) {
+            const pid = Number(entry);
+            if (!Number.isFinite(pid) || pid <= 0) continue;
+            try {
+                const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+                const ppidM = /PPid:\s+(\d+)/.exec(status);
+                const rssM  = /VmRSS:\s+(\d+)/.exec(status);
+                if (ppidM && rssM) {
+                    procs.set(pid, { ppid: Number(ppidM[1]), rss: Number(rssM[1]) });
+                }
+            } catch { /* process already gone */ }
+        }
+    } catch { return 0; }
+
+    // Build children map for O(n) DFS instead of O(n²) scan each level
+    const children = new Map<number, number[]>();
+    for (const [pid, { ppid }] of procs) {
+        const list = children.get(ppid);
+        if (list) list.push(pid);
+        else children.set(ppid, [pid]);
+    }
+
+    // DFS from rootPid, summing RSS of every process in the tree
+    let total = 0;
+    const stack = [rootPid];
+    while (stack.length > 0) {
+        const cur = stack.pop()!;
+        const info = procs.get(cur);
+        if (info) total += info.rss;
+        const kids = children.get(cur);
+        if (kids) for (const k of kids) stack.push(k);
+    }
+    return total;
+}
+
+class MemorySampler {
+    private samples: number[] = [];
+    private timer: ReturnType<typeof setInterval> | null = null;
+
+    start(pid: number, intervalMs = 200) {
+        this.samples = [];
+        this.timer = setInterval(() => {
+            const rss = rssTreeKb(pid);
+            if (rss > 0) this.samples.push(rss);
+        }, intervalMs);
+    }
+
+    stop(): { peakMb: number; avgMb: number } {
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+        if (this.samples.length === 0) return { peakMb: 0, avgMb: 0 };
+        const peak = Math.max(...this.samples);
+        const avg  = this.samples.reduce((a, b) => a + b, 0) / this.samples.length;
+        return { peakMb: peak / 1024, avgMb: avg / 1024 };
+    }
 }
 
 async function waitForPort(port: number, label: string, timeoutMs = 60_000): Promise<void> {
@@ -270,13 +339,17 @@ async function main() {
     };
 
     // 4–6. Throughput benchmark — one server alive at a time, warmed up individually.
+    const sampler = new MemorySampler();
+
     log('Starting hadars…');
     await startHadars();
     log('Warming up hadars (3s)…');
     await warmup(HADARS_URL);
 
     log(`Benchmarking hadars (${DURATION}s)…`);
+    sampler.start(hadarsProc!.pid!);
     const hResult = await bench(HADARS_URL);
+    const hMem = sampler.stop();
     await sleep(500); // let autocannon internals settle before killing the server
     await stopServer(hadarsProc!, HADARS_PORT);
 
@@ -286,7 +359,9 @@ async function main() {
     await warmup(NEXTJS_URL);
 
     log(`Benchmarking Next.js (${DURATION}s)…`);
+    sampler.start(nextProc!.pid!);
     const nResult = await bench(NEXTJS_URL);
+    const nMem = sampler.stop();
     await sleep(500);
     await stopServer(nextProc!, NEXTJS_PORT);
 
@@ -296,7 +371,9 @@ async function main() {
     await warmup(HADARS_URL);
 
     log(`Playwright hadars (${PW_ITERATIONS} iterations)…`);
+    sampler.start(hadarsProc!.pid!);
     const hPw = await benchPlaywright(HADARS_URL, 'hadars', PW_ITERATIONS);
+    const hMemPw = sampler.stop();
     await stopServer(hadarsProc!, HADARS_PORT);
 
     log('Starting Next.js for Playwright phase…');
@@ -304,7 +381,9 @@ async function main() {
     await warmup(NEXTJS_URL);
 
     log(`Playwright Next.js (${PW_ITERATIONS} iterations)…`);
+    sampler.start(nextProc!.pid!);
     const nPw = await benchPlaywright(NEXTJS_URL, 'Next.js', PW_ITERATIONS);
+    const nMemPw = sampler.stop();
 
     // 8. Teardown + print results
     cleanup();
@@ -323,6 +402,8 @@ async function main() {
     const fmtMBs = (n: number) => `${(n / 1_048_576).toFixed(2)} MB/s`;
     const fmtSec = (ms: number) => ms > 0 ? `${(ms / 1000).toFixed(1)} s` : 'n/a';
 
+    const fmtMB  = (n: number) => `${n.toFixed(1)} MB`;
+
     console.log('\n');
     console.log(c.bold('  Results'));
 
@@ -331,6 +412,8 @@ async function main() {
         ['Latency median',     fmtMs(hLatMed),         fmtMs(nLatMed),         hLatMed <= nLatMed],
         ['Latency p99',        fmtMs(hLatP99),         fmtMs(nLatP99),         hLatP99 <= nLatP99],
         ['Throughput',         fmtMBs(hThroughput),    fmtMBs(nThroughput),    hThroughput >= nThroughput],
+        ['Peak RSS',           fmtMB(hMem.peakMb),     fmtMB(nMem.peakMb),     hMem.peakMb <= nMem.peakMb],
+        ['Avg RSS',            fmtMB(hMem.avgMb),      fmtMB(nMem.avgMb),      hMem.avgMb <= nMem.avgMb],
         ['Build time',         fmtSec(hadarsBuildMs),  fmtSec(nextBuildMs),    hadarsBuildMs > 0 && nextBuildMs > 0 ? hadarsBuildMs <= nextBuildMs : null],
     ];
 
@@ -345,6 +428,7 @@ async function main() {
         ['FCP',                fmtMs(hPw.fcp),              fmtMs(nPw.fcp),              hPw.fcp <= nPw.fcp],
         ['DOMContentLoaded',   fmtMs(hPw.domContentLoaded), fmtMs(nPw.domContentLoaded), hPw.domContentLoaded <= nPw.domContentLoaded],
         ['Load',               fmtMs(hPw.load),             fmtMs(nPw.load),             hPw.load <= nPw.load],
+        ['Peak RSS',           fmtMB(hMemPw.peakMb),        fmtMB(nMemPw.peakMb),        hMemPw.peakMb <= nMemPw.peakMb],
     ];
 
     printTable(pwRows);
@@ -362,10 +446,10 @@ async function main() {
             date:       new Date().toISOString().slice(0, 10),
             duration:   DURATION,
             connections: CONNECTIONS,
-            throughput: { hadars: { rps: hRps, latP50: hLatMed, latP99: hLatP99, mbps: hThroughput },
-                          nextjs: { rps: nRps, latP50: nLatMed, latP99: nLatP99, mbps: nThroughput } },
+            throughput: { hadars: { rps: hRps, latP50: hLatMed, latP99: hLatP99, mbps: hThroughput, peakRssMb: hMem.peakMb, avgRssMb: hMem.avgMb },
+                          nextjs: { rps: nRps, latP50: nLatMed, latP99: nLatP99, mbps: nThroughput, peakRssMb: nMem.peakMb, avgRssMb: nMem.avgMb } },
             build:      { hadarsMs: hadarsBuildMs, nextjsMs: nextBuildMs },
-            playwright: { hadars: hPw, nextjs: nPw },
+            playwright: { hadars: { ...hPw, peakRssMb: hMemPw.peakMb }, nextjs: { ...nPw, peakRssMb: nMemPw.peakMb } },
         };
         await Bun.write(JSON_OUT, JSON.stringify(out, null, 2) + '\n');
         console.log(`  JSON results written to ${JSON_OUT}`);

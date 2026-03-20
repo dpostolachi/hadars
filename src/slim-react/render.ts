@@ -36,7 +36,8 @@ import {
   getContextValue,
   swapContextMap,
   captureMap,
-  type TreeContext,
+  captureUnsuspend,
+  restoreUnsuspend,
 } from "./renderContext";
 import { installDispatcher, restoreDispatcher } from "./dispatcher";
 
@@ -62,22 +63,58 @@ const VOID_ELEMENTS = new Set([
 ]);
 
 const HTML_ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#x27;' };
+const HTML_ESC_RE = /[&<>']/;
 function escapeHtml(str: string): string {
+  // Fast path: avoid regex replace + callback allocation when there's nothing to escape.
+  if (!HTML_ESC_RE.test(str)) return str;
   return str.replace(/[&<>']/g, c => HTML_ESC[c]!);
 }
 
 const ATTR_ESC: Record<string, string> = { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' };
+const ATTR_ESC_RE = /[&"<>]/;
 function escapeAttr(str: string): string {
+  if (!ATTR_ESC_RE.test(str)) return str;
   return str.replace(/[&"<>]/g, c => ATTR_ESC[c]!);
 }
 
+/**
+ * CSS properties that accept plain numbers without a `px` suffix.
+ * Matches React's internal unitless-number list so SSR output agrees with
+ * client-side React during hydration.
+ */
+const UNITLESS_CSS = new Set([
+  'animationIterationCount', 'aspectRatio', 'borderImageOutset', 'borderImageSlice',
+  'borderImageWidth', 'boxFlex', 'boxFlexGroup', 'boxOrdinalGroup', 'columnCount',
+  'columns', 'flex', 'flexGrow', 'flexPositive', 'flexShrink', 'flexNegative',
+  'flexOrder', 'gridArea', 'gridRow', 'gridRowEnd', 'gridRowSpan', 'gridRowStart',
+  'gridColumn', 'gridColumnEnd', 'gridColumnSpan', 'gridColumnStart', 'fontWeight',
+  'lineClamp', 'lineHeight', 'opacity', 'order', 'orphans', 'scale', 'tabSize',
+  'widows', 'zIndex', 'zoom', 'fillOpacity', 'floodOpacity', 'stopOpacity',
+  'strokeDasharray', 'strokeDashoffset', 'strokeMiterlimit', 'strokeOpacity',
+  'strokeWidth',
+]);
+
+/** Intern camelCase → kebab-case CSS property name conversions. */
+const _cssKeyCache = new Map<string, string>();
 function styleObjectToString(style: Record<string, any>): string {
   let result = '';
   for (const key in style) {
+    const value = style[key];
+    // Skip null, undefined and boolean values (React behaviour).
+    if (value == null || typeof value === 'boolean') continue;
     if (result) result += ';';
-    // camelCase → kebab-case
-    const cssKey = key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
-    result += cssKey + ':' + style[key];
+    // camelCase → kebab-case, cached to avoid repeated regex per render.
+    let cssKey = _cssKeyCache.get(key);
+    if (cssKey === undefined) {
+      cssKey = key.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase());
+      _cssKeyCache.set(key, cssKey);
+    }
+    // Append 'px' for numeric values on non-unitless properties (React behaviour).
+    if (typeof value === 'number' && value !== 0 && !UNITLESS_CSS.has(key)) {
+      result += cssKey + ':' + value + 'px';
+    } else {
+      result += cssKey + ':' + value;
+    }
   }
   return result;
 }
@@ -224,39 +261,41 @@ const SVG_ATTR_MAP: Record<string, string> = {
   yChannelSelector: "yChannelSelector",
 };
 
-/** Set of known SVG element tag names. */
-const SVG_ELEMENTS = new Set([
-  "svg", "animate", "animateMotion", "animateTransform", "circle",
-  "clipPath", "defs", "desc", "ellipse", "feBlend", "feColorMatrix",
-  "feComponentTransfer", "feComposite", "feConvolveMatrix",
-  "feDiffuseLighting", "feDisplacementMap", "feDistantLight",
-  "feDropShadow", "feFlood", "feFuncA", "feFuncB", "feFuncG",
-  "feFuncR", "feGaussianBlur", "feImage", "feMerge", "feMergeNode",
-  "feMorphology", "feOffset", "fePointLight", "feSpecularLighting",
-  "feSpotLight", "feTile", "feTurbulence", "filter", "foreignObject",
-  "g", "image", "line", "linearGradient", "marker", "mask",
-  "metadata", "mpath", "path", "pattern", "polygon", "polyline",
-  "radialGradient", "rect", "set", "stop", "switch", "symbol",
-  "text", "textPath", "title", "tspan", "use", "view",
+// Pre-allocated skip-sets for special host elements that strip certain props
+// before delegating to writeAttributes.  Module-level so they are created once.
+const TEXTAREA_SKIP_PROPS = new Set(["value", "defaultValue", "children"]);
+const SELECT_SKIP_PROPS   = new Set(["value", "defaultValue"]);
+
+// Internal React props that must never be serialised as HTML attributes.
+// A Set lookup (one hash probe) replaces six sequential string comparisons
+// for every attribute on every element — the hottest path in the renderer.
+const INTERNAL_PROPS = new Set([
+  "children", "key", "ref",
+  "dangerouslySetInnerHTML",
+  "suppressHydrationWarning",
+  "suppressContentEditableWarning",
 ]);
 
-function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
-  let attrs = "";
+/**
+ * Write element attributes directly into the writer, skipping the
+ * intermediate `attrs` string that `renderAttributes` used to return.
+ * Eliminates one heap string allocation per element.
+ *
+ * @param skip - Optional set of prop names to exclude (used by textarea/select).
+ */
+function writeAttributes(writer: Writer, props: Record<string, any>, isSvg: boolean, skip?: ReadonlySet<string>): void {
   for (const key in props) {
+    if (skip !== undefined && skip.has(key)) continue;
     const value = props[key];
-    // Skip internal / non-attribute props
+    // Skip internal / non-attribute props — one hash probe replaces 6 comparisons.
+    if (INTERNAL_PROPS.has(key)) continue;
+    // Skip event handlers (onClick, onChange, …) — use charCodeAt for speed.
     if (
-      key === "children" ||
-      key === "key" ||
-      key === "ref" ||
-      key === "dangerouslySetInnerHTML" ||
-      key === "suppressHydrationWarning" ||
-      key === "suppressContentEditableWarning"
-    )
-      continue;
-    // Skip event handlers (onClick, onChange, …)
-    if (key.startsWith("on") && key.length > 2 && key[2] === key[2]!.toUpperCase())
-      continue;
+      key.length > 2 &&
+      key.charCodeAt(0) === 111 /*o*/ &&
+      key.charCodeAt(1) === 110 /*n*/ &&
+      key.charCodeAt(2) >= 65 && key.charCodeAt(2) <= 90 /*A-Z*/
+    ) continue;
 
     // Prop-name mapping
     let attrName: string;
@@ -264,45 +303,37 @@ function renderAttributes(props: Record<string, any>, isSvg: boolean): string {
       attrName = SVG_ATTR_MAP[key]!;
     } else {
       attrName =
-        key === "className"
-          ? "class"
-          : key === "htmlFor"
-            ? "for"
-            : key === "tabIndex"
-              ? "tabindex"
-              : key === "defaultValue"
-                ? "value"
-                : key === "defaultChecked"
-                  ? "checked"
-                  : key;
+        key === "className"    ? "class"
+        : key === "htmlFor"    ? "for"
+        : key === "tabIndex"   ? "tabindex"
+        : key === "defaultValue"   ? "value"
+        : key === "defaultChecked" ? "checked"
+        : key;
     }
 
     if (value === false || value == null) {
-      // aria-* and data-* attributes treat `false` as the string "false"
-      // (omitting them would change semantics, e.g. aria-hidden="false" ≠ absent).
-      if (value === false && (attrName.startsWith("aria-") || attrName.startsWith("data-"))) {
-        attrs += ` ${attrName}="false"`;
+      if (value === false && (attrName.charCodeAt(0) === 97 /*a*/ && attrName.startsWith("aria-") ||
+                              attrName.charCodeAt(0) === 100 /*d*/ && attrName.startsWith("data-"))) {
+        writer.write(` ${attrName}="false"`);
       }
       continue;
     }
     if (value === true) {
-      // aria-* and data-* are string attributes: true must serialize to "true".
-      // HTML boolean attributes (disabled, hidden, checked, …) use attr="" (present-without-value).
-      if (attrName.startsWith("aria-") || attrName.startsWith("data-")) {
-        attrs += ` ${attrName}="true"`;
+      if (attrName.charCodeAt(0) === 97 /*a*/ && attrName.startsWith("aria-") ||
+          attrName.charCodeAt(0) === 100 /*d*/ && attrName.startsWith("data-")) {
+        writer.write(` ${attrName}="true"`);
       } else {
-        attrs += ` ${attrName}=""`;
+        writer.write(` ${attrName}=""`);
       }
       continue;
     }
     if (key === "style" && typeof value === "object") {
       const styleStr = styleObjectToString(value);
-      if (styleStr) attrs += ` style="${escapeAttr(styleStr)}"`;
+      if (styleStr) writer.write(` style="${escapeAttr(styleStr)}"`);
       continue;
     }
-    attrs += ` ${attrName}="${escapeAttr(String(value))}"`;
+    writer.write(` ${attrName}="${escapeAttr(typeof value === 'string' ? value : String(value))}"`); 
   }
-  return attrs;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,22 +347,34 @@ interface Writer {
   text(s: string): void;
   /** True if the last thing written was a text node (not markup). */
   lastWasText: boolean;
+  /**
+   * Optional: encode and flush any internal string buffer downstream.
+   * Called at natural streaming boundaries (Suspense completions, end of render).
+   * Writers that don't buffer (e.g. BufferWriter, NullWriter) leave this undefined.
+   */
+  flush?(): void;
 }
 
 class BufferWriter implements Writer {
-  chunks: string[] = [];
+  data = "";
   lastWasText = false;
   write(chunk: string) {
-    this.chunks.push(chunk);
+    this.data += chunk;
     this.lastWasText = false;
   }
   text(s: string) {
-    this.chunks.push(s);
+    this.data += s;
     this.lastWasText = true;
   }
-  flush(target: Writer) {
-    for (const c of this.chunks) target.write(c);
-    // Propagate the text-node tracking state from the buffer's last write.
+  /** Flush accumulated output into a parent writer and reset. */
+  flushTo(target: Writer) {
+    if (!this.data) return; // nothing buffered — preserve target's lastWasText
+    // Single write call — the entire buffered string in one shot.
+    if (target instanceof BufferWriter) {
+      target.data += this.data;
+    } else {
+      target.write(this.data);
+    }
     target.lastWasText = this.lastWasText;
   }
 }
@@ -369,27 +412,19 @@ function renderNode(
     return renderChildArray(node, writer, isSvg);
   }
 
+  // At this point node is guaranteed to be a non-null object — null/boolean/
+  // string/number/Array are all handled above.  The iterable and $$typeof
+  // branches no longer need to re-test typeof/null.
+  const obj = node as any;
+
   // --- iterables (Set, generator, …) ---
-  if (
-    typeof node === "object" &&
-    node !== null &&
-    Symbol.iterator in node &&
-    !("$$typeof" in node)
-  ) {
-    return renderChildArray(
-      Array.from(node as Iterable<SlimNode>),
-      writer,
-      isSvg,
-    );
+  if (Symbol.iterator in obj && !("$$typeof" in obj)) {
+    return renderChildArray(Array.from(obj as Iterable<SlimNode>), writer, isSvg);
   }
 
   // --- SlimElement (accepts both the classic and React 19 transitional symbols) ---
-  if (
-    typeof node === "object" &&
-    node !== null &&
-    "$$typeof" in node
-  ) {
-    const elType = (node as any)["$$typeof"] as symbol;
+  if ("$$typeof" in obj) {
+    const elType = obj["$$typeof"] as symbol;
     if (elType !== SLIM_ELEMENT && elType !== REACT19_ELEMENT) return;
     const element = node as SlimElement;
     const { type, props } = element;
@@ -404,6 +439,12 @@ function renderNode(
       return renderSuspense(props, writer, isSvg);
     }
 
+    // HTML / SVG element — most common; check string before function to
+    // hit the branch earlier for the majority of nodes.
+    if (typeof type === "string") {
+      return renderHostElement(type, props, writer, isSvg);
+    }
+
     // Function / class component
     if (typeof type === "function") {
       return renderComponent(type, props, writer, isSvg);
@@ -414,11 +455,6 @@ function renderNode(
     // Context.Consumer — all identified by their own $$typeof.
     if (typeof type === "object" && type !== null) {
       return renderComponent(type as unknown as Function, props, writer, isSvg);
-    }
-
-    // HTML / SVG element
-    if (typeof type === "string") {
-      return renderHostElement(type, props, writer, isSvg);
     }
   }
 }
@@ -462,17 +498,14 @@ function renderHostElement(
   writer: Writer,
   isSvg: boolean,
 ): MaybePromise {
-  const enteringSvg = tag === "svg";
-  const childSvg = isSvg || enteringSvg;
+  const childSvg = isSvg || tag === "svg";
 
   // ── <textarea> ────────────────────────────────────────────────────────────
   if (tag === "textarea") {
     const textContent = props.value ?? props.defaultValue ?? props.children ?? "";
-    const filteredProps: Record<string, any> = {};
-    for (const k of Object.keys(props)) {
-      if (k !== "value" && k !== "defaultValue" && k !== "children") filteredProps[k] = props[k];
-    }
-    writer.write(`<textarea${renderAttributes(filteredProps, false)}>`);
+    writer.write("<textarea");
+    writeAttributes(writer, props, false, TEXTAREA_SKIP_PROPS);
+    writer.write(">");
     writer.text(escapeHtml(String(textContent)));
     writer.write("</textarea>");
     return;
@@ -483,11 +516,9 @@ function renderHostElement(
   // matching <option> as `selected`.
   if (tag === "select") {
     const selectedValue = props.value ?? props.defaultValue;
-    const filteredProps: Record<string, any> = {};
-    for (const k of Object.keys(props)) {
-      if (k !== "value" && k !== "defaultValue") filteredProps[k] = props[k];
-    }
-    writer.write(`<select${renderAttributes(filteredProps, false)}>`);
+    writer.write("<select");
+    writeAttributes(writer, props, false, SELECT_SKIP_PROPS);
+    writer.write(">");
     // Normalise selectedValue to a Set of strings to handle both single values
     // and arrays (multi-select with defaultValue={['a','b']}).
     const selectedSet: Set<string> | null =
@@ -510,7 +541,8 @@ function renderHostElement(
 
   // React 19 does not inject xmlns on <svg> — browsers handle SVG namespaces
   // automatically for inline HTML5 SVG, so we match React's behaviour.
-  writer.write(`<${tag}${renderAttributes(props, childSvg)}`);
+  writer.write(`<${tag}`);
+  writeAttributes(writer, props, childSvg);
 
   // Void elements are self-closing (matching React's output format).
   if (VOID_ELEMENTS.has(tag)) {
@@ -542,14 +574,34 @@ const REACT_CONTEXT     = Symbol.for("react.context");   // React 19: context IS
 const REACT_CONSUMER    = Symbol.for("react.consumer");  // React 19 Consumer object
 const REACT_LAZY        = Symbol.for("react.lazy");      // React.lazy()
 
+// Sentinel thrown by renderComponent when a component exceeds its per-boundary
+// suspension retry limit. Caught by renderSuspense to trigger fallback rendering.
+// Using a unique object (not a subclass) keeps the check a fast reference equality.
+const SUSPENSE_RETRY_LIMIT: unique symbol = Symbol("SuspenseRetryLimit");
+const MAX_COMPONENT_SUSPENSE_RETRIES = 25;
+
+/** React 19 `use()` protocol — patch a thrown promise with status tracking so
+ *  that `use(promise)` can return the resolved value synchronously on retry. */
+function patchPromiseStatus(p: Promise<unknown>): void {
+  const w = p as Promise<unknown> & { status?: string; value?: unknown; reason?: unknown };
+  if (w.status) return; // already tracked (e.g. React.lazy payload)
+  w.status = "pending";
+  w.then(
+    (v) => { w.status = "fulfilled"; w.value = v; },
+    (r) => { w.status = "rejected"; w.reason = r; },
+  );
+}
+
 /** Render a function or class component. */
 function renderComponent(
   type: Function,
   props: Record<string, any>,
   writer: Writer,
   isSvg: boolean,
+  _suspenseRetries = 0,
 ): MaybePromise {
-  const typeOf = (type as any)?.$$typeof;
+  // type is always a defined Function — the optional chain is never needed.
+  const typeOf = (type as any).$$typeof;
 
   // React.memo — unwrap and re-render the inner type
   if (typeOf === REACT_MEMO) {
@@ -567,7 +619,22 @@ function renderComponent(
   // React.lazy — initialise via the _init/_payload protocol; may suspend.
   if (typeOf === REACT_LAZY) {
     // _init returns the resolved module (or throws a Promise/Error).
-    const resolved = (type as any)._init((type as any)._payload);
+    let resolved: any;
+    try {
+      resolved = (type as any)._init((type as any)._payload);
+    } catch (e) {
+      // Module not yet loaded — treat as a component-level suspension.
+      if (e && typeof (e as any).then === "function") {
+        if (_suspenseRetries + 1 >= MAX_COMPONENT_SUSPENSE_RETRIES) throw SUSPENSE_RETRY_LIMIT;
+        patchPromiseStatus(e as Promise<unknown>);
+        const m = captureMap(); const u = captureUnsuspend();
+        return (e as Promise<unknown>).then(() => {
+          swapContextMap(m); restoreUnsuspend(u);
+          return renderComponent(type, props, writer, isSvg, _suspenseRetries + 1);
+        });
+      }
+      throw e;
+    }
     // The module may export `.default` or be the component directly.
     const LazyComp = resolved?.default ?? resolved;
     return renderComponent(LazyComp, props, writer, isSvg);
@@ -619,10 +686,10 @@ function renderComponent(
     };
     const r = renderChildren(props.children, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap();
+      const m = captureMap(); const u = captureUnsuspend();
       return (r as Promise<void>).then(
-        () => { swapContextMap(m); finish(); },
-        (e) => { swapContextMap(m); finish(); throw e; },
+        () => { swapContextMap(m); restoreUnsuspend(u); finish(); },
+        (e) => { swapContextMap(m); restoreUnsuspend(u); finish(); throw e; },
       );
     }
     finish();
@@ -647,6 +714,20 @@ function renderComponent(
     restoreDispatcher(prevDispatcher);
     popComponentScope(savedScope);
     if (isProvider) popContextValue(ctx, prevCtxValue);
+    // Suspense protocol: the component threw a Promise (e.g. useServerData without
+    // a <Suspense> wrapper). Context is fully restored at this point — dispatcher,
+    // component scope and context value are all popped back to pre-component state.
+    // Convert the throw into a returned Promise so the parent never sees a throw and
+    // no root restart is needed: we await the promise then retry ONLY this component.
+    if (e && typeof (e as any).then === "function") {
+      if (_suspenseRetries + 1 >= MAX_COMPONENT_SUSPENSE_RETRIES) throw SUSPENSE_RETRY_LIMIT;
+      patchPromiseStatus(e as Promise<unknown>);
+      const m = captureMap(); const u = captureUnsuspend();
+      return (e as Promise<unknown>).then(() => {
+        swapContextMap(m); restoreUnsuspend(u);
+        return renderComponent(type, props, writer, isSvg, _suspenseRetries + 1);
+      });
+    }
     throw e;
   }
   restoreDispatcher(prevDispatcher);
@@ -656,98 +737,92 @@ function renderComponent(
   // `pushTreeContext(keyPath, 1, 0)` call inside finishFunctionComponent.
   // This ensures that useId IDs produced by child components of a useId-calling
   // component are tree-positioned identically to React's own renderer.
-  let savedIdTree: TreeContext | undefined;
+  let savedIdTree: number | undefined;
   if (!(result instanceof Promise) && componentCalledUseId()) {
     savedIdTree = pushTreeContext(1, 0);
   }
 
-  const finish = () => {
-    if (savedIdTree !== undefined) popTreeContext(savedIdTree);
-    popComponentScope(savedScope);
-    if (isProvider) popContextValue(ctx, prevCtxValue);
-  };
-
   // Async component
   if (result instanceof Promise) {
-    const m = captureMap();
+    const m = captureMap(); const u = captureUnsuspend();
     return result.then((resolved) => {
-      swapContextMap(m);
+      swapContextMap(m); restoreUnsuspend(u);
       // Check useId after the async body has finished executing.
-      let asyncSavedIdTree: TreeContext | undefined;
+      let asyncSavedIdTree: number | undefined;
       if (componentCalledUseId()) {
         asyncSavedIdTree = pushTreeContext(1, 0);
       }
-      const asyncFinish = () => {
-        if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
-        popComponentScope(savedScope);
-        if (isProvider) popContextValue(ctx, prevCtxValue);
-      };
       const r = renderNode(resolved, writer, isSvg);
       if (r && typeof (r as any).then === "function") {
-        const m2 = captureMap();
+        const m2 = captureMap(); const u2 = captureUnsuspend();
+        // Only allocate cleanup closures when actually going async.
         return (r as Promise<void>).then(
-          () => { swapContextMap(m2); asyncFinish(); },
-          (e) => { swapContextMap(m2); asyncFinish(); throw e; },
+          () => {
+            swapContextMap(m2); restoreUnsuspend(u2);
+            if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
+            popComponentScope(savedScope);
+            if (isProvider) popContextValue(ctx, prevCtxValue);
+          },
+          (e) => {
+            swapContextMap(m2); restoreUnsuspend(u2);
+            if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
+            popComponentScope(savedScope);
+            if (isProvider) popContextValue(ctx, prevCtxValue);
+            throw e;
+          },
         );
       }
-      asyncFinish();
-    }, (e) => { swapContextMap(m); finish(); throw e; });
+      // Sync result from async component — inline cleanup.
+      if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
+      popComponentScope(savedScope);
+      if (isProvider) popContextValue(ctx, prevCtxValue);
+    }, (e) => {
+      swapContextMap(m); restoreUnsuspend(u);
+      // savedIdTree is always undefined here (async component skips the push).
+      popComponentScope(savedScope);
+      if (isProvider) popContextValue(ctx, prevCtxValue);
+      throw e;
+    });
   }
 
   const r = renderNode(result, writer, isSvg);
 
   if (r && typeof (r as any).then === "function") {
-    const m = captureMap();
+    const m = captureMap(); const u = captureUnsuspend();
+    // Only allocate cleanup closures when actually going async.
     return (r as Promise<void>).then(
-      () => { swapContextMap(m); finish(); },
-      (e) => { swapContextMap(m); finish(); throw e; },
+      () => {
+        swapContextMap(m); restoreUnsuspend(u);
+        if (savedIdTree !== undefined) popTreeContext(savedIdTree);
+        popComponentScope(savedScope);
+        if (isProvider) popContextValue(ctx, prevCtxValue);
+      },
+      (e) => {
+        swapContextMap(m); restoreUnsuspend(u);
+        if (savedIdTree !== undefined) popTreeContext(savedIdTree);
+        popComponentScope(savedScope);
+        if (isProvider) popContextValue(ctx, prevCtxValue);
+        throw e;
+      },
     );
   }
-  finish();
+  // Sync path — inline cleanup, no closure allocation.
+  if (savedIdTree !== undefined) popTreeContext(savedIdTree);
+  popComponentScope(savedScope);
+  if (isProvider) popContextValue(ctx, prevCtxValue);
 }
 
-/**
- * Render an array of children, pushing tree-context for each child
- * so that `useId` produces deterministic, position-based IDs.
- * Goes async only when a child actually returns a Promise.
- */
-/** Returns true for nodes that become DOM text nodes (string or number). */
-function isTextLike(node: SlimNode): boolean {
-  return typeof node === "string" || typeof node === "number";
-}
-
+/** Render an array of children, pushing tree-context for each child
+ * so that `useId` produces deterministic, position-based IDs. */
 function renderChildArray(
   children: SlimNode[],
   writer: Writer,
   isSvg: boolean,
 ): MaybePromise {
-  const totalChildren = children.length;
-  for (let i = 0; i < totalChildren; i++) {
-    // React inserts <!-- --> between adjacent text nodes to force the browser
-    // to preserve distinct DOM text nodes — required for correct hydration.
-    // We use writer.lastWasText instead of inspecting the previous VDOM node
-    // so that text emitted at the end of a nested array or fragment is also
-    // accounted for (fixes the {["a","b"]}{"c"} adjacency edge case).
-    if (isTextLike(children[i]) && writer.lastWasText) {
-      writer.write("<!-- -->");
-    }
-    const savedTree = pushTreeContext(totalChildren, i);
-    const r = renderNode(children[i], writer, isSvg);
-    if (r && typeof (r as any).then === "function") {
-      // One child went async – continue the rest asynchronously
-      const m = captureMap();
-      return (r as Promise<void>).then(() => {
-        swapContextMap(m);
-        popTreeContext(savedTree);
-        // Continue with remaining children
-        return renderChildArrayFrom(children, i + 1, writer, isSvg);
-      });
-    }
-    popTreeContext(savedTree);
-  }
+  return renderChildArrayFrom(children, 0, writer, isSvg);
 }
 
-/** Resume renderChildArray from a given index (after async child). */
+/** Core child-array loop. Used by both the initial call and async continuations. */
 function renderChildArrayFrom(
   children: SlimNode[],
   startIndex: number,
@@ -756,15 +831,17 @@ function renderChildArrayFrom(
 ): MaybePromise {
   const totalChildren = children.length;
   for (let i = startIndex; i < totalChildren; i++) {
-    if (isTextLike(children[i]) && writer.lastWasText) {
+    // Inline isTextLike — avoids a function call on every child in every array.
+    const child = children[i];
+    if ((typeof child === "string" || typeof child === "number") && writer.lastWasText) {
       writer.write("<!-- -->");
     }
     const savedTree = pushTreeContext(totalChildren, i);
-    const r = renderNode(children[i], writer, isSvg);
+    const r = renderNode(child, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap();
+      const m = captureMap(); const u = captureUnsuspend();
       return (r as Promise<void>).then(() => {
-        swapContextMap(m);
+        swapContextMap(m); restoreUnsuspend(u);
         popTreeContext(savedTree);
         return renderChildArrayFrom(children, i + 1, writer, isSvg);
       });
@@ -793,54 +870,64 @@ function renderChildren(
 // their results in document order once each resolves.
 // ---------------------------------------------------------------------------
 
-const MAX_SUSPENSE_RETRIES = 25;
-
 async function renderSuspense(
   props: Record<string, any>,
   writer: Writer,
   isSvg = false,
 ): Promise<void> {
   const { children, fallback } = props;
-  let attempts = 0;
-
-  // Snapshot the render context so we can reset between retries.
+  // Snapshot tree-context so we can restore it if we need to render the fallback.
   const snap = snapshotContext();
+  // Shallow-clone the context map so we can restore Provider values on fallback.
+  // Provider push/pop pairs inside the failed children may not complete
+  // symmetrically when SUSPENSE_RETRY_LIMIT is thrown.  The clone is a shallow
+  // copy of a small Map (one entry per active Provider), so the cost is negligible.
+  const savedMap = captureMap();
+  const savedMapClone = savedMap ? new Map(savedMap) : null;
+  // Collect all output into a buffer so we can discard it if the boundary
+  // falls back to the loading state.
+  const buffer = new BufferWriter();
 
-  while (attempts < MAX_SUSPENSE_RETRIES) {
-    // Restore context to the state it was in when we entered <Suspense>.
-    restoreContext(snap);
-    let buffer = new BufferWriter();
-    try {
-      const r = renderNode(children, buffer, isSvg);
-      if (r && typeof (r as any).then === "function") {
-        const m = captureMap(); await r; swapContextMap(m);
-      }
-      // Success – wrap with React's Suspense boundary markers so hydrateRoot
-      // can locate the boundary in the DOM (<!--$--> … <!--/$-->).
-      writer.write("<!--$-->");
-      buffer.flush(writer);
-      writer.write("<!--/$-->");
-      return;
-    } catch (error: unknown) {
-      if (error && typeof (error as any).then === "function") {
-        const m = captureMap(); await (error as Promise<unknown>); swapContextMap(m);
-        attempts++;
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  // Exhausted retries → render the fallback (boundary stays in loading state).
-  restoreContext(snap);
-  writer.write("<!--$?-->");
-  if (fallback) {
-    const r = renderNode(fallback, writer, isSvg);
+  // Components handle their own Promise throws (see renderComponent catch block),
+  // so renderNode either resolves synchronously or returns a Promise — it never
+  // throws a Promise here. SUSPENSE_RETRY_LIMIT is thrown when a component
+  // exhausts its retry budget, signalling us to render the fallback instead.
+  try {
+    const r = renderNode(children, buffer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap(); await r; swapContextMap(m);
+      const m = captureMap(); const u = captureUnsuspend();
+      await r;
+      swapContextMap(m); restoreUnsuspend(u);
+    }
+    // Success – wrap with React's Suspense boundary markers so hydrateRoot
+    // can locate the boundary in the DOM (<!--$--> … <!--/$-->).
+    writer.write("<!--$-->");
+    buffer.flushTo(writer);
+    writer.write("<!--/$-->");
+    // Tell a streaming writer it can encode and enqueue everything accumulated
+    // so far — this is a natural boundary where partial HTML is complete.
+    writer.flush?.();
+  } catch (error) {
+    if ((error as any) === SUSPENSE_RETRY_LIMIT) {
+      // A component inside this boundary exhausted its retry budget.
+      // Restore context to Suspense-entry state and render the fallback.
+      restoreContext(snap);
+      // Restore the context map to its pre-boundary state.
+      swapContextMap(savedMapClone);
+      writer.write("<!--$?-->");
+      if (fallback) {
+        const r = renderNode(fallback, writer, isSvg);
+        if (r && typeof (r as any).then === "function") {
+          const m = captureMap(); const u = captureUnsuspend();
+          await r;
+          swapContextMap(m); restoreUnsuspend(u);
+        }
+      }
+      writer.write("<!--/$-->");
+    } else {
+      throw error;
     }
   }
-  writer.write("<!--/$-->");
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +943,9 @@ export interface RenderOptions {
   identifierPrefix?: string;
 }
 
+// Module-level encoder — one instance shared across all renderToStream calls.
+const _streamEncoder = new TextEncoder();
+
 /**
  * Render a component tree to a `ReadableStream<Uint8Array>`.
  *
@@ -866,24 +956,28 @@ export function renderToStream(
   element: SlimNode,
   options?: RenderOptions,
 ): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
   const idPrefix = options?.identifierPrefix ?? "";
 
-  const contextMap = new Map<object, unknown>();
   return new ReadableStream({
     async start(controller) {
       resetRenderState(idPrefix);
-      const prev = swapContextMap(contextMap);
+      // Start with null — pushContextValue lazily creates the Map only if a
+      // Context.Provider is actually rendered, eliminating the allocation on
+      // the common (no-provider) path.
+      const prev = swapContextMap(null);
 
+      // Buffer writes into a string; only encode+enqueue in flush() so that
+      // a sync render produces one Uint8Array instead of thousands of tiny ones.
+      let _buf = "";
       const writer: Writer = {
         lastWasText: false,
-        write(chunk: string) {
-          controller.enqueue(encoder.encode(chunk));
-          this.lastWasText = false;
-        },
-        text(s: string) {
-          controller.enqueue(encoder.encode(s));
-          this.lastWasText = true;
+        write(chunk: string) { _buf += chunk; this.lastWasText = false; },
+        text(s: string)      { _buf += s;     this.lastWasText = true;  },
+        flush() {
+          if (_buf.length > 0) {
+            controller.enqueue(_streamEncoder.encode(_buf));
+            _buf = "";
+          }
         },
       };
 
@@ -892,6 +986,7 @@ export function renderToStream(
         if (r && typeof (r as any).then === "function") {
           const m = captureMap(); await r; swapContextMap(m);
         }
+        writer.flush!(); // encode everything accumulated (sync renders: the whole page)
         controller.close();
       } catch (error) {
         controller.error(error);
@@ -902,43 +997,87 @@ export function renderToStream(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Preflight renderer
+// ---------------------------------------------------------------------------
+
+/** A writer that discards all output — only side-effects (cache warming, head
+ *  population) are preserved. Used as the no-op sink for Pass 1. */
+const NULL_WRITER: Writer = {
+  lastWasText: false,
+  write(_c: string) {},
+  text(_s: string) {},
+};
+
 /**
- * Convenience: render to a complete HTML string.
- * Retries the full tree when a component throws a Promise (Suspense protocol),
- * so useServerData and similar hooks work without requiring explicit <Suspense>.
+ * Pass-1 preflight render.
+ *
+ * Walks the component tree with a NullWriter (discards all HTML output) so
+ * that all `useServerData` promises are resolved into the `__hadarsUnsuspend`
+ * cache and all `context.head` mutations are applied.
+ *
+ * Components self-retry on suspension at the component level (see
+ * `renderComponent` catch block), so a single tree walk is sufficient.
+ *
+ * Call this before `renderToString` / `renderToStream` to guarantee a
+ * suspension-free, fully-synchronous second pass.
+ */
+export async function renderPreflight(
+  element: SlimNode,
+  options?: RenderOptions,
+): Promise<void> {
+  const idPrefix = options?.identifierPrefix ?? "";
+  // Start with null — pushContextValue lazily creates the Map only if a
+  // Context.Provider is actually rendered.
+  const prev = swapContextMap(null);
+  try {
+    resetRenderState(idPrefix);
+    NULL_WRITER.lastWasText = false;
+    // Components self-retry on suspension (see renderComponent catch block),
+    // so a single pass is guaranteed to complete with all promises resolved.
+    const r = renderNode(element, NULL_WRITER);
+    if (r && typeof (r as any).then === "function") {
+      const m = captureMap(); await r; swapContextMap(m);
+    }
+  } finally {
+    swapContextMap(prev);
+  }
+}
+
+/**
+ * Render a component tree to a complete HTML string.
+ *
+ * Components self-retry on suspension at the component level (see
+ * `renderComponent` catch block), so a single tree walk is sufficient
+ * even when `useServerData` or similar hooks are used without an explicit
+ * `<Suspense>` wrapper.
  */
 export async function renderToString(
   element: SlimNode,
   options?: RenderOptions,
 ): Promise<string> {
   const idPrefix = options?.identifierPrefix ?? "";
-  const contextMap = new Map<object, unknown>();
-  const prev = swapContextMap(contextMap);
+  // Start with null — pushContextValue lazily creates the Map only if a
+  // Context.Provider is actually rendered.
+  const prev = swapContextMap(null);
+  // Use a single mutable string rather than a chunks array + join() —
+  // JSC/V8 use rope strings for += that are flattened once at return time,
+  // avoiding all the array bookkeeping and the final allocation at join().
+  let output = "";
+  const writer: Writer = {
+    lastWasText: false,
+    write(c) { output += c; this.lastWasText = false; },
+    text(s) { output += s; this.lastWasText = true; },
+  };
   try {
-    for (let attempt = 0; attempt < MAX_SUSPENSE_RETRIES; attempt++) {
-      resetRenderState(idPrefix);
-      swapContextMap(contextMap); // re-activate our map on each retry
-      const chunks: string[] = [];
-      const writer: Writer = {
-        lastWasText: false,
-        write(c) { chunks.push(c); this.lastWasText = false; },
-        text(s) { chunks.push(s); this.lastWasText = true; },
-      };
-      try {
-        const r = renderNode(element, writer);
-        if (r && typeof (r as any).then === "function") {
-          const m = captureMap(); await r; swapContextMap(m);
-        }
-        return chunks.join("");
-      } catch (error) {
-        if (error && typeof (error as any).then === "function") {
-          const m = captureMap(); await (error as Promise<unknown>); swapContextMap(m);
-          continue;
-        }
-        throw error;
-      }
+    resetRenderState(idPrefix);
+    // Components self-retry on suspension (see renderComponent catch block),
+    // so a single pass is guaranteed to complete with all promises resolved.
+    const r = renderNode(element, writer);
+    if (r && typeof (r as any).then === "function") {
+      const m = captureMap(); await r; swapContextMap(m);
     }
-    throw new Error("[slim-react] renderToString exceeded maximum retries");
+    return output;
   } finally {
     swapContextMap(prev);
   }

@@ -74,22 +74,20 @@ export function useContext<T>(context: Context<T>): T {
 }
 
 // ---- Rendering ----
-import { renderToStream, renderToString, renderToReadableStream } from "./render";
-export { renderToStream, renderToString, renderToReadableStream, type RenderOptions } from "./render";
+import { renderToStream, renderToString, renderToReadableStream, renderPreflight } from "./render";
+export { renderToStream, renderToString, renderToReadableStream, renderPreflight, type RenderOptions } from "./render";
 
 // ---- Suspense (as a JSX tag) ----
 import { SUSPENSE_TYPE } from "./types";
 export const Suspense = SUSPENSE_TYPE;
 
 // ---- Compat utilities ----
-import { SLIM_ELEMENT, type SlimElement, type SlimNode } from "./types";
+import { SLIM_ELEMENT, REACT19_ELEMENT, type SlimElement, type SlimNode } from "./types";
 
 export function isValidElement(obj: unknown): obj is SlimElement {
-  return (
-    typeof obj === "object" &&
-    obj !== null &&
-    (obj as any).$$typeof === SLIM_ELEMENT
-  );
+  if (typeof obj !== "object" || obj === null) return false;
+  const t = (obj as any).$$typeof;
+  return t === SLIM_ELEMENT || t === REACT19_ELEMENT;
 }
 
 export function cloneElement(
@@ -98,7 +96,7 @@ export function cloneElement(
   ...children: SlimNode[]
 ): SlimElement {
   return {
-    $$typeof: SLIM_ELEMENT,
+    $$typeof: (element as any).$$typeof || SLIM_ELEMENT,
     type: element.type,
     props: {
       ...element.props,
@@ -115,18 +113,23 @@ export function cloneElement(
 
 export function forwardRef<P = any>(
   render: (props: P, ref: any) => SlimNode,
-): (props: P & { ref?: any }) => SlimNode {
-  const component = (props: P & { ref?: any }) =>
-    render(props, (props as any).ref ?? null);
-  (component as any).displayName =
-    (render as any).displayName || (render as any).name || "ForwardRef";
-  return component;
+): any {
+  return {
+    $$typeof: Symbol.for("react.forward_ref"),
+    render,
+    displayName: (render as any).displayName || (render as any).name || "ForwardRef",
+  };
 }
 
 export function memo<P = any>(
   component: (props: P) => SlimNode,
-): (props: P) => SlimNode {
-  return component; // no memoisation needed for SSR
+  compare?: (prevProps: P, nextProps: P) => boolean,
+): any {
+  return {
+    $$typeof: Symbol.for("react.memo"),
+    type: component,
+    compare: compare ?? null,
+  };
 }
 
 export function lazy<P = any>(
@@ -221,7 +224,7 @@ const React = {
   // Compat
   Children, Component, PureComponent,
   // Rendering
-  renderToStream, renderToString, renderToReadableStream,
+  renderToStream, renderToString, renderToReadableStream, renderPreflight,
   // Version
   version,
 };

@@ -8,7 +8,7 @@
     "target": "ESNext",
     "module": "ESNext",
     "moduleDetection": "force",
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "allowJs": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -31,7 +31,8 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     "../../shared/**/*.ts",
-    "../../shared/**/*.tsx"
+    "../../shared/**/*.tsx",
+    ".next/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

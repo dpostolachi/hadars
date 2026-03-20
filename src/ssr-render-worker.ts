@@ -13,6 +13,7 @@
 import { workerData, parentPort } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
 import { renderToString, createElement } from './slim-react/index';
+import { buildHeadHtml } from './utils/response';
 
 const { ssrBundlePath } = workerData as { ssrBundlePath: string };
 
@@ -42,43 +43,6 @@ function deserializeRequest(s: SerializableRequest): any {
     return req;
 }
 
-// ── Head HTML serialisation ────────────────────────────────────────────────
-
-const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c] ?? c);
-const escText = (s: string) => s.replace(/[&<>]/g, c => ESC[c] ?? c);
-
-const HEAD_ATTR: Record<string, string> = {
-    className: 'class', htmlFor: 'for', httpEquiv: 'http-equiv',
-    charSet: 'charset', crossOrigin: 'crossorigin',
-};
-
-function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, selfClose = false): string {
-    let a = ` id="${escAttr(id)}"`;
-    let inner = '';
-    for (const [k, v] of Object.entries(opts)) {
-        if (k === 'key' || k === 'children') continue;
-        if (k === 'dangerouslySetInnerHTML') { inner = (v as any).__html ?? ''; continue; }
-        const attr = HEAD_ATTR[k] ?? k;
-        if (v === true) a += ` ${attr}`;
-        else if (v !== false && v != null) a += ` ${attr}="${escAttr(String(v))}"`;
-    }
-    return selfClose ? `<${tag}${a}>` : `<${tag}${a}>${inner}</${tag}>`;
-}
-
-function buildHeadHtml(head: any): string {
-    let html = `<title>${escText(head.title ?? '')}</title>`;
-    for (const [id, opts] of Object.entries(head.meta ?? {}))
-        html += renderHeadTag('meta', id, opts as Record<string, unknown>, true);
-    for (const [id, opts] of Object.entries(head.link ?? {}))
-        html += renderHeadTag('link', id, opts as Record<string, unknown>, true);
-    for (const [id, opts] of Object.entries(head.style ?? {}))
-        html += renderHeadTag('style', id, opts as Record<string, unknown>);
-    for (const [id, opts] of Object.entries(head.script ?? {}))
-        html += renderHeadTag('script', id, opts as Record<string, unknown>);
-    return html;
-}
-
 // ── Full lifecycle ─────────────────────────────────────────────────────────
 
 async function runFullLifecycle(serialReq: SerializableRequest) {
@@ -101,32 +65,35 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
 
-    // renderToString internally retries until all Suspense/useServerData promises
-    // resolve, so its return value is already the final correct HTML — no second
-    // render pass needed.
+    // Single pass — component-level self-retry resolves all useServerData inline.
+    // context.head is fully populated by the time renderToString returns.
     let appHtml: string;
     try {
         appHtml = await renderToString(createElement(Component, props));
     } finally {
         (globalThis as any).__hadarsUnsuspend = null;
     }
+    // Head is captured after the render — all components have run.
+    const headHtml = buildHeadHtml(context.head);
+    const status = context.head.status ?? 200;
     const { context: _ctx, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
 
     // Collect fulfilled useServerData values for client-side hydration.
     const serverData: Record<string, unknown> = {};
+    let hasServerData = false;
     for (const [key, entry] of unsuspend.cache) {
-        if (entry.status === 'fulfilled') serverData[key] = entry.value;
+        if (entry.status === 'fulfilled') { serverData[key] = entry.value; hasServerData = true; }
     }
     const clientProps = {
         ...restProps,
         location: serialReq.location,
-        ...(Object.keys(serverData).length > 0 ? { __serverData: serverData } : {}),
+        ...(hasServerData ? { __serverData: serverData } : {}),
     };
 
     const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
     const html = `<div id="app">${appHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>`;
 
-    return { html, headHtml: buildHeadHtml(context.head), status: context.head.status ?? 200 };
+    return { html, headHtml, status };
 }
 
 // ── Message handler ────────────────────────────────────────────────────────

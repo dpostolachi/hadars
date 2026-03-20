@@ -19,19 +19,20 @@ interface BenchResults {
     duration:    number;
     connections: number;
     throughput: {
-        hadars: { rps: number; latP50: number; latP99: number; mbps: number };
-        nextjs: { rps: number; latP50: number; latP99: number; mbps: number };
+        hadars: { rps: number; latP50: number; latP99: number; mbps: number; peakRssMb: number; avgRssMb: number };
+        nextjs: { rps: number; latP50: number; latP99: number; mbps: number; peakRssMb: number; avgRssMb: number };
     };
     build: { hadarsMs: number; nextjsMs: number };
     playwright: {
-        hadars: { ttfb: number; fcp: number; domContentLoaded: number; load: number };
-        nextjs: { ttfb: number; fcp: number; domContentLoaded: number; load: number };
+        hadars: { ttfb: number; fcp: number; domContentLoaded: number; load: number; peakRssMb: number };
+        nextjs: { ttfb: number; fcp: number; domContentLoaded: number; load: number; peakRssMb: number };
     };
 }
 
 const r: BenchResults = JSON.parse(readFileSync(jsonPath, 'utf8'));
 
 const fmtMs  = (n: number) => `${n.toFixed(0)} ms`;
+const fmtMB  = (n: number) => `${n.toFixed(1)} MB`;
 const fmtSec = (ms: number) => ms > 0 ? `${(ms / 1000).toFixed(1)} s` : 'n/a';
 const fmtMBs = (n: number) => `${(n / 1_048_576).toFixed(2)} MB/s`;
 const winner = (hVal: number, nVal: number, lowerIsBetter = false): [string, string] => {
@@ -42,10 +43,12 @@ const winner = (hVal: number, nVal: number, lowerIsBetter = false): [string, str
 const hR = r.throughput.hadars;
 const nR = r.throughput.nextjs;
 
-const [hRps, nRps] = winner(hR.rps, nR.rps);
+const [hRps, nRps]     = winner(hR.rps, nR.rps);
 const [hLat50, nLat50] = winner(hR.latP50, nR.latP50, true);
 const [hLat99, nLat99] = winner(hR.latP99, nR.latP99, true);
-const [hMBs, nMBs]    = winner(Number((hR.mbps / 1_048_576).toFixed(2)), Number((nR.mbps / 1_048_576).toFixed(2)));
+const [hMBs, nMBs]     = winner(Number((hR.mbps / 1_048_576).toFixed(2)), Number((nR.mbps / 1_048_576).toFixed(2)));
+const [hPeakRss, nPeakRss] = winner(Number(hR.peakRssMb.toFixed(1)), Number(nR.peakRssMb.toFixed(1)), true);
+const [hAvgRss,  nAvgRss]  = winner(Number(hR.avgRssMb.toFixed(1)),  Number(nR.avgRssMb.toFixed(1)),  true);
 
 const hBuild = fmtSec(r.build.hadarsMs);
 const nBuild = fmtSec(r.build.nextjsMs);
@@ -56,6 +59,7 @@ const [hTtfb, nTtfb] = winner(hPw.ttfb, nPw.ttfb, true);
 const [hFcp,  nFcp]  = winner(hPw.fcp,  nPw.fcp,  true);
 const [hDcl,  nDcl]  = winner(hPw.domContentLoaded, nPw.domContentLoaded, true);
 const [hLoad, nLoad] = winner(hPw.load, nPw.load, true);
+const [hPwRss, nPwRss] = winner(Number(hPw.peakRssMb.toFixed(1)), Number(nPw.peakRssMb.toFixed(1)), true);
 
 const fmtRaw = (v: string, unit: (n: number) => string) => {
     const raw = Number(v.replace(/\*/g, ''));
@@ -80,6 +84,8 @@ const section = `\
 | Latency median | ${fmtRaw(hLat50, fmtMs)} | ${fmtRaw(nLat50, fmtMs)} |
 | Latency p99 | ${fmtRaw(hLat99, fmtMs)} | ${fmtRaw(nLat99, fmtMs)} |
 | Throughput | ${fmtRaw(hMBs, String)} MB/s | ${fmtRaw(nMBs, String)} MB/s |
+| Peak RSS | ${fmtRaw(hPeakRss, fmtMB)} | ${fmtRaw(nPeakRss, fmtMB)} |
+| Avg RSS | ${fmtRaw(hAvgRss, fmtMB)} | ${fmtRaw(nAvgRss, fmtMB)} |
 | Build time | ${hBuild} | ${nBuild} |
 
 **Page load** (Playwright · Chromium headless · median)
@@ -90,6 +96,7 @@ const section = `\
 | FCP | ${fmtRaw(hFcp, fmtMs)} | ${fmtRaw(nFcp, fmtMs)} |
 | DOMContentLoaded | ${fmtRaw(hDcl, fmtMs)} | ${fmtRaw(nDcl, fmtMs)} |
 | Load | ${fmtRaw(hLoad, fmtMs)} | ${fmtRaw(nLoad, fmtMs)} |
+| Peak RSS | ${fmtRaw(hPwRss, fmtMB)} | ${fmtRaw(nPwRss, fmtMB)} |
 `;
 
 const START_MARKER = '<!-- BENCHMARK_START -->';
