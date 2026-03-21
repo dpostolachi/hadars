@@ -172,7 +172,7 @@ dist/
 
   'src/App.tsx': () =>
 `import React from 'react';
-import { HadarsContext, HadarsHead, type HadarsApp } from 'hadars';
+import { HadarsHead, type HadarsApp } from 'hadars';
 
 const css = \`
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -284,15 +284,15 @@ const css = \`
 
 \`;
 
-const App: HadarsApp<{}> = ({ context }) => {
+const App: HadarsApp<{}> = () => {
   const [count, setCount] = React.useState(0);
 
   return (
-    <HadarsContext context={context}>
+    <>
       <HadarsHead status={200}>
         <title>My App</title>
-        <meta id="viewport" name="viewport" content="width=device-width, initial-scale=1" />
-        <style id="app-styles" dangerouslySetInnerHTML={{ __html: css }} />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <style data-id="app-styles" dangerouslySetInnerHTML={{ __html: css }} />
       </HadarsHead>
 
       <nav className="nav">
@@ -350,7 +350,7 @@ const App: HadarsApp<{}> = ({ context }) => {
         </div>
       </div>
 
-    </HadarsContext>
+    </>
   );
 };
 

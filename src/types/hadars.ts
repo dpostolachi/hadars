@@ -40,7 +40,6 @@ export interface AppContext {
 
 export type HadarsEntryBase = {
     location: string;
-    context: AppContext;
 }
 
 export type HadarsProps<T extends {}> = T & HadarsEntryBase;

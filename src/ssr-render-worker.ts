@@ -58,12 +58,14 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     let props: any = {
         ...(getInitProps ? await getInitProps(parsedReq) : {}),
         location: serialReq.location,
-        context,
     };
 
     // Create per-request cache for useServerData, active for all renders.
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
+    // Expose the head context so HadarsHead can write into it without needing
+    // the user to manually wrap their App with HadarsContext.
+    (globalThis as any).__hadarsContext = context;
 
     // Single pass — component-level self-retry resolves all useServerData inline.
     // context.head is fully populated by the time renderToString returns.
@@ -72,6 +74,7 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
         appHtml = await renderToString(createElement(Component, props));
     } finally {
         (globalThis as any).__hadarsUnsuspend = null;
+        (globalThis as any).__hadarsContext = null;
     }
     // Head is captured after the render — all components have run.
     const headHtml = buildHeadHtml(context.head);

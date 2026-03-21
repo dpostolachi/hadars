@@ -7,9 +7,9 @@ import React from 'react';
  * Promise.resolve(require('./LazyPanel')) on the server (inlined).
  */
 const LazyPanel: React.FC = () => (
-    <div className="demo-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}>
-        <span className="demo-label">loadModule — lazy chunk</span>
-        <span className="demo-value" style={{ color: 'var(--green, #22c55e)' }}>
+    <div className="flex flex-col gap-1 px-4 py-3">
+        <span className="text-sm text-muted-foreground">loadModule — lazy chunk</span>
+        <span className="text-sm text-emerald-400">
             ✓ This component was code-split into its own JS chunk on the client and bundled
             statically on the server.
         </span>

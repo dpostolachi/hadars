@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AppContext as HadarsAppContext, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
+import type { AppHead, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
 
 interface InnerContext {
     setTitle: (title: string) => void;
@@ -41,142 +41,95 @@ function deriveKey(tag: string, props: Record<string, any>): string {
     }
 }
 
-const AppContext = React.createContext<InnerContext>({
-    setTitle: () => {
-        console.warn('AppContext: setTitle called outside of provider');
-    },
-    addMeta: () => {
-        console.warn('AppContext: addMeta called outside of provider');
-    },
-    addLink: () => {
-        console.warn('AppContext: addLink called outside of provider');
-    },
-    addStyle: () => {
-        console.warn('AppContext: addStyle called outside of provider');
-    },
-    addScript: () => {
-        console.warn('AppContext: addScript called outside of provider');
-    },
-    setStatus: () => { },
-});
+// ── Head context resolution ──────────────────────────────────────────────────
+//
+// On the server, HadarsHead reads from globalThis.__hadarsContext.head which
+// the SSR render worker populates before every renderToString call.
+// On the client, HadarsHead directly manipulates the DOM.
+// This approach means users do NOT need to wrap their App with HadarsContext.
 
-export const AppProviderSSR: React.FC<{
-    children: React.ReactNode,
-    context: HadarsAppContext,
-}> = React.memo( ({ children, context }) => {
+const LINK_ATTR: Record<string, string> = {
+    crossOrigin: 'crossorigin',
+    referrerPolicy: 'referrerpolicy',
+    fetchPriority: 'fetchpriority',
+    hrefLang: 'hreflang',
+};
 
-    const { head } = context;
+function makeServerCtx(head: AppHead): InnerContext {
+    return {
+        setTitle:  (t) => { head.title = t; },
+        addMeta:   (p) => { head.meta[deriveKey('meta', p as any)]     = p; },
+        addLink:   (p) => { head.link[deriveKey('link', p as any)]     = p; },
+        addStyle:  (p) => { head.style[deriveKey('style', p as any)]   = p; },
+        addScript: (p) => { head.script[deriveKey('script', p as any)] = p; },
+        setStatus: (s) => { head.status = s; },
+    };
+}
 
-    // mutate seoData
-    const setTitle = React.useCallback((title: string) => {
-        head.title = title;
-    }, [head]);
-    const addMeta = React.useCallback((props: MetaProps) => {
-        head.meta[deriveKey('meta', props as any)] = props;
-    }, [head]);
-    const addLink = React.useCallback((props: LinkProps) => {
-        head.link[deriveKey('link', props as any)] = props;
-    }, [head]);
-    const addStyle = React.useCallback((props: StyleProps) => {
-        head.style[deriveKey('style', props as any)] = props;
-    }, [head]);
-    const addScript = React.useCallback((props: ScriptProps) => {
-        head.script[deriveKey('script', props as any)] = props;
-    }, [head]);
+// Lazy singleton for the client-side DOM context.
+let _cliCtx: InnerContext | null = null;
 
-    const setStatus = React.useCallback((status: number) => {
-        head.status = status;
-    }, [head]);
+function makeClientCtx(): InnerContext {
+    if (_cliCtx) return _cliCtx;
+    _cliCtx = {
+        setTitle: (title) => { document.title = title; },
+        setStatus: () => { /* no-op on client */ },
+        addMeta: (props) => {
+            const p = props as Record<string, any>;
+            let meta: HTMLMetaElement | null = null;
+            if (p.name) meta = document.querySelector(`meta[name="${CSS.escape(p.name)}"]`);
+            else if (p.property) meta = document.querySelector(`meta[property="${CSS.escape(p.property)}"]`);
+            else if (p.httpEquiv ?? p['http-equiv']) meta = document.querySelector(`meta[http-equiv="${CSS.escape(p.httpEquiv ?? p['http-equiv'])}"]`);
+            else if ('charSet' in p || 'charset' in p) meta = document.querySelector('meta[charset]');
+            if (!meta) { meta = document.createElement('meta'); document.head.appendChild(meta); }
+            for (const [k, v] of Object.entries(p)) {
+                if (v != null && v !== false) meta.setAttribute(k === 'charSet' ? 'charset' : k === 'httpEquiv' ? 'http-equiv' : k, String(v));
+            }
+        },
+        addLink: (props) => {
+            const p = props as Record<string, any>;
+            let link: HTMLLinkElement | null = null;
+            const asSel = p.as ? `[as="${CSS.escape(p.as)}"]` : '';
+            if (p.rel && p.href) link = document.querySelector(`link[rel="${CSS.escape(p.rel)}"][href="${CSS.escape(p.href)}"]${asSel}`);
+            else if (p.rel) link = document.querySelector(`link[rel="${CSS.escape(p.rel)}"]${asSel}`);
+            if (!link) { link = document.createElement('link'); document.head.appendChild(link); }
+            for (const [k, v] of Object.entries(p)) {
+                if (v != null && v !== false) link.setAttribute(LINK_ATTR[k] ?? k, String(v));
+            }
+        },
+        addStyle: (props) => {
+            const p = props as Record<string, any>;
+            let style: HTMLStyleElement | null = null;
+            if (p['data-id']) style = document.querySelector(`style[data-id="${CSS.escape(p['data-id'])}"]`);
+            if (!style) { style = document.createElement('style'); document.head.appendChild(style); }
+            for (const [k, v] of Object.entries(p)) {
+                if (k === 'dangerouslySetInnerHTML') { style.innerHTML = (v as any).__html ?? ''; continue; }
+                if (v != null && v !== false) style.setAttribute(k, String(v));
+            }
+        },
+        addScript: (props) => {
+            const p = props as Record<string, any>;
+            let script: HTMLScriptElement | null = null;
+            if (p.src) script = document.querySelector(`script[src="${CSS.escape(p.src)}"]`);
+            else if (p['data-id']) script = document.querySelector(`script[data-id="${CSS.escape(p['data-id'])}"]`);
+            if (!script) { script = document.createElement('script'); document.body.appendChild(script); }
+            for (const [k, v] of Object.entries(p)) {
+                if (k === 'dangerouslySetInnerHTML') { script.innerHTML = (v as any).__html ?? ''; continue; }
+                if (v != null && v !== false) script.setAttribute(k, String(v));
+            }
+        },
+    };
+    return _cliCtx;
+}
 
-    const contextValue: InnerContext = React.useMemo(() => ({
-        setTitle,
-        addMeta,
-        addLink,
-        addStyle,
-        addScript,
-        setStatus,
-    }), [ setTitle, addMeta, addLink, addStyle, addScript, setStatus]);
-    return (
-        <AppContext.Provider value={contextValue}>
-            {children}
-        </AppContext.Provider>
-    );
-} );
-
-export const AppProviderCSR: React.FC<{
-    children: React.ReactNode
-}> = React.memo( ({ children }) => {
-
-    const setTitle = React.useCallback((title: string) => {
-        document.title = title;
-    }, []);
-
-    const addMeta = React.useCallback((props: MetaProps) => {
-        const p = props as Record<string, any>;
-        let meta: HTMLMetaElement | null = null;
-        if (p.name) meta = document.querySelector(`meta[name="${CSS.escape(p.name)}"]`);
-        else if (p.property) meta = document.querySelector(`meta[property="${CSS.escape(p.property)}"]`);
-        else if (p.httpEquiv ?? p['http-equiv']) meta = document.querySelector(`meta[http-equiv="${CSS.escape(p.httpEquiv ?? p['http-equiv'])}"]`);
-        else if ('charSet' in p || 'charset' in p) meta = document.querySelector('meta[charset]');
-        if (!meta) { meta = document.createElement('meta'); document.head.appendChild(meta); }
-        for (const [k, v] of Object.entries(p)) {
-            if (v != null && v !== false) meta.setAttribute(k === 'charSet' ? 'charset' : k === 'httpEquiv' ? 'http-equiv' : k, String(v));
-        }
-    }, []);
-
-    const addLink = React.useCallback((props: LinkProps) => {
-        const p = props as Record<string, any>;
-        let link: HTMLLinkElement | null = null;
-        const asSel = p.as ? `[as="${CSS.escape(p.as)}"]` : '';
-        if (p.rel && p.href) link = document.querySelector(`link[rel="${CSS.escape(p.rel)}"][href="${CSS.escape(p.href)}"]${asSel}`);
-        else if (p.rel) link = document.querySelector(`link[rel="${CSS.escape(p.rel)}"]${asSel}`);
-        if (!link) { link = document.createElement('link'); document.head.appendChild(link); }
-        const LINK_ATTR: Record<string, string> = { crossOrigin: 'crossorigin', referrerPolicy: 'referrerpolicy', fetchPriority: 'fetchpriority', hrefLang: 'hreflang' };
-        for (const [k, v] of Object.entries(p)) {
-            if (v != null && v !== false) link.setAttribute(LINK_ATTR[k] ?? k, String(v));
-        }
-    }, []);
-
-    const addStyle = React.useCallback((props: StyleProps) => {
-        const p = props as Record<string, any>;
-        let style: HTMLStyleElement | null = null;
-        if (p['data-id']) style = document.querySelector(`style[data-id="${CSS.escape(p['data-id'])}"]`);
-        if (!style) { style = document.createElement('style'); document.head.appendChild(style); }
-        for (const [k, v] of Object.entries(p)) {
-            if (k === 'dangerouslySetInnerHTML') { style.innerHTML = (v as any).__html ?? ''; continue; }
-            if (v != null && v !== false) style.setAttribute(k, String(v));
-        }
-    }, []);
-
-    const addScript = React.useCallback((props: ScriptProps) => {
-        const p = props as Record<string, any>;
-        let script: HTMLScriptElement | null = null;
-        if (p.src) script = document.querySelector(`script[src="${CSS.escape(p.src)}"]`);
-        else if (p['data-id']) script = document.querySelector(`script[data-id="${CSS.escape(p['data-id'])}"]`);
-        if (!script) { script = document.createElement('script'); document.body.appendChild(script); }
-        for (const [k, v] of Object.entries(p)) {
-            if (k === 'dangerouslySetInnerHTML') { script.innerHTML = (v as any).__html ?? ''; continue; }
-            if (v != null && v !== false) script.setAttribute(k, String(v));
-        }
-    }, []);
-
-    const contextValue: InnerContext = React.useMemo(() => ({
-        setTitle,
-        addMeta,
-        addLink,
-        addStyle,
-        addScript,
-        setStatus: () => { },
-    }), [setTitle, addMeta, addLink, addStyle, addScript]);
-
-    return (
-        <AppContext.Provider value={contextValue}>
-            {children}
-        </AppContext.Provider>
-    );
-} );
-
-export const useApp = () => React.useContext(AppContext);
+function getCtx(): InnerContext | null {
+    if (typeof window === 'undefined') {
+        const head: AppHead | undefined = (globalThis as any).__hadarsContext?.head;
+        if (!head) return null;
+        return makeServerCtx(head);
+    }
+    return makeClientCtx();
+}
 
 // ── useServerData ─────────────────────────────────────────────────────────────
 //
@@ -319,54 +272,20 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const unsuspend: AppUnsuspend | undefined = (globalThis as any).__hadarsUnsuspend;
     if (!unsuspend) return undefined;
 
-    // ── per-pass key tracking ────────────────────────────────────────────────
-    // We keep two sets: keys seen in the current pass and keys seen in the
-    // previous pass.  When a pass throws a promise, the *next* call to
-    // useServerData marks the start of a new pass and rotates the sets.
-    //
-    // A key is unstable when a key that WAS seen in the previous pass is now
-    // absent from the current pass while a new key appears instead.  This means
-    // a component produced a different key string between passes (e.g. Date.now()
-    // in the key).  We fire immediately — there is no need to wait for other
-    // entries to settle first, because a legitimately-new component always extends
-    // seenLastPass (all previous keys remain present in seenThisPass).
+    // ── unstable-key detection ───────────────────────────────────────────────
+    // slim-react retries at component level (not full-tree), so cross-component
+    // pass-set tracking produces false positives for valid `async () => value`
+    // patterns.  Instead we count how many distinct pending entries have been
+    // created this request.  For N legitimate async components that is exactly N.
+    // An unstable key (e.g. Date.now() in the key) creates a new pending entry
+    // on every retry cycle, growing without bound — we catch that at 100.
     const _u = unsuspend as any;
-    if (!_u.seenThisPass) _u.seenThisPass = new Set<string>();
-    if (!_u.seenLastPass) _u.seenLastPass = new Set<string>();
-
-    if (_u.newPassStarting) {
-        // This is the first useServerData call after a thrown promise — rotate.
-        _u.seenLastPass = new Set(_u.seenThisPass);
-        _u.seenThisPass.clear();
-        _u.newPassStarting = false;
-    }
-    _u.seenThisPass.add(cacheKey);
+    if (!_u.pendingCreated) _u.pendingCreated = 0;
     // ────────────────────────────────────────────────────────────────────────
 
     const existing = unsuspend.cache.get(cacheKey);
 
     if (!existing) {
-        // Detect an unstable key: a key that was called in the previous pass is
-        // now absent while a new key has appeared.  This means a component
-        // generated a different key between passes — it will loop forever.
-        //
-        // We intentionally do NOT fire when seenLastPass is empty (first pass
-        // ever) or when all previous keys are still present (legitimate
-        // "new component reached for the first time" scenario).
-        if (_u.seenLastPass.size > 0) {
-            const hasVanishedKey = [..._u.seenLastPass as Set<string>].some(
-                (k: string) => !(_u.seenThisPass as Set<string>).has(k),
-            );
-            if (hasVanishedKey) {
-                throw new Error(
-                    `[hadars] useServerData: key ${JSON.stringify(cacheKey)} appeared in this pass ` +
-                    `but a key that was present in the previous pass is now missing. This means ` +
-                    `the key is not stable across render passes (e.g. it contains Date.now(), ` +
-                    `Math.random(), or a value that changes on every render). Keys must be deterministic.`,
-                );
-            }
-        }
-
         // First encounter — call fn(), which may:
         //   (a) return a Promise<T>  — async usage (serialised for the client)
         //   (b) return T synchronously — e.g. a sync data source
@@ -382,16 +301,22 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
         }
 
         // (a) Async Promise — standard useServerData usage.
+        _u.pendingCreated++;
+        if (_u.pendingCreated > 100) {
+            throw new Error(
+                `[hadars] useServerData: more than 100 async keys created in a single render. ` +
+                `This usually means a key is not stable between renders (e.g. it contains ` +
+                `Date.now() or Math.random()). Currently offending key: ${JSON.stringify(cacheKey)}.`,
+            );
+        }
         const promise = (result as Promise<T>).then(
             value => { unsuspend.cache.set(cacheKey, { status: 'fulfilled', value }); },
             reason => { unsuspend.cache.set(cacheKey, { status: 'rejected', reason }); },
         );
         unsuspend.cache.set(cacheKey, { status: 'pending', promise });
-        _u.newPassStarting = true; // next useServerData call opens a new pass
         throw promise; // slim-react will await and retry
     }
     if (existing.status === 'pending') {
-        _u.newPassStarting = true;
         throw existing.promise; // slim-react will await and retry
     }
     if (existing.status === 'rejected') throw existing.reason;
@@ -404,14 +329,10 @@ export const Head: React.FC<{
     status?: number;
 }> = React.memo( ({ children, status }) => {
 
-    const {
-        setStatus,
-        setTitle,
-        addMeta,
-        addLink,
-        addStyle,
-        addScript,
-    } = useApp();
+    const ctx = getCtx();
+    if (!ctx) return null;
+
+    const { setStatus, setTitle, addMeta, addLink, addStyle, addScript } = ctx;
 
     if ( status ) {
         setStatus(status);

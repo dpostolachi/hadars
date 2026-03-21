@@ -9,9 +9,6 @@ export type {
     HadarsApp,
 } from "./types/hadars";
 export { Head as HadarsHead, useServerData, initServerDataCache } from './utils/Head';
-import { AppProviderSSR, AppProviderCSR } from "./utils/Head";
-
-export const HadarsContext = typeof window === 'undefined' ? AppProviderSSR : AppProviderCSR;
 
 /**
  * Dynamically loads a module with target-aware behaviour:
