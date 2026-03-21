@@ -151,6 +151,27 @@ async function waitForPort(port: number, label: string, timeoutMs = 60_000): Pro
     throw new Error(`${label} did not become ready within ${timeoutMs / 1000}s`);
 }
 
+async function validateServer(url: string, label: string): Promise<void> {
+    process.stdout.write(`  Validating ${label} response…`);
+    let res: Response;
+    try {
+        res = await fetch(url);
+    } catch (err) {
+        throw new Error(`${label}: failed to connect — ${(err as Error).message}`);
+    }
+    if (res.status !== 200) {
+        throw new Error(`${label}: expected HTTP 200, got ${res.status}`);
+    }
+    const body = await res.text();
+    if (!body.includes('<html') && !body.includes('<!DOCTYPE')) {
+        throw new Error(`${label}: response does not look like HTML (body length ${body.length})`);
+    }
+    if (body.length < 500) {
+        throw new Error(`${label}: HTML response is suspiciously short (${body.length} bytes) — server may be returning an error page`);
+    }
+    console.log(` ok (${body.length} bytes)`);
+}
+
 function bench(url: string): Promise<Result> {
     return new Promise((resolve, reject) => {
         autocannon(
@@ -232,36 +253,16 @@ async function benchPlaywright(url: string, label: string, iterations: number): 
 
         await page.goto(url, { waitUntil: 'load' });
 
-        // Wait for the first-contentful-paint entry to appear. It is dispatched
-        // asynchronously after 'load' so it may not be in the list immediately.
-        const m = await page.evaluate((): Promise<PwMetrics> => {
-            return new Promise(resolve => {
-                const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
-                const existing = performance.getEntriesByType('paint')
-                    .find(p => p.name === 'first-contentful-paint');
-                if (existing) {
-                    resolve({
-                        ttfb:             nav.responseStart - nav.requestStart,
-                        fcp:              existing.startTime,
-                        domContentLoaded: nav.domContentLoadedEventEnd - nav.startTime,
-                        load:             nav.loadEventEnd - nav.startTime,
-                    });
-                    return;
-                }
-                const observer = new PerformanceObserver(list => {
-                    const entry = list.getEntriesByName('first-contentful-paint')[0];
-                    if (entry) {
-                        observer.disconnect();
-                        resolve({
-                            ttfb:             nav.responseStart - nav.requestStart,
-                            fcp:              entry.startTime,
-                            domContentLoaded: nav.domContentLoadedEventEnd - nav.startTime,
-                            load:             nav.loadEventEnd - nav.startTime,
-                        });
-                    }
-                });
-                observer.observe({ type: 'paint', buffered: true });
-            });
+        const m = await page.evaluate((): PwMetrics => {
+            const nav  = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+            const paint = performance.getEntriesByType('paint');
+            const fcp  = paint.find(p => p.name === 'first-contentful-paint')?.startTime ?? 0;
+            return {
+                ttfb:             nav.responseStart - nav.requestStart,
+                fcp,
+                domContentLoaded: nav.domContentLoadedEventEnd - nav.startTime,
+                load:             nav.loadEventEnd - nav.startTime,
+            };
         });
 
         ttfbs.push(m.ttfb);
@@ -347,6 +348,7 @@ async function main() {
         proc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [hadars] ${d}`));
         hadarsProc = proc;
         await waitForPort(HADARS_PORT, 'hadars');
+        await validateServer(HADARS_URL, 'hadars');
         return proc;
     };
 
@@ -355,6 +357,7 @@ async function main() {
         proc.stderr?.on('data', (d: Buffer) => process.stderr.write(`  [next]   ${d}`));
         nextProc = proc;
         await waitForPort(NEXTJS_PORT, 'Next.js');
+        await validateServer(NEXTJS_URL, 'Next.js');
         return proc;
     };
 

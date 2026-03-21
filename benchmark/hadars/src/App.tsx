@@ -1,5 +1,5 @@
 import React from 'react';
-import { HadarsContext, HadarsHead, type HadarsApp, type HadarsRequest } from 'hadars';
+import { HadarsHead, type HadarsApp, type HadarsRequest } from 'hadars';
 import { BenchPage } from '../../shared/BenchPage';
 import { fetchPosts, type Post } from '../../shared/data';
 
@@ -9,13 +9,13 @@ interface Props {
     runtime: string;
 }
 
-const App: HadarsApp<Props> = ({ posts, serverTime, runtime, context }) => (
-    <HadarsContext context={context}>
+const App: HadarsApp<Props> = ({ posts, serverTime, runtime }) => (
+    <>
         <HadarsHead status={200}>
             <title>SSR Benchmark — hadars</title>
         </HadarsHead>
         <BenchPage posts={posts} serverTime={serverTime} runtime={runtime} />
-    </HadarsContext>
+    </>
 );
 
 export const getInitProps = async (_req: HadarsRequest): Promise<Props> => {
