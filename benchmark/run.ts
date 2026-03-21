@@ -232,16 +232,36 @@ async function benchPlaywright(url: string, label: string, iterations: number): 
 
         await page.goto(url, { waitUntil: 'load' });
 
-        const m = await page.evaluate((): PwMetrics => {
-            const nav  = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
-            const paint = performance.getEntriesByType('paint');
-            const fcp  = paint.find(p => p.name === 'first-contentful-paint')?.startTime ?? 0;
-            return {
-                ttfb:             nav.responseStart - nav.requestStart,
-                fcp,
-                domContentLoaded: nav.domContentLoadedEventEnd - nav.startTime,
-                load:             nav.loadEventEnd - nav.startTime,
-            };
+        // Wait for the first-contentful-paint entry to appear. It is dispatched
+        // asynchronously after 'load' so it may not be in the list immediately.
+        const m = await page.evaluate((): Promise<PwMetrics> => {
+            return new Promise(resolve => {
+                const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+                const existing = performance.getEntriesByType('paint')
+                    .find(p => p.name === 'first-contentful-paint');
+                if (existing) {
+                    resolve({
+                        ttfb:             nav.responseStart - nav.requestStart,
+                        fcp:              existing.startTime,
+                        domContentLoaded: nav.domContentLoadedEventEnd - nav.startTime,
+                        load:             nav.loadEventEnd - nav.startTime,
+                    });
+                    return;
+                }
+                const observer = new PerformanceObserver(list => {
+                    const entry = list.getEntriesByName('first-contentful-paint')[0];
+                    if (entry) {
+                        observer.disconnect();
+                        resolve({
+                            ttfb:             nav.responseStart - nav.requestStart,
+                            fcp:              entry.startTime,
+                            domContentLoaded: nav.domContentLoadedEventEnd - nav.startTime,
+                            load:             nav.loadEventEnd - nav.startTime,
+                        });
+                    }
+                });
+                observer.observe({ type: 'paint', buffered: true });
+            });
         });
 
         ttfbs.push(m.ttfb);
