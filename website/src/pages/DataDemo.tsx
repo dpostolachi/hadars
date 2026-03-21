@@ -51,6 +51,28 @@ const DemoPlatformRow: React.FC = () => {
     );
 };
 
+// fn-stripping demo: the fetch URL and token below are server-only.
+// The hadars rspack loader replaces `fn` with `()=>undefined` in the client
+// bundle — so the secret endpoint and credentials never appear in browser JS.
+// To verify after `hadars build`: search the .hadars/static/ JS files for the
+// string "validate-token" — it will only be found in index.ssr.js (server),
+// never in the client chunks.
+const ServerOnlySecretRow: React.FC = () => {
+    useServerData<{ user: string; role: string }>(
+        'internal_auth_demo',
+        async () => {
+            // Everything inside this callback is stripped from the browser bundle.
+            const TOKEN = 'Bearer ey_super_secret_internal_token';
+            const url = 'https://internal-auth.internal/validate-token';
+            const data = await fetch(url, { headers: { Authorization: TOKEN } })
+                .then(r => r.json() as Promise<{ user: string; role: string }>)
+                .catch(() => null);
+            return data ?? { user: 'demo', role: 'viewer' };
+        },
+    );
+    return null;
+};
+
 // ── fetch interceptor installed at module load time ───────────────────────────
 // useServerData fires its fetch via queueMicrotask, which runs before any
 // useEffect can install an interceptor. Installing here ensures we catch it.
@@ -117,6 +139,7 @@ const DataDemo: React.FC = () => {
                             <span className="text-sm text-muted-foreground">fetching all four keys in one batched request</span>
                         </div>
                     }>
+                        <ServerOnlySecretRow />
                         <DemoHostnameRow />
                         <DemoUptimeRow />
                         <DemoEnvRow />

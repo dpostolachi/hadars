@@ -82,6 +82,9 @@ export const getReactResponse = async (
     // await continuations even when concurrent requests are in flight.
     const unsuspend = { cache: new Map<string, any>() };
     (globalThis as any).__hadarsUnsuspend = unsuspend;
+    // Expose the head context so HadarsHead can write into it without needing
+    // the user to manually wrap their App with HadarsContext.
+    (globalThis as any).__hadarsContext = context;
 
     const element = createElement(App as any, props as any);
 
@@ -94,6 +97,7 @@ export const getReactResponse = async (
         // Clear the global immediately — the closure-captured `unsuspend`
         // keeps the cache alive. Re-set inside getAppBody() for the second pass.
         (globalThis as any).__hadarsUnsuspend = null;
+        (globalThis as any).__hadarsContext = null;
     }
 
     // Head is fully populated — status is known.
@@ -104,10 +108,12 @@ export const getReactResponse = async (
     // (no async waits). The caller flushes head BEFORE calling this.
     const getAppBody = async (): Promise<string> => {
         (globalThis as any).__hadarsUnsuspend = unsuspend;
+        (globalThis as any).__hadarsContext = context;
         try {
             return await renderToString(element);
         } finally {
             (globalThis as any).__hadarsUnsuspend = null;
+            (globalThis as any).__hadarsContext = null;
         }
     };
 
