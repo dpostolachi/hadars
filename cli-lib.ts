@@ -43,6 +43,78 @@ async function loadConfig(configPath: string): Promise<HadarsOptions> {
   return (mod && (mod.default ?? mod)) as HadarsOptions
 }
 
+// ── hadars export cloudflare ─────────────────────────────────────────────────
+
+async function bundleCloudflare(
+    config: HadarsOptions,
+    configPath: string,
+    outputFile: string,
+    cwd: string,
+): Promise<void> {
+    console.log('Building hadars project...')
+    await Hadars.build({ ...config, mode: 'production' })
+
+    const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
+    const outHtml   = resolve(cwd, '.hadars', 'static', 'out.html')
+
+    if (!existsSync(ssrBundle)) {
+        console.error(`SSR bundle not found: ${ssrBundle}`)
+        process.exit(1)
+    }
+    if (!existsSync(outHtml)) {
+        console.error(`HTML template not found: ${outHtml}`)
+        process.exit(1)
+    }
+
+    // Resolve cloudflare.js from the dist/ directory (sibling of cli.js).
+    const cloudflareModule = resolve(dirname(fileURLToPath(import.meta.url)), 'cloudflare.js')
+    const shimPath = join(cwd, `.hadars-cloudflare-shim-${Date.now()}.ts`)
+    const shim = [
+        `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
+        `import outHtml from ${JSON.stringify(outHtml)};`,
+        `import { createCloudflareHandler } from ${JSON.stringify(cloudflareModule)};`,
+        `import config from ${JSON.stringify(configPath)};`,
+        `export default createCloudflareHandler(config as any, { ssrModule: ssrModule as any, outHtml });`,
+    ].join('\n') + '\n'
+    await writeFile(shimPath, shim, 'utf-8')
+
+    try {
+        const { build: esbuild } = await import('esbuild')
+        console.log(`Bundling Cloudflare Worker → ${outputFile}`)
+        await esbuild({
+            entryPoints: [shimPath],
+            bundle: true,
+            // 'browser' avoids Node.js built-in shims; CF Workers uses Web APIs.
+            // If you use node:* APIs in your app code, add nodejs_compat to wrangler.toml.
+            platform: 'browser',
+            format: 'esm',
+            target: ['es2022'],
+            outfile: outputFile,
+            sourcemap: false,
+            loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
+            // @rspack/* is build-time only — never imported at Worker runtime.
+            external: ['@rspack/*'],
+            // Cloudflare Workers supports the Web Crypto API natively; suppress
+            // esbuild's attempt to polyfill node:crypto.
+            define: { 'global': 'globalThis' },
+        })
+        console.log(`Cloudflare Worker bundle written to ${outputFile}`)
+        console.log(`\nDeploy instructions:`)
+        console.log(`  1. Ensure wrangler.toml points to the output file:`)
+        console.log(`       name = "my-app"`)
+        console.log(`       main = "${outputFile}"`)
+        console.log(`       compatibility_date = "2024-09-23"`)
+        console.log(`       compatibility_flags = ["nodejs_compat"]`)
+        console.log(`  2. Upload .hadars/static/ assets to R2 (or another CDN):`)
+        console.log(`       wrangler r2 object put my-bucket/assets/ --file .hadars/static/ --recursive`)
+        console.log(`  3. Add a route rule in wrangler.toml to send *.js / *.css to R2`)
+        console.log(`     and all other requests to the Worker.`)
+        console.log(`  4. Deploy: wrangler deploy`)
+    } finally {
+        await unlink(shimPath).catch(() => {})
+    }
+}
+
 // ── hadars export lambda ────────────────────────────────────────────────────
 
 async function bundleLambda(
@@ -388,7 +460,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -436,13 +508,18 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
             process.exit(0)
         case 'export': {
             const subCmd = argv[3]
-            if (subCmd !== 'lambda') {
-                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Did you mean: hadars export lambda`)
+            if (subCmd === 'lambda') {
+                const outputFile = resolve(cwd, argv[4] ?? 'lambda.mjs')
+                await bundleLambda(cfg, configPath, outputFile, cwd)
+                process.exit(0)
+            } else if (subCmd === 'cloudflare') {
+                const outputFile = resolve(cwd, argv[4] ?? 'cloudflare.mjs')
+                await bundleCloudflare(cfg, configPath, outputFile, cwd)
+                process.exit(0)
+            } else {
+                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare`)
                 process.exit(1)
             }
-            const outputFile = resolve(cwd, argv[4] ?? 'lambda.mjs')
-            await bundleLambda(cfg, configPath, outputFile, cwd)
-            process.exit(0)
         }
         case 'run':
             console.log('Running project...')

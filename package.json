@@ -31,10 +31,15 @@
       "types": "./dist/lambda.d.ts",
       "import": "./dist/lambda.js",
       "require": "./dist/lambda.cjs"
+    },
+    "./cloudflare": {
+      "types": "./dist/cloudflare.d.ts",
+      "import": "./dist/cloudflare.js",
+      "require": "./dist/cloudflare.cjs"
     }
   },
   "scripts": {
-    "build:lib": "tsup src/index.tsx src/lambda.ts src/slim-react/index.ts src/slim-react/jsx-runtime.ts --format esm,cjs --dts --out-dir dist --clean --external '@rspack/*' --external '@rspack/binding'",
+    "build:lib": "tsup src/index.tsx src/lambda.ts src/cloudflare.ts src/slim-react/index.ts src/slim-react/jsx-runtime.ts --format esm,cjs --dts --out-dir dist --clean --external '@rspack/*' --external '@rspack/binding'",
     "build:cli": "node build-scripts/build-cli.mjs",
     "build:all": "npm run build:lib && npm run build:cli",
     "test": "bun test test/render-compare.test.tsx && bun test test/ssr.test.ts",

@@ -27,6 +27,7 @@ const NAV = [
             { to: '/docs/api', label: 'API Reference' },
             { to: '/docs/slim-react', label: 'slim-react' },
             { to: '/docs/deployment', label: 'Deployment' },
+            { to: '/docs/cloudflare', label: 'Cloudflare Workers' },
         ],
     },
     {

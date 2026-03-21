@@ -79,17 +79,17 @@ export default config;
 **src/App.tsx**
 ```tsx
 import React from 'react';
-import { HadarsContext, HadarsHead, type HadarsApp, type HadarsRequest } from 'hadars';
+import { HadarsHead, type HadarsApp, type HadarsRequest } from 'hadars';
 
 interface Props { user: { name: string } }
 
-const App: HadarsApp<Props> = ({ user, context }) => (
-    <HadarsContext context={context}>
+const App: HadarsApp<Props> = ({ user }) => (
+    <>
         <HadarsHead status={200}>
             <title>Hello {user.name}</title>
         </HadarsHead>
         <h1>Hello, {user.name}!</h1>
-    </HadarsContext>
+    </>
 );
 
 export const getInitProps = async (req: HadarsRequest): Promise<Props> => ({
@@ -116,6 +116,9 @@ hadars run
 
 # Bundle the app into a single self-contained Lambda .mjs file
 hadars export lambda [output.mjs]
+
+# Bundle the app into a single self-contained Cloudflare Worker .mjs file
+hadars export cloudflare [output.mjs]
 ```
 
 ## Features
@@ -284,6 +287,69 @@ Client-side code (anything that runs in the browser) is an exception: `process.e
 ### `useServerData` on Lambda
 
 Client-side navigation sends a `GET <url>` request with `Accept: application/json` to refetch server data. The Lambda handler returns a JSON `{ serverData }` map for these requests — the same as the regular server does — so `useServerData` works identically in both deployment modes.
+
+## Cloudflare Workers
+
+hadars apps can be deployed to Cloudflare Workers. The Worker handles SSR; static assets (JS, CSS, fonts) are served from R2 or another CDN.
+
+### Single-file bundle
+
+`hadars export cloudflare` produces a self-contained `.mjs` Worker script. Unlike the Lambda adapter, no event format conversion is needed — Cloudflare Workers natively use the Web `Request`/`Response` API.
+
+```bash
+# Outputs cloudflare.mjs in the current directory
+hadars export cloudflare
+
+# Custom output path
+hadars export cloudflare dist/worker.mjs
+```
+
+The command:
+1. Runs `hadars build`
+2. Generates an entry shim with static imports of the SSR module and `out.html`
+3. Bundles everything into a single ESM `.mjs` with esbuild (`platform: browser`, `target: es2022`)
+4. Prints wrangler deploy instructions
+
+### Deploy steps
+
+1. Add a `wrangler.toml` pointing at the output file:
+
+```toml
+name = "my-app"
+main = "cloudflare.mjs"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+```
+
+2. Upload `.hadars/static/` assets to R2 and configure routing rules so static file extensions (`*.js`, `*.css`, etc.) are served from R2 and all other requests go to the Worker.
+
+3. Deploy:
+
+```bash
+wrangler deploy
+```
+
+### `createCloudflareHandler` API
+
+```ts
+import { createCloudflareHandler, type CloudflareBundled } from 'hadars/cloudflare';
+import * as ssrModule from './.hadars/index.ssr.js';
+import outHtml from './.hadars/static/out.html';
+import config from './hadars.config';
+
+export default createCloudflareHandler(config, { ssrModule, outHtml });
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `options` | `HadarsOptions` | Same config object used for `dev`/`run` |
+| `bundled` | `CloudflareBundled` | Pre-loaded SSR module + HTML template |
+
+The returned object is a standard Cloudflare Workers export (`{ fetch(req, env, ctx) }`).
+
+### CPU time
+
+hadars uses [slim-react](#slim-react) for SSR which is synchronous and typically renders a page in under 3 ms — well within Cloudflare's 10 ms free-plan CPU budget. Paid plans (Workers Paid) have no CPU time limit.
 
 ## slim-react
 
