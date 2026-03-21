@@ -273,17 +273,20 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     if (!unsuspend) return undefined;
 
     // ── unstable-key detection ───────────────────────────────────────────────
-    // slim-react retries at component level (not full-tree), so cross-component
-    // pass-set tracking produces false positives for valid `async () => value`
-    // patterns.  Instead we count how many distinct pending entries have been
-    // created this request.  For N legitimate async components that is exactly N.
-    // An unstable key (e.g. Date.now() in the key) creates a new pending entry
-    // on every retry cycle, growing without bound — we catch that at 100.
+    // Track the last key thrown as a pending promise and whether it was accessed
+    // as a cache hit in the current pass. If a new pending entry appears while
+    // the previous pending key resolved but was never requested, the key is
+    // changing between passes (e.g. Date.now() or Math.random() in the key).
     const _u = unsuspend as any;
     if (!_u.pendingCreated) _u.pendingCreated = 0;
     // ────────────────────────────────────────────────────────────────────────
 
     const existing = unsuspend.cache.get(cacheKey);
+
+    // Mark the previous pending key as accessed when it appears as a cache hit.
+    if (existing?.status === 'fulfilled' && _u.lastPendingKey === cacheKey) {
+        _u.lastPendingKeyAccessed = true;
+    }
 
     if (!existing) {
         // First encounter — call fn(), which may:
@@ -301,6 +304,23 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
         }
 
         // (a) Async Promise — standard useServerData usage.
+
+        // Unstable-key detection: the previous pending key resolved but was never
+        // requested in the current pass — a new key replaced it, which means the
+        // key is not stable between render passes.
+        if (_u.lastPendingKey != null && !_u.lastPendingKeyAccessed) {
+            const prev = unsuspend.cache.get(_u.lastPendingKey);
+            if (prev?.status === 'fulfilled') {
+                throw new Error(
+                    `[hadars] useServerData: key ${JSON.stringify(cacheKey)} is not stable between render passes. ` +
+                    `The previous pass resolved ${JSON.stringify(_u.lastPendingKey)} but it was not ` +
+                    `requested in this pass — the key is changing between renders. ` +
+                    `Avoid dynamic values in keys (e.g. Date.now() or Math.random()); ` +
+                    `use stable, deterministic identifiers instead.`,
+                );
+            }
+        }
+
         _u.pendingCreated++;
         if (_u.pendingCreated > 100) {
             throw new Error(
@@ -309,6 +329,10 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
                 `Date.now() or Math.random()). Currently offending key: ${JSON.stringify(cacheKey)}.`,
             );
         }
+
+        _u.lastPendingKey = cacheKey;
+        _u.lastPendingKeyAccessed = false;
+
         const promise = (result as Promise<T>).then(
             value => { unsuspend.cache.set(cacheKey, { status: 'fulfilled', value }); },
             reason => { unsuspend.cache.set(cacheKey, { status: 'rejected', reason }); },
