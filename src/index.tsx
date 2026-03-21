@@ -7,6 +7,9 @@ export type {
     HadarsGetClientProps,
     HadarsEntryModule,
     HadarsApp,
+    HadarsStaticContext,
+    GraphQLExecutor,
+    HadarsSourceEntry,
 } from "./types/hadars";
 export { Head as HadarsHead, useServerData, initServerDataCache } from './utils/Head';
 

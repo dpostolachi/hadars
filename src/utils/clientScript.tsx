@@ -22,6 +22,15 @@ const getProps = () => {
 const main = async () => {
     let props = getProps();
 
+    // Extract the static-export flag before it reaches user code. When set,
+    // useServerData fetches index.json sidecars directly on client navigation
+    // instead of requesting the live SSR server with Accept: application/json.
+    if ((props as any).__hadarsStatic) {
+        (globalThis as any).__hadarsStatic = true;
+        const { __hadarsStatic: _, ...rest } = props as any;
+        props = rest;
+    }
+
     // Seed the useServerData client cache from server-resolved values before
     // hydration so that hooks return the same data on the first render.
     if (props.__serverData && typeof props.__serverData === 'object') {

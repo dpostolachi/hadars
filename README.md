@@ -114,6 +114,9 @@ hadars build
 # Serve the production build
 hadars run
 
+# Pre-render every page to static HTML files (output goes to out/ by default)
+hadars export static [outDir]
+
 # Bundle the app into a single self-contained Lambda .mjs file
 hadars export lambda [output.mjs]
 
@@ -181,6 +184,9 @@ const UserCard = ({ userId }: { userId: string }) => {
 | `htmlTemplate` | `string` | - | Path to a custom HTML template with `HADARS_HEAD` / `HADARS_BODY` markers |
 | `optimization` | `object` | - | Override rspack `optimization` for production client builds |
 | `cache` | `function` | - | SSR response cache for `run()` mode; return `{ key, ttl? }` to cache a request |
+| `paths` | `function` | - | Returns URL list to pre-render with `hadars export static`; receives `HadarsStaticContext` |
+| `sources` | `array` | - | Gatsby-compatible source plugins; hadars infers a GraphQL schema from their nodes |
+| `graphql` | `function` | - | Custom GraphQL executor passed to `paths()` and `getInitProps()` as `ctx.graphql` |
 
 ### moduleRules example
 
@@ -214,6 +220,163 @@ const config: HadarsOptions = {
 };
 
 export default config;
+```
+
+## Static Export
+
+> **Experimental.** Static export and Gatsby-compatible source plugins are new features. The API — including config shape, context object, and schema inference behaviour — may change in future releases without a major version bump.
+
+Pre-render every page to a plain HTML file and deploy to any static host — no server required.
+
+```bash
+# Output goes to out/ by default
+hadars export static
+
+# Custom output directory
+hadars export static dist
+```
+
+Add a `paths` function to `hadars.config.ts` that returns the list of URLs to pre-render:
+
+```ts
+// hadars.config.ts
+import type { HadarsOptions } from 'hadars';
+
+export default {
+    entry: './src/App.tsx',
+    paths: () => ['/', '/about', '/contact'],
+} satisfies HadarsOptions;
+```
+
+Each URL is written as `<outDir>/<path>/index.html` plus an `index.json` sidecar so `useServerData` keeps working on client-side navigation without a live server. Static assets are copied from `.hadars/static/`.
+
+### Data in static pages
+
+`getInitProps` receives a `HadarsStaticContext` as its second argument during static export. Use it to fetch data from a database, API, or GraphQL layer:
+
+```ts
+import type { HadarsApp, HadarsRequest, HadarsStaticContext } from 'hadars';
+
+export const getInitProps = async (
+    req: HadarsRequest,
+    ctx?: HadarsStaticContext,
+): Promise<Props> => {
+    if (!ctx) return { posts: [] };
+    const { data } = await ctx.graphql('{ allPost { id title } }');
+    return { posts: data?.allPost ?? [] };
+};
+```
+
+## Source Plugins
+
+hadars source plugins follow the same API as Gatsby's `sourceNodes` — so most existing Gatsby CMS source plugins work out of the box. Each plugin creates typed nodes in an in-memory store; hadars infers a GraphQL schema automatically and exposes it to `paths()` and `getInitProps()`.
+
+During `hadars dev`, a GraphiQL IDE is available at `/__hadars/graphql` so you can explore the inferred schema while you build.
+
+### Install graphql
+
+Schema inference requires `graphql` to be installed in your project:
+
+```bash
+npm install graphql
+```
+
+### Config
+
+```ts
+// hadars.config.ts
+import type { HadarsOptions, HadarsStaticContext } from 'hadars';
+
+export default {
+    entry: './src/App.tsx',
+
+    sources: [
+        {
+            resolve: 'gatsby-source-contentful',
+            options: {
+                spaceId: process.env.CONTENTFUL_SPACE_ID,
+                accessToken: process.env.CONTENTFUL_ACCESS_TOKEN,
+            },
+        },
+    ],
+
+    paths: async ({ graphql }: HadarsStaticContext) => {
+        const { data } = await graphql(`{ allContentfulBlogPost { slug } }`);
+        const slugs = data?.allContentfulBlogPost?.map((p: any) => p.slug) ?? [];
+        return ['/', ...slugs.map((s: string) => `/post/${s}`)];
+    },
+} satisfies HadarsOptions;
+```
+
+### Local source plugin
+
+Pass a pre-imported module instead of a package name to use a local plugin without publishing it to npm:
+
+```ts
+// src/posts-source.ts
+export async function sourceNodes(
+    { actions, createNodeId, createContentDigest }: any,
+    options: { dataDir: string } = {},
+) {
+    const { createNode } = actions;
+    const posts = await fetchPostsFromMyApi();
+    for (const post of posts) {
+        createNode({
+            ...post,
+            id: createNodeId(post.slug),
+            internal: { type: 'BlogPost', contentDigest: createContentDigest(post) },
+        });
+    }
+}
+```
+
+```ts
+// hadars.config.ts
+import * as postsSource from './src/posts-source';
+
+export default {
+    entry: './src/App.tsx',
+    sources: [{ resolve: postsSource }],
+    paths: async ({ graphql }) => {
+        const { data } = await graphql('{ allBlogPost { slug } }');
+        return ['/', ...(data?.allBlogPost ?? []).map((p: any) => `/post/${p.slug}`)];
+    },
+} satisfies HadarsOptions;
+```
+
+### Inferred GraphQL schema
+
+For each node type (e.g. `BlogPost`) you get two root queries:
+
+| Query | Returns |
+|---|---|
+| `allBlogPost` | Every BlogPost node |
+| `blogPost(id, slug, title, …)` | First node matching all supplied args |
+
+All scalar fields are automatically added as optional lookup arguments, so you can do `blogPost(slug: "hello")` without knowing the hashed node id.
+
+### Custom GraphQL executor
+
+Skip `sources` and provide a `graphql` executor directly for full control over resolvers:
+
+```ts
+import { graphql, buildSchema } from 'graphql';
+import type { HadarsOptions } from 'hadars';
+
+const schema = buildSchema(`
+    type Post { id: ID! title: String slug: String }
+    type Query { allPost: [Post!]! }
+`);
+
+export default {
+    entry: './src/App.tsx',
+    graphql: (query, variables) =>
+        graphql({ schema, rootValue: { allPost: fetchPostsFromDb }, source: query, variableValues: variables }),
+    paths: async ({ graphql }) => {
+        const { data } = await graphql('{ allPost { slug } }');
+        return ['/', ...(data?.allPost ?? []).map((p: any) => `/post/${p.slug}`)];
+    },
+} satisfies HadarsOptions;
 ```
 
 ## AWS Lambda

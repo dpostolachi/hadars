@@ -20,6 +20,9 @@ import {
     buildSsrResponse, makePrecontentHtmlGetter,
     type CacheFetchHandler, createRenderCache,
 } from './utils/ssrHandler';
+import { runSources } from './source/runner';
+import { buildSchemaExecutor } from './source/inference';
+import { createGraphiqlHandler, GRAPHQL_PATH } from './source/graphiql';
 
 /**
  * Reads an HTML template, processes any `<style>` blocks through PostCSS
@@ -295,6 +298,26 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const handleWS = upgradeHandler(options);
     const handler = options.fetch;
 
+    // Run source plugins and set up GraphiQL if config.sources is present.
+    let handleGraphiql: ((req: Request) => Promise<Response | undefined>) | null = null;
+    let devStaticCtx: { graphql: import('./types/hadars').GraphQLExecutor } | undefined;
+    if (options.sources && options.sources.length > 0) {
+        console.log(`[hadars] Running ${options.sources.length} source plugin(s)…`);
+        try {
+            const store = await runSources(options.sources);
+            const executor = await buildSchemaExecutor(store);
+            if (executor) {
+                devStaticCtx = { graphql: executor };
+                handleGraphiql = createGraphiqlHandler(executor);
+                console.log(`[hadars] GraphiQL available at http://localhost:${port}${GRAPHQL_PATH}`);
+            } else {
+                console.warn('[hadars] `graphql` package not found — GraphiQL disabled. Run: npm install graphql');
+            }
+        } catch (err) {
+            console.error('[hadars] Source plugin error:', err);
+        }
+    }
+
     const entry = pathMod.resolve(__dirname, options.entry);
     const hmrPort = options.hmrPort ?? port + 1;
 
@@ -491,6 +514,11 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         }
         if (handleWS && handleWS(request, ctx)) return undefined;
 
+        if (handleGraphiql) {
+            const graphiqlRes = await handleGraphiql(req);
+            if (graphiqlRes) return graphiqlRes;
+        }
+
         const proxied = await handleProxy(request);
         if (proxied) return proxied;
 
@@ -525,6 +553,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                     getInitProps,
                     getFinalProps,
                 },
+                staticCtx: devStaticCtx,
             });
 
             // Content negotiation: if the client only accepts JSON (client-side

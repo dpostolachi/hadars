@@ -28,6 +28,7 @@ const NAV = [
             { to: '/docs/slim-react', label: 'slim-react' },
             { to: '/docs/deployment', label: 'Deployment' },
             { to: '/docs/cloudflare', label: 'Cloudflare Workers' },
+            { to: '/docs/static-export', label: 'Static Export & Sources' },
         ],
     },
     {

@@ -1,0 +1,26 @@
+[
+  {
+    "slug": "hello-world",
+    "title": "Hello World",
+    "date": "2026-01-10",
+    "author": "Ada Lovelace",
+    "excerpt": "The first post on this blog. Welcome!",
+    "body": "This is the first post. We are testing the hadars source plugin system, which is modelled after Gatsby's sourceNodes API."
+  },
+  {
+    "slug": "graphql-in-hadars",
+    "title": "GraphQL in hadars",
+    "date": "2026-02-14",
+    "author": "Alan Turing",
+    "excerpt": "How hadars infers a GraphQL schema from source plugin nodes.",
+    "body": "The hadars source system runs Gatsby-compatible source plugins, collects nodes into an in-memory store, infers a GraphQL schema, and exposes it via a GraphiQL IDE at /__hadars/graphql during dev mode."
+  },
+  {
+    "slug": "static-export",
+    "title": "Static export with data",
+    "date": "2026-03-01",
+    "author": "Grace Hopper",
+    "excerpt": "Pre-render pages that depend on source plugin data.",
+    "body": "The paths() function receives a graphql executor backed by your source nodes. Query for all posts, map to URL paths, and hadars pre-renders each one to index.html + index.json sidecars."
+  }
+]

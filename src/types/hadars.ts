@@ -1,6 +1,35 @@
 import type { LinkHTMLAttributes, MetaHTMLAttributes, ScriptHTMLAttributes, StyleHTMLAttributes } from "react";
 
-export type HadarsGetInitialProps<T extends {}> = (req: HadarsRequest) => Promise<T> | T;
+/**
+ * In-process GraphQL executor passed to `getInitProps` and `paths` during
+ * `hadars export static`. Hadars is executor-agnostic — configure it in
+ * `hadars.config.ts` using any GraphQL library (e.g. `graphql-js`):
+ *
+ * ```ts
+ * import { graphql as gql, buildSchema } from 'graphql';
+ * const schema = buildSchema(`type Query { hello: String }`);
+ * const rootValue = { hello: () => 'world' };
+ *
+ * export default {
+ *   graphql: (query, variables) =>
+ *     gql({ schema, rootValue, source: query, variableValues: variables }),
+ * } satisfies HadarsOptions;
+ * ```
+ */
+export type GraphQLExecutor = (
+    query: string,
+    variables?: Record<string, unknown>,
+) => Promise<{ data?: any; errors?: ReadonlyArray<{ message: string }> }>;
+
+/**
+ * Context passed as the second argument to `getInitProps` and `paths`
+ * during `hadars export static`. Not present in dev/run mode.
+ */
+export interface HadarsStaticContext {
+    graphql: GraphQLExecutor;
+}
+
+export type HadarsGetInitialProps<T extends {}> = (req: HadarsRequest, ctx?: HadarsStaticContext) => Promise<T> | T;
 export type HadarsGetClientProps<T extends {}> = (props: T) => Promise<T> | T;
 export type HadarsGetFinalProps<T extends {}> = (props: HadarsProps<T>) => Promise<T> | T;
 export type HadarsApp<T extends {}> = React.FC<HadarsProps<T>>;
@@ -180,6 +209,67 @@ export interface HadarsOptions {
      */
     cache?: (req: HadarsRequest) => { key: string; ttl?: number } | null | undefined
                                   | Promise<{ key: string; ttl?: number } | null | undefined>;
+    /**
+     * Static export path list. Required for `hadars export static`.
+     *
+     * Return an array of URL paths (e.g. `['/', '/about', '/blog/hello']`) that
+     * should be pre-rendered to HTML files. May be async.
+     *
+     * @example
+     * paths: () => ['/', '/about', '/contact']
+     *
+     * @example
+     * paths: async () => {
+     *   const posts = await fetchBlogPosts();
+     *   return ['/', ...posts.map(p => `/blog/${p.slug}`)];
+     * }
+     */
+    /**
+     * In-process GraphQL executor. Supply this to use the GraphQL data layer
+     * in `paths` and `getInitProps` during `hadars export static`.
+     * Has no effect in `dev` / `run` mode.
+     */
+    graphql?: GraphQLExecutor;
+    paths?: (ctx: HadarsStaticContext) => Promise<string[]> | string[];
+    /**
+     * Gatsby-compatible source plugins to run before `hadars export static`.
+     *
+     * Each entry mirrors Gatsby's `gatsby-config.js` plugin object format:
+     * `{ resolve: 'gatsby-source-contentful', options: { spaceId: '...', accessToken: '...' } }`
+     *
+     * The plugin must export a `sourceNodes` function with the standard Gatsby API.
+     * Hadars provides a thin shim covering the most-used surface:
+     * `actions.createNode`, `createNodeId`, `createContentDigest`, `cache`, `reporter`,
+     * `getNode`, `getNodes`, `getNodesByType`.
+     *
+     * After all sources have run, hadars auto-generates a GraphQL schema from the
+     * collected nodes and makes it available via `config.graphql` in `getInitProps`
+     * and `paths`. Requires `graphql` to be installed in the project.
+     *
+     * @example
+     * sources: [
+     *   {
+     *     resolve: 'gatsby-source-filesystem',
+     *     options: { name: 'posts', path: './content/posts' },
+     *   },
+     * ]
+     */
+    sources?: HadarsSourceEntry[];
+}
+
+/**
+ * A Gatsby-compatible source plugin entry, matching the format used in
+ * `gatsby-config.js` / `gatsby-config.ts`.
+ */
+export interface HadarsSourceEntry {
+    /**
+     * Package name (e.g. `'gatsby-source-contentful'`) or a pre-imported module
+     * object that exports `sourceNodes`. Using a module object lets you pass
+     * local source plugins without publishing them to npm.
+     */
+    resolve: string | { sourceNodes?: (ctx: any, opts?: any) => Promise<void> | void };
+    /** Plugin options forwarded as the second argument to `sourceNodes`. */
+    options?: Record<string, unknown>;
 }
 
 

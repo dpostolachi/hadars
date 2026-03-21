@@ -246,14 +246,23 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
             // render is registered against the same deferred before the fetch starts.
             queueMicrotask(async () => {
                 try {
-                    const res = await fetch(pathKey, {
-                        headers: { 'Accept': 'application/json' },
-                    });
-                    if (res.ok) {
-                        const json = await res.json() as { serverData: Record<string, unknown> };
-                        for (const [k, v] of Object.entries(json.serverData ?? {})) {
-                            clientServerDataCache.set(k, v);
-                        }
+                    let json: { serverData: Record<string, unknown> } | null = null;
+
+                    if ((globalThis as any).__hadarsStatic) {
+                        // Static export: the __hadarsStatic flag was embedded in the
+                        // page by `hadars export static`. Fetch the pre-generated
+                        // index.json sidecar directly — no live SSR server exists.
+                        const sidecarUrl = pathKey.replace(/\/$/, '') + '/index.json';
+                        const res = await fetch(sidecarUrl).catch(() => null);
+                        if (res?.ok) json = await res.json().catch(() => null);
+                    } else {
+                        // Live server: request the current URL with Accept: application/json.
+                        const res = await fetch(pathKey, { headers: { 'Accept': 'application/json' } });
+                        if (res.ok) json = await res.json();
+                    }
+
+                    for (const [k, v] of Object.entries(json?.serverData ?? {})) {
+                        clientServerDataCache.set(k, v);
                     }
                 } finally {
                     fetchedPaths.add(pathKey);

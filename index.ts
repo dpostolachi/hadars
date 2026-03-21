@@ -10,5 +10,8 @@ export type {
     HadarsGetClientProps,
     HadarsEntryModule,
     HadarsApp,
+    HadarsStaticContext,
+    GraphQLExecutor,
+    HadarsSourceEntry,
 } from "./src/types/hadars";
 export { HadarsHead, HadarsContext, loadModule } from "./src/index";

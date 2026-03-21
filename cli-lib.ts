@@ -1,9 +1,12 @@
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile, unlink } from 'node:fs/promises'
+import { mkdir, writeFile, unlink, readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as Hadars from './src/build'
-import type { HadarsOptions } from './src/types/hadars'
+import type { HadarsOptions, HadarsEntryModule } from './src/types/hadars'
+import { renderStaticSite } from './src/static'
+import { runSources } from './src/source/runner'
+import { buildSchemaExecutor } from './src/source/inference'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
 
@@ -41,6 +44,91 @@ async function loadConfig(configPath: string): Promise<HadarsOptions> {
   const url = `file://${configPath}`
   const mod = await import(url)
   return (mod && (mod.default ?? mod)) as HadarsOptions
+}
+
+// ── hadars export static ─────────────────────────────────────────────────────
+
+async function exportStatic(
+    config: HadarsOptions,
+    outputDir: string,
+    cwd: string,
+): Promise<void> {
+    if (!config.paths) {
+        console.error(
+            'Error: `paths` is not defined in your hadars config.\n' +
+            'Add a `paths` function that returns the list of URLs to pre-render:\n\n' +
+            '  paths: () => [\'/\', \'/about\', \'/contact\']\n',
+        )
+        process.exit(1)
+    }
+
+    console.log('Building hadars project...')
+    await Hadars.build({ ...config, mode: 'production' })
+
+    const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
+    const outHtml   = resolve(cwd, '.hadars', 'static', 'out.html')
+    const staticSrc = resolve(cwd, '.hadars', 'static')
+
+    if (!existsSync(ssrBundle)) {
+        console.error(`SSR bundle not found: ${ssrBundle}`)
+        process.exit(1)
+    }
+    if (!existsSync(outHtml)) {
+        console.error(`HTML template not found: ${outHtml}`)
+        process.exit(1)
+    }
+
+    const ssrModule  = await import(pathToFileURL(ssrBundle).href) as HadarsEntryModule<any>
+    const htmlSource = await readFile(outHtml, 'utf-8')
+    const outDir     = resolve(cwd, outputDir)
+
+    // Run source plugins (if any) and build an auto-generated GraphQL executor.
+    // An explicit config.graphql always takes precedence over the inferred one.
+    let graphql = config.graphql
+    if (config.sources && config.sources.length > 0) {
+        console.log(`Running ${config.sources.length} source plugin(s)...`)
+        const store = await runSources(config.sources)
+        if (!graphql) {
+            const inferred = await buildSchemaExecutor(store)
+            if (!inferred) {
+                console.error(
+                    'Error: `graphql` package not found.\n' +
+                    'Source plugins require graphql-js to be installed:\n\n' +
+                    '  npm install graphql\n',
+                )
+                process.exit(1)
+            }
+            graphql = inferred
+            console.log(`Schema inferred for types: ${store.getTypes().join(', ') || '(none)'}`)
+        }
+    }
+
+    const staticCtx = {
+        graphql: graphql ?? (() => Promise.reject(
+            new Error('[hadars] No graphql executor configured. Add a `graphql` function to your hadars.config.'),
+        )),
+    }
+
+    const paths = await config.paths(staticCtx)
+
+    console.log(`Pre-rendering ${paths.length} page(s)...`)
+
+    const { rendered, errors } = await renderStaticSite({
+        ssrModule,
+        htmlSource,
+        staticSrc,
+        paths,
+        outputDir: outDir,
+        graphql,
+    })
+
+    for (const p of rendered) console.log(`  [200] ${p}`)
+    for (const { path, error } of errors) console.error(`  [ERR] ${path}: ${error.message}`)
+
+    console.log(`\nExported to ${outputDir}/`)
+    if (errors.length > 0) console.log(`  ${errors.length} page(s) failed`)
+    console.log(`\nServe locally:`)
+    console.log(`  npx serve ${outputDir}`)
 }
 
 // ── hadars export cloudflare ─────────────────────────────────────────────────
@@ -460,7 +548,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export static [outDir]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -516,8 +604,12 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 const outputFile = resolve(cwd, argv[4] ?? 'cloudflare.mjs')
                 await bundleCloudflare(cfg, configPath, outputFile, cwd)
                 process.exit(0)
+            } else if (subCmd === 'static') {
+                const outDirArg = argv[4] ?? 'out'
+                await exportStatic(cfg, outDirArg, cwd)
+                process.exit(0)
             } else {
-                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare`)
+                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, static`)
                 process.exit(1)
             }
         }

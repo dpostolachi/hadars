@@ -1,5 +1,5 @@
 import type React from "react";
-import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext } from "../types/hadars";
+import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext, HadarsStaticContext } from "../types/hadars";
 import { renderToString, renderPreflight, createElement } from '../slim-react/index';
 
 interface ReactResponseOptions {
@@ -10,6 +10,7 @@ interface ReactResponseOptions {
         getInitProps: HadarsEntryModule<HadarsEntryBase>['getInitProps'];
         getFinalProps: HadarsEntryModule<HadarsEntryBase>['getFinalProps'];
     }
+    staticCtx?: HadarsStaticContext;
 }
 
 // ── Head HTML serialisation ────────────────────────────────────────────────
@@ -71,7 +72,7 @@ export const getReactResponse = async (
     };
 
     let props: HadarsEntryBase = {
-        ...(getInitProps ? await getInitProps(req) : {}),
+        ...(getInitProps ? await getInitProps(req, opts.staticCtx) : {}),
         location: req.location,
         context,
     } as HadarsEntryBase;
@@ -118,7 +119,7 @@ export const getReactResponse = async (
     };
 
     const finalize = async (): Promise<{ clientProps: Record<string, unknown> }> => {
-        const { context: _, ...restProps } = getFinalProps ? await getFinalProps(props) : props;
+        const restProps = getFinalProps ? await getFinalProps(props) : props;
         const serverData: Record<string, unknown> = {};
         let hasServerData = false;
         for (const [key, entry] of unsuspend.cache) {
