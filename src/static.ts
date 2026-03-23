@@ -51,6 +51,9 @@ export async function renderStaticSite(opts: {
         try {
             const req = parseRequest(new Request('http://localhost' + urlPath));
 
+            // Expose the executor globally so useGraphQL() in components can reach it.
+            (globalThis as any).__hadarsGraphQL = staticCtx.graphql;
+
             const { head, getAppBody, finalize } = await getReactResponse(req, {
                 document: {
                     body:          ssrModule.default as any,

@@ -23,8 +23,26 @@ export async function sourceNodes(
 
     reporter.info(`Reading posts from ${dir}/posts.json`);
 
-    const raw = await readFile(resolve(dir, 'posts.json'), 'utf-8');
-    const posts: RawPost[] = JSON.parse(raw);
+    let raw: string;
+    try {
+        raw = await readFile(resolve(dir, 'posts.json'), 'utf-8');
+    } catch (err) {
+        reporter.error(`Could not read posts.json from ${dir}`, err as Error);
+        return;
+    }
+
+    let posts: RawPost[];
+    try {
+        posts = JSON.parse(raw);
+    } catch (err) {
+        reporter.error(`posts.json contains invalid JSON`, err as Error);
+        return;
+    }
+
+    if (!Array.isArray(posts)) {
+        reporter.error(`posts.json must contain an array of post objects`);
+        return;
+    }
 
     for (const post of posts) {
         createNode({

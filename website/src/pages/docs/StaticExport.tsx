@@ -262,6 +262,128 @@ export default {
 }
             `}</Code>
 
+            <h3 className="text-lg font-semibold mb-3 mt-8 text-gradient-soft">useGraphQL hook</h3>
+            <p className="text-muted-foreground mb-4">
+                Query your GraphQL layer directly inside any component — no need to thread data
+                through {c('getInitProps')}. The hook integrates with {c('useServerData')} so queries
+                run on the server during static export and hydrate on the client at no extra cost.
+            </p>
+            <Code lang="tsx">{`
+import { useGraphQL } from 'hadars';
+import { GetAllPostsDocument } from './gql/graphql';
+
+const PostList = () => {
+    const result = useGraphQL(GetAllPostsDocument);
+    const posts = result?.data?.allBlogPost ?? [];
+    return <ul>{posts.map(p => <li key={p.id}>{p.title}</li>)}</ul>;
+};
+            `}</Code>
+            <p className="text-muted-foreground mt-4 mb-4">
+                Pass variables as a second argument. When a typed {c('DocumentNode')} from
+                graphql-codegen is used, {c('result.data')} has the exact inferred shape of your query
+                — no casting needed.
+            </p>
+            <Code lang="tsx">{`
+const PostPage = ({ slug }: { slug: string }) => {
+    const result = useGraphQL(GetPostDocument, { slug });
+    const post = result?.data?.blogPost;
+    if (!post) return null;
+    return <h1>{post.title}</h1>;
+};
+            `}</Code>
+            <p className="text-muted-foreground mt-4">
+                {c('result')} is {c('undefined')} on the first SSR pass while the query is
+                pending — render {c('null')} or a skeleton. GraphQL errors throw during static
+                export so the page is marked as failed rather than silently serving incomplete data.
+            </p>
+
+            <h3 className="text-lg font-semibold mb-3 mt-8 text-gradient-soft">GraphQL fragments</h3>
+            <p className="text-muted-foreground mb-4">
+                graphql-codegen's {c('client')} preset generates fragment masking helpers
+                ({c('FragmentType')}, {c('useFragment')}) that let components co-locate their exact
+                data requirements. No hadars changes are needed — just define your fragment with
+                the {c('graphql()')} tag and accept a masked prop:
+            </p>
+            <Code lang="tsx">{`
+// src/PostCard.tsx
+import { graphql, useFragment, type FragmentType } from './gql';
+
+export const PostCardFragment = graphql(\`
+    fragment PostCard on BlogPost {
+        slug
+        title
+        date
+    }
+\`);
+
+interface Props { post: FragmentType<typeof PostCardFragment> }
+
+const PostCard = ({ post: postRef }: Props) => {
+    const post = useFragment(PostCardFragment, postRef);
+    return (
+        <article>
+            <h2>{post.title}</h2>
+            <time>{post.date}</time>
+        </article>
+    );
+};
+            `}</Code>
+            <p className="text-muted-foreground mt-4 mb-4">
+                The parent component spreads the raw node into the masked prop — TypeScript ensures
+                it satisfies the fragment shape without any manual type assertions:
+            </p>
+            <Code lang="tsx">{`
+const PostList = () => {
+    const result = useGraphQL(GetAllPostsDocument);
+    return (
+        <>
+            {result?.data?.allBlogPost.map(post => (
+                <PostCard key={post.slug} post={post} />
+            ))}
+        </>
+    );
+};
+            `}</Code>
+
+            <h3 className="text-lg font-semibold mb-3 mt-8 text-gradient-soft">Schema export &amp; type generation</h3>
+            <p className="text-muted-foreground mb-4">
+                Run {c('hadars export schema')} to write the inferred schema to a SDL file, then use
+                {' '}<strong>graphql-codegen</strong> to generate TypeScript types for your queries.
+                Also works with a custom {c('graphql')} executor — hadars introspects it automatically.
+            </p>
+            <Code lang="bash">{`
+# 1. Generate schema.graphql from your sources
+hadars export schema
+
+# Custom output path
+hadars export schema types/schema.graphql
+
+# 2. Install codegen (one-time)
+npm install -D @graphql-codegen/cli @graphql-codegen/typescript @graphql-codegen/typescript-operations
+
+# 3. Generate types
+npx graphql-codegen --schema schema.graphql --documents "src/**/*.tsx" --out src/gql/
+            `}</Code>
+            <p className="text-muted-foreground mt-4 mb-4">
+                Or add a {c('codegen.ts')} config file for more control:
+            </p>
+            <Code lang="typescript">{`
+// codegen.ts
+import type { CodegenConfig } from '@graphql-codegen/cli';
+
+const config: CodegenConfig = {
+    schema: 'schema.graphql',
+    documents: ['src/**/*.tsx'],
+    generates: {
+        'src/gql/': {
+            preset: 'client',
+        },
+    },
+};
+
+export default config;
+            `}</Code>
+
             <h3 className="text-lg font-semibold mb-3 mt-8 text-gradient-soft">Supported Gatsby context API</h3>
             <p className="text-muted-foreground mb-4">
                 The following Gatsby {c('sourceNodes')} context properties are implemented:

@@ -1,109 +1,86 @@
 import React from 'react';
-import type { HadarsApp, HadarsRequest, HadarsStaticContext } from 'hadars';
-import { HadarsHead } from 'hadars';
+import { Routes, Route, Link, useParams, BrowserRouter, StaticRouter } from 'react-router-dom';
+import type { HadarsApp, HadarsRequest } from 'hadars';
+import { HadarsHead, useGraphQL } from 'hadars';
+import { graphql as gql } from './gql/gql';
+import PostCard from './PostCard';
 
-interface Post {
-    id: string;
-    slug: string;
-    title: string;
-    date: string;
-    author: string;
-    excerpt: string;
-    body: string;
-}
-
-interface Props {
-    posts: Post[];
-    currentPost?: Post | null;
-}
+// Spread the fragment — codegen ensures GetAllPosts includes exactly what PostCard needs.
+const GetPostDocument = gql(`query GetPost($slug: String) { blogPost(slug: $slug) { id slug title date author body } }`);
+const GetAllPostsDocument = gql(`query GetAllPosts { allBlogPost { ...PostCard } }`);
 
 // ── Post list ─────────────────────────────────────────────────────────────────
 
-const PostCard: React.FC<{ post: Post }> = ({ post }) => (
-    <article style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, marginBottom: 16 }}>
-        <h2 style={{ margin: '0 0 4px' }}>
-            <a href={`/post/${post.slug}`} style={{ color: '#2563eb', textDecoration: 'none' }}>
-                {post.title}
-            </a>
-        </h2>
-        <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 10px' }}>
-            {post.date} · {post.author}
-        </p>
-        <p style={{ margin: 0, color: '#374151' }}>{post.excerpt}</p>
-    </article>
-);
+const PostList: React.FC = () => {
+    const result = useGraphQL(GetAllPostsDocument);
+    const posts = result?.data?.allBlogPost ?? [];
 
-const PostList: React.FC<{ posts: Post[] }> = ({ posts }) => (
-    <main style={{ maxWidth: 680, margin: '0 auto', padding: '40px 20px' }}>
-        <h1 style={{ marginBottom: 8 }}>hadars × Gatsby sources</h1>
-        <p style={{ color: '#64748b', marginBottom: 32 }}>
-            Posts sourced from <code>content/posts.json</code> via a Gatsby-compatible source plugin.
-            GraphiQL is available at{' '}
-            <a href="/__hadars/graphql" style={{ color: '#2563eb' }}>/__hadars/graphql</a>{' '}
-            in dev mode.
-        </p>
-        {posts.map(p => <PostCard key={p.id} post={p} />)}
-    </main>
-);
-
-// ── Single post ───────────────────────────────────────────────────────────────
-
-const PostPage: React.FC<{ post: Post }> = ({ post }) => (
-    <main style={{ maxWidth: 680, margin: '0 auto', padding: '40px 20px' }}>
-        <p style={{ marginBottom: 24 }}>
-            <a href="/" style={{ color: '#2563eb' }}>← All posts</a>
-        </p>
-        <h1 style={{ marginBottom: 4 }}>{post.title}</h1>
-        <p style={{ color: '#64748b', fontSize: 13, marginBottom: 32 }}>
-            {post.date} · {post.author}
-        </p>
-        <p style={{ lineHeight: 1.7, color: '#374151' }}>{post.body}</p>
-    </main>
-);
-
-// ── App ───────────────────────────────────────────────────────────────────────
-
-const App: HadarsApp<Props> = ({ posts, currentPost }) => {
-    const title = currentPost ? `${currentPost.title} — Blog` : 'Blog — hadars sources example';
     return (
-        <>
-            <HadarsHead status={200}>
-                <title>{title}</title>
-            </HadarsHead>
-            {currentPost ? <PostPage post={currentPost} /> : <PostList posts={posts} />}
-        </>
+        <main style={{ maxWidth: 680, margin: '0 auto', padding: '40px 20px' }}>
+            <HadarsHead status={200}><title>Blog — hadars sources example</title></HadarsHead>
+            <h1 style={{ marginBottom: 8 }}>hadars × Gatsby sources</h1>
+            <p style={{ color: '#64748b', marginBottom: 32 }}>
+                Posts sourced from <code>content/posts.json</code> via a Gatsby-compatible source plugin.
+                GraphiQL is available at{' '}
+                <a href="/__hadars/graphql" style={{ color: '#2563eb' }}>/__hadars/graphql</a>{' '}
+                in dev mode.
+            </p>
+            {posts.map((post, i) => (
+                // post is FragmentType<typeof PostCardFragment> — PostCard unmasks it.
+                <PostCard key={i} post={post} />
+            ))}
+        </main>
     );
 };
 
-// ── Data fetching ─────────────────────────────────────────────────────────────
+// ── Single post ───────────────────────────────────────────────────────────────
 
-export const getInitProps = async (
-    req: HadarsRequest,
-    ctx?: HadarsStaticContext,
-): Promise<Props> => {
-    // Only available when ctx is provided (static export or dev with sources)
-    const graphql = ctx?.graphql;
+const PostPage: React.FC = () => {
+    const { slug } = useParams<{ slug: string }>();
+    const result = useGraphQL(GetPostDocument, { slug });
+    const post = result?.data?.blogPost;
 
-    if (!graphql) {
-        return { posts: [] };
-    }
-
-    // Check if this is a post page
-    const match = req.pathname.match(/^\/post\/([^/]+)$/);
-    if (match) {
-        const slug = match[1]!;
-        const { data } = await graphql(
-            `query($slug: String) { blogPost(slug: $slug) { id slug title date author body } }`,
-            { slug },
+    if (!post) {
+        return (
+            <main style={{ maxWidth: 680, margin: '0 auto', padding: '40px 20px' }}>
+                <HadarsHead status={404}><title>Not found</title></HadarsHead>
+                <Link to="/" style={{ color: '#2563eb' }}>← All posts</Link>
+                <p style={{ marginTop: 24, color: '#64748b' }}>Post not found.</p>
+            </main>
         );
-        return { posts: [], currentPost: data?.blogPost ?? null };
     }
 
-    // Index page — fetch all posts
-    const { data } = await graphql(`{
-        allBlogPost { id slug title date author excerpt body }
-    }`);
-    return { posts: data?.allBlogPost ?? [] };
+    return (
+        <main style={{ maxWidth: 680, margin: '0 auto', padding: '40px 20px' }}>
+            <HadarsHead status={200}><title>{post.title} — Blog</title></HadarsHead>
+            <p style={{ marginBottom: 24 }}>
+                <Link to="/" style={{ color: '#2563eb' }}>← All posts</Link>
+            </p>
+            <h1 style={{ marginBottom: 4 }}>{post.title}</h1>
+            <p style={{ color: '#64748b', fontSize: 13, marginBottom: 32 }}>
+                {post.date} · {post.author}
+            </p>
+            <p style={{ lineHeight: 1.7, color: '#374151' }}>{post.body}</p>
+        </main>
+    );
 };
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+const AppRoutes: React.FC = () => (
+    <Routes>
+        <Route path="/" element={<PostList />} />
+        <Route path="/post/:slug" element={<PostPage />} />
+    </Routes>
+);
+
+const App: HadarsApp<{}> = ({ location }) => {
+    if (typeof window === 'undefined') {
+        return <StaticRouter location={location}><AppRoutes /></StaticRouter>;
+    }
+    return <BrowserRouter><AppRoutes /></BrowserRouter>;
+};
+
+export const getInitProps = async (_req: HadarsRequest): Promise<{}> => ({});
 
 export default App;

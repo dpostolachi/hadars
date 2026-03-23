@@ -22,6 +22,8 @@ export class NodeStore {
     private byType = new Map<string, HadarsNode[]>();
 
     createNode(node: HadarsNode): void {
+        if (!node.id) throw new Error('[hadars] createNode: node.id must be a non-empty string');
+        if (!node.internal?.type) throw new Error('[hadars] createNode: node.internal.type must be a non-empty string');
         this.byId.set(node.id, node);
         const list = this.byType.get(node.internal.type) ?? [];
         // Replace existing node with same id if present

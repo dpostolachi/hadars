@@ -65,7 +65,7 @@ export function makeGatsbyContext(
         set: (key, value) => { cacheMap.set(key, value); return Promise.resolve(); },
     };
 
-    const reporter: GatsbyReporter = {
+    const reporter: GatsbyReporter & Record<string, unknown> = {
         info:    (msg) => console.log(`[${pluginName}] ${msg}`),
         warn:    (msg) => console.warn(`[${pluginName}] WARN: ${msg}`),
         error:   (msg, err) => console.error(`[${pluginName}] ERROR: ${msg}`, err ?? ''),
@@ -79,14 +79,14 @@ export function makeGatsbyContext(
         setErrorMap: () => {},
         log:         (msg: string) => console.log(`[${pluginName}] ${msg}`),
         success:     (msg: string) => console.log(`[${pluginName}] ✓ ${msg}`),
-    } as any;
+    };
 
     const actions: GatsbyActions = {
         createNode: (node) => store.createNode(node),
         deleteNode: ({ id }) => {
-            // NodeStore doesn't expose delete — it's rarely needed by source plugins
-            // on first run, so we silently no-op. A full implementation would add
-            // store.deleteNode().
+            // NodeStore doesn't implement delete — it's rarely needed on a first run.
+            // Warn so plugin authors know the operation was ignored.
+            console.warn(`[${pluginName}] deleteNode("${id}") called but is not supported by hadars — node will remain in the store.`);
         },
         touchNode: () => { /* no-op — only relevant for Gatsby's caching layer */ },
     };

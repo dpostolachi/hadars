@@ -10,8 +10,9 @@ export type {
     HadarsStaticContext,
     GraphQLExecutor,
     HadarsSourceEntry,
+    HadarsDocumentNode,
 } from "./types/hadars";
-export { Head as HadarsHead, useServerData, initServerDataCache } from './utils/Head';
+export { Head as HadarsHead, useServerData, useGraphQL, initServerDataCache } from './utils/Head';
 
 /**
  * Dynamically loads a module with target-aware behaviour:

@@ -1,6 +1,27 @@
 import type { LinkHTMLAttributes, MetaHTMLAttributes, ScriptHTMLAttributes, StyleHTMLAttributes } from "react";
 
 /**
+ * Minimal structural representation of a typed GraphQL document node.
+ *
+ * Compatible with `TypedDocumentNode` from `@graphql-typed-document-node/core`
+ * and the documents emitted by graphql-codegen's `client` preset — so passing
+ * a generated document object gives you fully-inferred result and variable types
+ * without writing explicit generics.
+ *
+ * hadars intentionally avoids importing from `graphql` or
+ * `@graphql-typed-document-node/core` so that neither is a required dependency.
+ */
+export interface HadarsDocumentNode<
+    TResult = Record<string, unknown>,
+    TVariables = Record<string, unknown>,
+> {
+    /** @internal Used by TypeScript to carry the result type. */
+    readonly __apiType?: (variables: TVariables) => TResult;
+    /** At least one definition — ensures a plain string is not assignable. */
+    readonly definitions: ReadonlyArray<{ readonly kind: string }>;
+}
+
+/**
  * In-process GraphQL executor passed to `getInitProps` and `paths` during
  * `hadars export static`. Hadars is executor-agnostic — configure it in
  * `hadars.config.ts` using any GraphQL library (e.g. `graphql-js`):
@@ -15,11 +36,29 @@ import type { LinkHTMLAttributes, MetaHTMLAttributes, ScriptHTMLAttributes, Styl
  *     gql({ schema, rootValue, source: query, variableValues: variables }),
  * } satisfies HadarsOptions;
  * ```
+ *
+ * The executor is generic — call it with explicit type parameters or pass a
+ * `TypedDocumentNode` / codegen-generated document to get inferred types:
+ *
+ * ```ts
+ * // Explicit generics:
+ * const { data } = await ctx.graphql<GetPostQuery, GetPostQueryVariables>(
+ *   `query GetPost($slug: String) { blogPost(slug: $slug) { title } }`,
+ *   { slug },
+ * );
+ *
+ * // Inferred via TypedDocumentNode (graphql-codegen client preset):
+ * import { GetPostDocument } from './gql';
+ * const { data } = await ctx.graphql(GetPostDocument, { slug });
+ * ```
  */
-export type GraphQLExecutor = (
-    query: string,
-    variables?: Record<string, unknown>,
-) => Promise<{ data?: any; errors?: ReadonlyArray<{ message: string }> }>;
+export type GraphQLExecutor = <
+    TData = any,
+    TVariables extends Record<string, unknown> = Record<string, unknown>,
+>(
+    query: string | HadarsDocumentNode<TData, TVariables>,
+    variables?: TVariables,
+) => Promise<{ data?: TData; errors?: ReadonlyArray<{ message: string }> }>;
 
 /**
  * Context passed as the second argument to `getInitProps` and `paths`

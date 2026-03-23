@@ -6,7 +6,7 @@ import * as Hadars from './src/build'
 import type { HadarsOptions, HadarsEntryModule } from './src/types/hadars'
 import { renderStaticSite } from './src/static'
 import { runSources } from './src/source/runner'
-import { buildSchemaExecutor } from './src/source/inference'
+import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './src/source/inference'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
 
@@ -44,6 +44,53 @@ async function loadConfig(configPath: string): Promise<HadarsOptions> {
   const url = `file://${configPath}`
   const mod = await import(url)
   return (mod && (mod.default ?? mod)) as HadarsOptions
+}
+
+// ── hadars export schema ─────────────────────────────────────────────────────
+
+async function exportSchema(
+    config: HadarsOptions,
+    outputFile: string,
+): Promise<void> {
+    let sdl: string | null = null
+
+    if (config.sources && config.sources.length > 0) {
+        console.log(`Running ${config.sources.length} source plugin(s)...`)
+        const store = await runSources(config.sources)
+        console.log(`Schema inferred for types: ${store.getTypes().join(', ') || '(none)'}`)
+        sdl = await buildSchemaSDL(store)
+        if (!sdl) {
+            console.error(
+                'Error: `graphql` package not found.\n' +
+                'Source plugins require graphql-js to be installed:\n\n' +
+                '  npm install graphql\n',
+            )
+            process.exit(1)
+        }
+    } else if (config.graphql) {
+        console.log('Introspecting custom GraphQL executor...')
+        sdl = await introspectExecutorSDL(config.graphql)
+        if (!sdl) {
+            console.error(
+                'Error: `graphql` package not found.\n' +
+                'Schema export requires graphql-js to be installed:\n\n' +
+                '  npm install graphql\n',
+            )
+            process.exit(1)
+        }
+    } else {
+        console.error(
+            'Error: no GraphQL source configured.\n' +
+            'Add `sources` or a `graphql` executor to your hadars.config.ts first.\n',
+        )
+        process.exit(1)
+    }
+
+    await writeFile(outputFile, sdl, 'utf-8')
+    console.log(`Schema written to ${outputFile}`)
+    console.log(`\nNext steps — generate TypeScript types with graphql-codegen:`)
+    console.log(`  npm install -D @graphql-codegen/cli @graphql-codegen/typescript @graphql-codegen/typescript-operations`)
+    console.log(`  npx graphql-codegen --schema ${outputFile} --documents "src/**/*.tsx" --out src/gql/`)
 }
 
 // ── hadars export static ─────────────────────────────────────────────────────
@@ -548,7 +595,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export static [outDir]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -608,8 +655,12 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 const outDirArg = argv[4] ?? 'out'
                 await exportStatic(cfg, outDirArg, cwd)
                 process.exit(0)
+            } else if (subCmd === 'schema') {
+                const outputFile = resolve(cwd, argv[4] ?? 'schema.graphql')
+                await exportSchema(cfg, outputFile)
+                process.exit(0)
             } else {
-                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, static`)
+                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, static, schema`)
                 process.exit(1)
             }
         }

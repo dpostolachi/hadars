@@ -43,6 +43,8 @@ function inferFieldShape(value: unknown, seenTypes: Set<string>): FieldShape {
 // ── Schema string builder ──────────────────────────────────────────────────────
 
 const INTERNAL_FIELDS = new Set(['id', 'internal', '__typename', 'parent', 'children']);
+/** GraphQL spec reserves all names beginning with __ for introspection. */
+const isReservedFieldName = (name: string) => name.startsWith('__');
 
 /** Scalar GraphQL types that are safe to use as lookup filter arguments. */
 const FILTERABLE_SCALARS = new Set(['String', 'Int', 'Float', 'Boolean', 'ID']);
@@ -59,7 +61,7 @@ function buildTypeFields(nodes: readonly Record<string, unknown>[]): InferredFie
 
     for (const node of nodes) {
         for (const [key, val] of Object.entries(node)) {
-            if (INTERNAL_FIELDS.has(key)) continue;
+            if (INTERNAL_FIELDS.has(key) || isReservedFieldName(key)) continue;
             if (fieldMap.has(key)) continue;
             const { type } = inferFieldShape(val, new Set());
             fieldMap.set(key, {
@@ -106,17 +108,14 @@ function buildSingleArgs(fields: InferredField[]): string {
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Build a GraphQL executor backed by the node store.
- *
- * Returns null if graphql-js is not installed — in that case the caller should
- * surface a clear error message asking the user to install `graphql`.
+ * Load graphql-js from the user's project and build a schema + SDL from the
+ * node store. Returns null if graphql-js is not installed.
  */
-export async function buildSchemaExecutor(
-    store: NodeStore,
-): Promise<GraphQLExecutor | null> {
-    // graphql is an optional peer dependency installed in the user's project,
-    // not in hadars itself. Resolve it from process.cwd() so Node.js finds it
-    // in the user's node_modules rather than the CLI's own node_modules.
+async function loadAndBuildSchema(store: NodeStore): Promise<{
+    schema: any;
+    sdl: string;
+    gql: any;
+} | null> {
     let gql: any;
     try {
         const { createRequire } = await import('node:module');
@@ -127,16 +126,15 @@ export async function buildSchemaExecutor(
         return null;
     }
 
-    const { buildSchema, graphql } = gql;
-
+    const { buildSchema, printSchema, print } = gql;
     const types = store.getTypes();
+
     if (types.length === 0) {
-        // Empty store — return a no-op executor with a dummy schema
-        const schema = buildSchema('type Query { _empty: String }');
-        return (query, variables) => graphql({ schema, source: query, variableValues: variables });
+        const rawSdl = 'type Query { _empty: String }';
+        return { schema: buildSchema(rawSdl), sdl: rawSdl, gql };
     }
 
-    // Infer field shapes once per type — reused for both the SDL and resolvers.
+    // Infer field shapes once per type — reused for SDL, resolvers, and args.
     const typeFields = new Map(
         types.map(typeName => {
             const nodes = store.getNodesByType(typeName) as Record<string, unknown>[];
@@ -157,16 +155,48 @@ export async function buildSchemaExecutor(
         ].join('\n');
     });
 
-    const sdl = [
+    const rawSdl = [
         ...typeSDLs,
         `type Query {\n${queryFields.join('\n')}\n}`,
     ].join('\n\n');
 
     let schema: any;
     try {
-        schema = buildSchema(sdl);
+        schema = buildSchema(rawSdl);
     } catch (err) {
         throw new Error(`[hadars] Failed to build GraphQL schema from node store: ${(err as Error).message}`);
+    }
+
+    return { schema, sdl: printSchema(schema), gql };
+}
+
+/**
+ * Build a GraphQL executor backed by the node store.
+ *
+ * Returns null if graphql-js is not installed — in that case the caller should
+ * surface a clear error message asking the user to install `graphql`.
+ */
+/**
+ * Normalise a query argument to a string.
+ * Accepts either a plain query string or a TypedDocumentNode / codegen document object.
+ */
+function toQueryString(query: unknown, print: (doc: any) => string): string {
+    return typeof query === 'string' ? query : print(query);
+}
+
+export async function buildSchemaExecutor(
+    store: NodeStore,
+): Promise<GraphQLExecutor | null> {
+    const built = await loadAndBuildSchema(store);
+    if (!built) return null;
+
+    const { schema, gql } = built;
+    const { graphql, print } = gql;
+    const types = store.getTypes();
+
+    if (types.length === 0) {
+        return (query, variables) =>
+            graphql({ schema, source: toQueryString(query, print), variableValues: variables });
     }
 
     // Build root resolver map
@@ -184,5 +214,47 @@ export async function buildSchemaExecutor(
     }
 
     return (query, variables) =>
-        graphql({ schema, rootValue, source: query, variableValues: variables }) as any;
+        graphql({ schema, rootValue, source: toQueryString(query, print), variableValues: variables }) as any;
+}
+
+/**
+ * Return the inferred GraphQL schema as a SDL string suitable for writing to a
+ * `schema.graphql` file and consuming with graphql-codegen or gql.tada.
+ *
+ * Returns null if graphql-js is not installed in the user's project.
+ */
+export async function buildSchemaSDL(store: NodeStore): Promise<string | null> {
+    const built = await loadAndBuildSchema(store);
+    return built?.sdl ?? null;
+}
+
+/**
+ * Introspect a custom GraphQL executor and return its schema as SDL.
+ * Uses the standard introspection query so the executor doesn't need to know
+ * about hadars internals.
+ *
+ * Returns null if graphql-js is not installed in the user's project.
+ */
+export async function introspectExecutorSDL(
+    executor: GraphQLExecutor,
+): Promise<string | null> {
+    let gql: any;
+    try {
+        const { createRequire } = await import('node:module');
+        const projectRequire = createRequire(process.cwd() + '/package.json');
+        const graphqlPath = projectRequire.resolve('graphql');
+        gql = await import(graphqlPath);
+    } catch {
+        return null;
+    }
+
+    const { getIntrospectionQuery, buildClientSchema, printSchema } = gql;
+    const result = await executor(getIntrospectionQuery());
+    if (result.errors?.length) {
+        throw new Error(`[hadars] Introspection failed: ${result.errors[0].message}`);
+    }
+    if (!result.data) {
+        throw new Error('[hadars] Introspection returned no data');
+    }
+    return printSchema(buildClientSchema(result.data));
 }

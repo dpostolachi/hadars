@@ -1,0 +1,90 @@
+type Directory {
+  id: ID!
+  sourceInstanceName: String
+  relativePath: String
+  extension: String
+  prettySize: String
+  modifiedTime: String
+  accessTime: String
+  changeTime: String
+  birthTime: String
+  root: String
+  dir: String
+  base: String
+  ext: String
+  name: String
+  absolutePath: String
+  relativeDirectory: String
+  dev: Int
+  mode: Int
+  nlink: Int
+  uid: Int
+  rdev: Int
+  blksize: Int
+  ino: Int
+  size: Int
+  blocks: Int
+  atimeMs: Int
+  mtimeMs: Int
+  ctimeMs: Int
+  birthtimeMs: Int
+  atime: String
+  mtime: String
+  ctime: String
+  birthtime: String
+}
+
+type File {
+  id: ID!
+  sourceInstanceName: String
+  relativePath: String
+  extension: String
+  prettySize: String
+  modifiedTime: String
+  accessTime: String
+  changeTime: String
+  birthTime: String
+  root: String
+  dir: String
+  base: String
+  ext: String
+  name: String
+  absolutePath: String
+  relativeDirectory: String
+  dev: Int
+  mode: Int
+  nlink: Int
+  uid: Int
+  rdev: Int
+  blksize: Int
+  ino: Int
+  size: Int
+  blocks: Int
+  atimeMs: Int
+  mtimeMs: Int
+  ctimeMs: Int
+  birthtimeMs: Int
+  atime: String
+  mtime: String
+  ctime: String
+  birthtime: String
+}
+
+type BlogPost {
+  id: ID!
+  slug: String
+  title: String
+  date: String
+  author: String
+  excerpt: String
+  body: String
+}
+
+type Query {
+  directory(id: ID, sourceInstanceName: String, relativePath: String, extension: String, prettySize: String, modifiedTime: String, accessTime: String, changeTime: String, birthTime: String, root: String, dir: String, base: String, ext: String, name: String, absolutePath: String, relativeDirectory: String, dev: Int, mode: Int, nlink: Int, uid: Int, rdev: Int, blksize: Int, ino: Int, size: Int, blocks: Int, atimeMs: Int, mtimeMs: Int, ctimeMs: Int, birthtimeMs: Int, atime: String, mtime: String, ctime: String, birthtime: String): Directory
+  allDirectory: [Directory!]!
+  file(id: ID, sourceInstanceName: String, relativePath: String, extension: String, prettySize: String, modifiedTime: String, accessTime: String, changeTime: String, birthTime: String, root: String, dir: String, base: String, ext: String, name: String, absolutePath: String, relativeDirectory: String, dev: Int, mode: Int, nlink: Int, uid: Int, rdev: Int, blksize: Int, ino: Int, size: Int, blocks: Int, atimeMs: Int, mtimeMs: Int, ctimeMs: Int, birthtimeMs: Int, atime: String, mtime: String, ctime: String, birthtime: String): File
+  allFile: [File!]!
+  blogPost(id: ID, slug: String, title: String, date: String, author: String, excerpt: String, body: String): BlogPost
+  allBlogPost: [BlogPost!]!
+}

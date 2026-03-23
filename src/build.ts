@@ -546,6 +546,9 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 getFinalProps,
             } = (await import(importPath)) as HadarsEntryModule<any>;
 
+            // Expose the executor globally so useGraphQL() in components can reach it.
+            (globalThis as any).__hadarsGraphQL = devStaticCtx?.graphql;
+
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,

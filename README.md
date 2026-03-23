@@ -117,6 +117,9 @@ hadars run
 # Pre-render every page to static HTML files (output goes to out/ by default)
 hadars export static [outDir]
 
+# Write the inferred GraphQL schema to a SDL file (for graphql-codegen / gql.tada)
+hadars export schema [schema.graphql]
+
 # Bundle the app into a single self-contained Lambda .mjs file
 hadars export lambda [output.mjs]
 
@@ -354,6 +357,119 @@ For each node type (e.g. `BlogPost`) you get two root queries:
 | `blogPost(id, slug, title, …)` | First node matching all supplied args |
 
 All scalar fields are automatically added as optional lookup arguments, so you can do `blogPost(slug: "hello")` without knowing the hashed node id.
+
+### useGraphQL hook
+
+Query your GraphQL layer directly inside any component — no need to pass data down through `getInitProps`. The hook integrates with `useServerData` so queries are executed on the server during static export and hydrated on the client.
+
+```tsx
+import { useGraphQL } from 'hadars';
+import { GetAllPostsDocument } from './gql/graphql';
+
+const PostList = () => {
+    const result = useGraphQL(GetAllPostsDocument);
+    const posts = result?.data?.allBlogPost ?? [];
+    return <ul>{posts.map(p => <li key={p.id}>{p.title}</li>)}</ul>;
+};
+```
+
+Pass variables as a second argument:
+
+```tsx
+const PostPage = ({ slug }: { slug: string }) => {
+    const result = useGraphQL(GetPostDocument, { slug });
+    const post = result?.data?.blogPost;
+    if (!post) return null;
+    return <h1>{post.title}</h1>;
+};
+```
+
+- `result` is `undefined` on the first SSR pass (data not yet resolved) — render `null` or a skeleton
+- When a typed `DocumentNode` from graphql-codegen is passed, the return type is fully inferred — `result.data` has the exact shape of your query
+- GraphQL errors throw during static export so the page is marked as failed rather than silently serving incomplete data
+- Requires `graphql` and a `sources` or `graphql` executor configured in `hadars.config.ts`
+
+### Schema export & type generation
+
+Run `hadars export schema` to write the inferred schema to a SDL file, then feed it to **graphql-codegen** to generate TypeScript types for your queries:
+
+```bash
+# 1. Generate schema.graphql from your sources
+hadars export schema
+
+# 2. Install codegen (one-time)
+npm install -D @graphql-codegen/cli @graphql-codegen/typescript @graphql-codegen/typescript-operations
+
+# 3. Generate types
+npx graphql-codegen --schema schema.graphql --documents "src/**/*.tsx" --out src/gql/
+```
+
+Or use a `codegen.ts` config file:
+
+```ts
+// codegen.ts
+import type { CodegenConfig } from '@graphql-codegen/cli';
+
+const config: CodegenConfig = {
+    schema: 'schema.graphql',
+    documents: ['src/**/*.tsx'],
+    generates: {
+        'src/gql/': {
+            preset: 'client',
+        },
+    },
+};
+
+export default config;
+```
+
+`hadars export schema` also works with a custom `graphql` executor — it runs an introspection query against it and converts the result to SDL.
+
+### GraphQL fragments
+
+graphql-codegen's `client` preset generates fragment masking helpers (`FragmentType`, `useFragment`, `makeFragmentData`) that let components co-locate their exact data requirements. No hadars changes are needed — just define your fragment with `graphql()` and accept a masked prop:
+
+```tsx
+// src/PostCard.tsx
+import { graphql, useFragment, type FragmentType } from './gql';
+
+export const PostCardFragment = graphql(`
+    fragment PostCard on BlogPost {
+        slug
+        title
+        date
+    }
+`);
+
+interface Props {
+    post: FragmentType<typeof PostCardFragment>;
+}
+
+const PostCard = ({ post: postRef }: Props) => {
+    const post = useFragment(PostCardFragment, postRef);
+    return (
+        <article>
+            <h2>{post.title}</h2>
+            <time>{post.date}</time>
+        </article>
+    );
+};
+```
+
+The parent component spreads the raw node into the masked prop — TypeScript ensures it satisfies the fragment shape:
+
+```tsx
+const PostList = () => {
+    const result = useGraphQL(GetAllPostsDocument);
+    return (
+        <>
+            {result?.data?.allBlogPost.map(post => (
+                <PostCard key={post.slug} post={post} />
+            ))}
+        </>
+    );
+};
+```
 
 ### Custom GraphQL executor
 

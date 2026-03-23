@@ -49,7 +49,12 @@ export function createGraphiqlHandler(
     executor: GraphQLExecutor,
 ): (req: Request) => Promise<Response | undefined> {
     return async (req: Request): Promise<Response | undefined> => {
-        const url = new URL(req.url);
+        let url: URL;
+        try {
+            url = new URL(req.url);
+        } catch {
+            return undefined;
+        }
         if (url.pathname !== GRAPHQL_PATH) return undefined;
 
         // GET — serve GraphiQL IDE
@@ -71,8 +76,8 @@ export function createGraphiqlHandler(
                 });
             }
 
-            if (!body.query) {
-                return new Response(JSON.stringify({ errors: [{ message: 'Missing "query" field' }] }), {
+            if (typeof body.query !== 'string' || !body.query.trim()) {
+                return new Response(JSON.stringify({ errors: [{ message: 'Missing or invalid "query" field — must be a non-empty string' }] }), {
                     status: 400,
                     headers: { 'Content-Type': 'application/json' },
                 });

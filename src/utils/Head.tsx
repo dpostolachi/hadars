@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AppHead, AppUnsuspend, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
+import type { AppHead, AppUnsuspend, HadarsDocumentNode, LinkProps, MetaProps, ScriptProps, StyleProps } from '../types/hadars'
 
 interface InnerContext {
     setTitle: (title: string) => void;
@@ -357,6 +357,98 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
 }
 
 
+// ── useGraphQL ────────────────────────────────────────────────────────────────
+//
+// Execute a GraphQL query during SSR via the hadars data layer. The executor
+// is stored in globalThis.__hadarsGraphQL by the framework before each render.
+// On the client, useServerData handles hydration + client-side navigation.
+
+/**
+ * Derive a stable cache key string from a query argument.
+ * For string queries the key is the trimmed query string.
+ * For document nodes we use the operation name when available (fast, concise)
+ * and fall back to stringifying the definitions (always stable).
+ * The key is ONLY used for cache lookup — the original document is passed to
+ * the executor so it can call print() itself.
+ */
+function toCacheKey(doc: any): string {
+    if (typeof doc === 'string') return doc.trim();
+    // Use the operation name for named operations — compact and stable.
+    for (const def of doc?.definitions ?? []) {
+        if (def.kind === 'OperationDefinition' && def.name?.value) {
+            return `op:${def.name.value}`;
+        }
+    }
+    // Anonymous operation — fall back to stringifying definitions.
+    return JSON.stringify(doc?.definitions ?? doc);
+}
+
+/**
+ * Execute a GraphQL query server-side and return the result.
+ *
+ * Wraps `useServerData` — on the client the pre-resolved value is read from
+ * the hydration cache. During client-side navigation hadars automatically
+ * fires a data-only request to the server so the query re-executes there.
+ *
+ * Throws if the executor returns GraphQL errors, so the page is correctly
+ * marked as failed during `hadars export static`.
+ *
+ * ```tsx
+ * // Typed via codegen document — TData and TVariables are inferred:
+ * const result = useGraphQL(GetPostDocument, { slug });
+ * const post = result?.data?.blogPost; // fully typed
+ *
+ * // Plain string query — untyped:
+ * const result = useGraphQL(`{ allBlogPost { slug title } }`);
+ * if (!result) return null; // undefined while pending on first SSR pass
+ * ```
+ */
+// Overload 1: TypedDocumentNode — TData and TVariables are inferred from the document.
+export function useGraphQL<
+    TData,
+    TVariables extends Record<string, unknown>,
+>(
+    query: HadarsDocumentNode<TData, TVariables>,
+    variables?: TVariables,
+): { data?: TData } | undefined;
+// Overload 2: plain string query — untyped result.
+export function useGraphQL(
+    query: string,
+    variables?: Record<string, unknown>,
+): { data?: Record<string, unknown> } | undefined;
+// Implementation
+export function useGraphQL(
+    query: string | HadarsDocumentNode<unknown, Record<string, unknown>>,
+    variables?: Record<string, unknown>,
+): { data?: unknown } | undefined {
+    const key = ['__gql', toCacheKey(query), JSON.stringify(variables ?? {})];
+
+    return useServerData(key, async () => {
+        const executor: ((q: any, v?: Record<string, unknown>) => Promise<any>) | undefined =
+            (globalThis as any).__hadarsGraphQL;
+
+        if (!executor) {
+            throw new Error(
+                '[hadars] useGraphQL: no GraphQL executor is available for this request. ' +
+                'Make sure you have `sources` or a `graphql` executor configured in hadars.config.ts.',
+            );
+        }
+
+        // Pass the original query (string or document object) — the executor
+        // calls print() itself so codegen documents without loc.source.body work.
+        const result = await executor(query, variables);
+
+        if (result.errors?.length) {
+            const messages = result.errors.map((e: { message: string }) => e.message).join(', ');
+            throw new Error(`[hadars] GraphQL error: ${messages}`);
+        }
+
+        return result;
+    });
+}
+
+// ── HadarsHead ────────────────────────────────────────────────────────────────
+
 export const Head: React.FC<{
     children?: React.ReactNode;
     status?: number;
@@ -381,7 +473,8 @@ export const Head: React.FC<{
 
         switch ( childType ) {
             case 'title': {
-                setTitle(childProps['children'] as string);
+                const raw = childProps['children'];
+                setTitle(Array.isArray(raw) ? raw.join('') : String(raw ?? ''));
                 return;
             }
             case 'meta': {
