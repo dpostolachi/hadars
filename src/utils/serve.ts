@@ -76,6 +76,7 @@ function withCompression(handler: FetchHandler): FetchHandler {
         if (res.headers.has('content-encoding')) return res;
         const ct = res.headers.get('content-type') ?? '';
         if (!COMPRESSIBLE_RE.test(ct)) return res;
+        if (!(globalThis as any).CompressionStream) return res;
         const compressed = res.body.pipeThrough(
             new (globalThis as any).CompressionStream('gzip'),
         );

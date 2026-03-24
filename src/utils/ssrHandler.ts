@@ -142,8 +142,28 @@ async function transformStream(
     return out;
 }
 
-export const gzipCompress   = (d: Uint8Array) => transformStream(d, new (globalThis as any).CompressionStream('gzip'));
-export const gzipDecompress = (d: Uint8Array) => transformStream(d, new (globalThis as any).DecompressionStream('gzip'));
+// Use the Web Streams CompressionStream when available (Bun, Deno, Node ≥ 18).
+// Fall back to node:zlib on older Node versions.
+async function zlibGzip(d: Uint8Array): Promise<Uint8Array> {
+    const zlib = await import('node:zlib');
+    const { promisify } = await import('node:util');
+    return promisify(zlib.gzip)(d) as Promise<Uint8Array>;
+}
+async function zlibGunzip(d: Uint8Array): Promise<Uint8Array> {
+    const zlib = await import('node:zlib');
+    const { promisify } = await import('node:util');
+    return promisify(zlib.gunzip)(d) as Promise<Uint8Array>;
+}
+
+export const gzipCompress = (d: Uint8Array): Promise<Uint8Array> =>
+    (globalThis as any).CompressionStream
+        ? transformStream(d, new (globalThis as any).CompressionStream('gzip'))
+        : zlibGzip(d);
+
+export const gzipDecompress = (d: Uint8Array): Promise<Uint8Array> =>
+    (globalThis as any).DecompressionStream
+        ? transformStream(d, new (globalThis as any).DecompressionStream('gzip'))
+        : zlibGunzip(d);
 
 export async function buildCacheEntry(res: Response, ttl: number | undefined): Promise<CacheEntry> {
     const buf = await res.arrayBuffer();
