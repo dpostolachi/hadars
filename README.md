@@ -26,23 +26,23 @@ Bring your own router (or none), keep your components as plain React, and get SS
 
 | Metric | hadars | Next.js |
 |---|---:|---:|
-| Requests/sec | **148** | 17 |
-| Latency median | **639 ms** | 2754 ms |
-| Latency p99 | **976 ms** | 4040 ms |
-| Throughput | **42.23** MB/s | 9.49 MB/s |
-| Peak RSS | 987.9 MB | **476.9 MB** |
-| Avg RSS | 775.3 MB | **424.5 MB** |
-| Build time | 0.7 s | 6.0 s |
+| Requests/sec | **165** | 19 |
+| Latency median | **599 ms** | 2621 ms |
+| Latency p99 | **982 ms** | 3716 ms |
+| Throughput | **46.99** MB/s | 10.37 MB/s |
+| Peak RSS | 1038.2 MB | **489.6 MB** |
+| Avg RSS | 793.4 MB | **432.4 MB** |
+| Build time | 0.8 s | 6.0 s |
 
 **Page load** (Playwright · Chromium headless · median)
 
 | Metric | hadars | Next.js |
 |---|---:|---:|
-| TTFB | **19 ms** | 46 ms |
-| FCP | **96 ms** | 140 ms |
-| DOMContentLoaded | **40 ms** | 128 ms |
-| Load | **124 ms** | 174 ms |
-| Peak RSS | 468.0 MB | **297.0 MB** |
+| TTFB | **18 ms** | 38 ms |
+| FCP | **96 ms** | 128 ms |
+| DOMContentLoaded | **39 ms** | 118 ms |
+| Load | **122 ms** | 164 ms |
+| Peak RSS | 496.7 MB | **304.8 MB** |
 <!-- BENCHMARK_END -->
 
 ## Quick start
