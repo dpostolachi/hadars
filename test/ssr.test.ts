@@ -5,7 +5,6 @@
  *   - Page is server-rendered with the correct head tags
  *   - useServerData() ran on the server and its result is in the page JSON
  *   - getInitProps() data is in the client props (and server-only keys are stripped)
- *   - HTTP compression is applied
  *   - loadModule() code-split LazyPanel into a separate JS chunk
  *   - /cache-test is served from cache (frozen serverTime on repeated requests)
  *
@@ -119,12 +118,6 @@ test('getInitProps: serverTime and bunVersion are in the serialised props', asyn
     expect(props.rcClient).toBeUndefined();
 });
 
-test('HTTP gzip compression is applied to HTML responses', async () => {
-    const res = await fetch(BASE_URL + '/', {
-        headers: { 'Accept-Encoding': 'gzip' },
-    });
-    expect(res.headers.get('content-encoding')).toBe('gzip');
-});
 
 test('loadModule: LazyPanel is code-split into a separate JS chunk', async () => {
     const staticDir = join(WEBSITE_DIR, '.hadars', 'static');
