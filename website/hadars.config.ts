@@ -4,6 +4,7 @@ const config: HadarsOptions = {
     entry: 'src/App.tsx',
     htmlTemplate: 'src/template.html',
     port: 9090,
+    reactMode: 'development',
     fetch: (req) => {
         if (req.pathname === '/api/data') {
             // fetch weather data from open-meteo and return it as JSON
