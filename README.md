@@ -21,30 +21,30 @@ Bring your own router (or none), keep your components as plain React, and get SS
 ## Benchmarks
 
 <!-- BENCHMARK_START -->
-> Last run: 2026-03-23 · 120s · 100 connections · Bun runtime
-> hadars is **8.7x faster** in requests/sec
+> Last run: 2026-03-25 · 120s · 100 connections · Bun runtime
+> hadars is **8.9x faster** in requests/sec
 
 **Throughput** (autocannon, 120s)
 
 | Metric | hadars | Next.js |
 |---|---:|---:|
-| Requests/sec | **165** | 19 |
-| Latency median | **599 ms** | 2621 ms |
-| Latency p99 | **982 ms** | 3716 ms |
-| Throughput | **46.99** MB/s | 10.37 MB/s |
-| Peak RSS | 1038.2 MB | **489.6 MB** |
-| Avg RSS | 793.4 MB | **432.4 MB** |
-| Build time | 0.8 s | 6.0 s |
+| Requests/sec | **151** | 17 |
+| Latency median | **642 ms** | 2747 ms |
+| Latency p99 | **959 ms** | 4019 ms |
+| Throughput | **43.05** MB/s | 9.5 MB/s |
+| Peak RSS | 950.3 MB | **478.5 MB** |
+| Avg RSS | 763.3 MB | **426.4 MB** |
+| Build time | 0.7 s | 6.0 s |
 
 **Page load** (Playwright · Chromium headless · median)
 
 | Metric | hadars | Next.js |
 |---|---:|---:|
-| TTFB | **18 ms** | 38 ms |
-| FCP | **96 ms** | 128 ms |
-| DOMContentLoaded | **39 ms** | 118 ms |
-| Load | **122 ms** | 164 ms |
-| Peak RSS | 496.7 MB | **304.8 MB** |
+| TTFB | **19 ms** | 42 ms |
+| FCP | **96 ms** | 136 ms |
+| DOMContentLoaded | **39 ms** | 127 ms |
+| Load | **122 ms** | 173 ms |
+| Peak RSS | 476.8 MB | **289.5 MB** |
 <!-- BENCHMARK_END -->
 
 ## Quick start
