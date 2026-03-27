@@ -94,8 +94,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [open, setOpen] = useState(false);
     const location = useLocation();
 
-    // Close drawer on route change
-    useEffect(() => { setOpen(false); }, [location.pathname]);
+    // Close drawer and reset scroll on route change
+    useEffect(() => {
+        setOpen(false);
+        window.scrollTo(0, 0);
+    }, [location.pathname]);
 
     return (
         <div className="flex min-h-screen bg-background text-foreground" style={{ position: 'relative' }}>
