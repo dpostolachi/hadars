@@ -151,9 +151,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                         }}
                     />
                 </button>
-                <Link to="/" className="flex items-center gap-2">
-                    <HadarsLogo size={22} />
-                    <span className="text-base font-bold tracking-tight font-mono text-gradient">hadars</span>
+                <Link to="/" className="flex items-center gap-2.5 group">
+                    <HadarsLogo size={28} />
+                    <span className="text-lg font-bold tracking-tight font-mono text-gradient">hadars</span>
                 </Link>
             </div>
 
