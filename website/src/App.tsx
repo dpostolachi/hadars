@@ -67,7 +67,7 @@ export const getInitProps = async (_req: HadarsRequest): Promise<PageProps> => {
         `Node.js ${(globalThis as any).process?.version ?? ''}`;
 
     return {
-        serverTime: new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' }),
+        serverTime: new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium', timeZone: 'UTC' }),
         bunVersion: runtime,
         rcClient: new QueryClient(),
     };
