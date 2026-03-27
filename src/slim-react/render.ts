@@ -38,7 +38,21 @@ import {
   captureMap,
   captureUnsuspend,
   restoreUnsuspend,
+  type ContextSnapshot,
 } from "./renderContext";
+
+/**
+ * Capture all three concurrent-render globals in one call.
+ * Must be called immediately before every `await` and the returned token
+ * passed to restoreRenderCtx immediately after resuming — just like the
+ * individual captureMap / captureUnsuspend calls they replace.
+ */
+function captureRenderCtx(): { m: ReturnType<typeof captureMap>; u: unknown; t: ContextSnapshot } {
+  return { m: captureMap(), u: captureUnsuspend(), t: snapshotContext() };
+}
+function restoreRenderCtx(ctx: ReturnType<typeof captureRenderCtx>): void {
+  swapContextMap(ctx.m); restoreUnsuspend(ctx.u); restoreContext(ctx.t);
+}
 import { installDispatcher, restoreDispatcher } from "./dispatcher";
 
 // ---------------------------------------------------------------------------
@@ -627,9 +641,9 @@ function renderComponent(
       if (e && typeof (e as any).then === "function") {
         if (_suspenseRetries + 1 >= MAX_COMPONENT_SUSPENSE_RETRIES) throw SUSPENSE_RETRY_LIMIT;
         patchPromiseStatus(e as Promise<unknown>);
-        const m = captureMap(); const u = captureUnsuspend();
+        const rctx = captureRenderCtx();
         return (e as Promise<unknown>).then(() => {
-          swapContextMap(m); restoreUnsuspend(u);
+          restoreRenderCtx(rctx);
           return renderComponent(type, props, writer, isSvg, _suspenseRetries + 1);
         });
       }
@@ -686,10 +700,10 @@ function renderComponent(
     };
     const r = renderChildren(props.children, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap(); const u = captureUnsuspend();
+      const rctx = captureRenderCtx();
       return (r as Promise<void>).then(
-        () => { swapContextMap(m); restoreUnsuspend(u); finish(); },
-        (e) => { swapContextMap(m); restoreUnsuspend(u); finish(); throw e; },
+        () => { restoreRenderCtx(rctx); finish(); },
+        (e) => { restoreRenderCtx(rctx); finish(); throw e; },
       );
     }
     finish();
@@ -722,9 +736,9 @@ function renderComponent(
     if (e && typeof (e as any).then === "function") {
       if (_suspenseRetries + 1 >= MAX_COMPONENT_SUSPENSE_RETRIES) throw SUSPENSE_RETRY_LIMIT;
       patchPromiseStatus(e as Promise<unknown>);
-      const m = captureMap(); const u = captureUnsuspend();
+      const rctx = captureRenderCtx();
       return (e as Promise<unknown>).then(() => {
-        swapContextMap(m); restoreUnsuspend(u);
+        restoreRenderCtx(rctx);
         return renderComponent(type, props, writer, isSvg, _suspenseRetries + 1);
       });
     }
@@ -744,9 +758,9 @@ function renderComponent(
 
   // Async component
   if (result instanceof Promise) {
-    const m = captureMap(); const u = captureUnsuspend();
+    const rctx = captureRenderCtx();
     return result.then((resolved) => {
-      swapContextMap(m); restoreUnsuspend(u);
+      restoreRenderCtx(rctx);
       // Check useId after the async body has finished executing.
       let asyncSavedIdTree: number | undefined;
       if (componentCalledUseId()) {
@@ -754,17 +768,17 @@ function renderComponent(
       }
       const r = renderNode(resolved, writer, isSvg);
       if (r && typeof (r as any).then === "function") {
-        const m2 = captureMap(); const u2 = captureUnsuspend();
+        const rctx2 = captureRenderCtx();
         // Only allocate cleanup closures when actually going async.
         return (r as Promise<void>).then(
           () => {
-            swapContextMap(m2); restoreUnsuspend(u2);
+            restoreRenderCtx(rctx2);
             if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
             popComponentScope(savedScope);
             if (isProvider) popContextValue(ctx, prevCtxValue);
           },
           (e) => {
-            swapContextMap(m2); restoreUnsuspend(u2);
+            restoreRenderCtx(rctx2);
             if (asyncSavedIdTree !== undefined) popTreeContext(asyncSavedIdTree);
             popComponentScope(savedScope);
             if (isProvider) popContextValue(ctx, prevCtxValue);
@@ -777,7 +791,7 @@ function renderComponent(
       popComponentScope(savedScope);
       if (isProvider) popContextValue(ctx, prevCtxValue);
     }, (e) => {
-      swapContextMap(m); restoreUnsuspend(u);
+      restoreRenderCtx(rctx);
       // savedIdTree is always undefined here (async component skips the push).
       popComponentScope(savedScope);
       if (isProvider) popContextValue(ctx, prevCtxValue);
@@ -788,17 +802,17 @@ function renderComponent(
   const r = renderNode(result, writer, isSvg);
 
   if (r && typeof (r as any).then === "function") {
-    const m = captureMap(); const u = captureUnsuspend();
+    const rctx = captureRenderCtx();
     // Only allocate cleanup closures when actually going async.
     return (r as Promise<void>).then(
       () => {
-        swapContextMap(m); restoreUnsuspend(u);
+        restoreRenderCtx(rctx);
         if (savedIdTree !== undefined) popTreeContext(savedIdTree);
         popComponentScope(savedScope);
         if (isProvider) popContextValue(ctx, prevCtxValue);
       },
       (e) => {
-        swapContextMap(m); restoreUnsuspend(u);
+        restoreRenderCtx(rctx);
         if (savedIdTree !== undefined) popTreeContext(savedIdTree);
         popComponentScope(savedScope);
         if (isProvider) popContextValue(ctx, prevCtxValue);
@@ -839,9 +853,9 @@ function renderChildArrayFrom(
     const savedTree = pushTreeContext(totalChildren, i);
     const r = renderNode(child, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap(); const u = captureUnsuspend();
+      const rctx = captureRenderCtx();
       return (r as Promise<void>).then(() => {
-        swapContextMap(m); restoreUnsuspend(u);
+        restoreRenderCtx(rctx);
         popTreeContext(savedTree);
         return renderChildArrayFrom(children, i + 1, writer, isSvg);
       });
@@ -895,9 +909,9 @@ async function renderSuspense(
   try {
     const r = renderNode(children, buffer, isSvg);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap(); const u = captureUnsuspend();
+      const rctx = captureRenderCtx();
       await r;
-      swapContextMap(m); restoreUnsuspend(u);
+      restoreRenderCtx(rctx);
     }
     // Success – wrap with React's Suspense boundary markers so hydrateRoot
     // can locate the boundary in the DOM (<!--$--> … <!--/$-->).
@@ -918,9 +932,9 @@ async function renderSuspense(
       if (fallback) {
         const r = renderNode(fallback, writer, isSvg);
         if (r && typeof (r as any).then === "function") {
-          const m = captureMap(); const u = captureUnsuspend();
+          const rctx = captureRenderCtx();
           await r;
-          swapContextMap(m); restoreUnsuspend(u);
+          restoreRenderCtx(rctx);
         }
       }
       writer.write("<!--/$-->");
@@ -984,7 +998,7 @@ export function renderToStream(
       try {
         const r = renderNode(element, writer);
         if (r && typeof (r as any).then === "function") {
-          const m = captureMap(); await r; swapContextMap(m);
+          const rctx = captureRenderCtx(); await r; restoreRenderCtx(rctx);
         }
         writer.flush!(); // encode everything accumulated (sync renders: the whole page)
         controller.close();
@@ -1037,7 +1051,7 @@ export async function renderPreflight(
     // so a single pass is guaranteed to complete with all promises resolved.
     const r = renderNode(element, NULL_WRITER);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap(); await r; swapContextMap(m);
+      const rctx = captureRenderCtx(); await r; restoreRenderCtx(rctx);
     }
   } finally {
     swapContextMap(prev);
@@ -1075,7 +1089,7 @@ export async function renderToString(
     // so a single pass is guaranteed to complete with all promises resolved.
     const r = renderNode(element, writer);
     if (r && typeof (r as any).then === "function") {
-      const m = captureMap(); await r; swapContextMap(m);
+      const rctx = captureRenderCtx(); await r; restoreRenderCtx(rctx);
     }
     return output;
   } finally {

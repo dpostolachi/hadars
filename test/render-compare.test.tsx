@@ -27,6 +27,7 @@ import { renderToString as reactRenderToString } from "react-dom/server";
 import {
   renderToString as slimRenderToString,
   renderToStream,
+  renderPreflight,
 } from "../src/slim-react/render";
 import {
   createContext,
@@ -1128,5 +1129,179 @@ describe("compare: identifierPrefix", () => {
     const html = await slimRenderToString(<Comp /> as any);
     const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
     expect(ids[0]).not.toMatch(/^_R_st/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// slim: concurrent render isolation — useId tree-state safety
+//
+// The slim-react renderer keeps tree-context state (pushTreeContext stacks,
+// currentTreeContext) in module-level globals that are snapshotted and
+// restored at every `await` boundary.  These tests confirm that concurrent
+// renders cannot corrupt each other's useId output, which was the root cause
+// of intermittent hydration mismatches in production.
+// ---------------------------------------------------------------------------
+
+describe("slim: concurrent render isolation — useId", () => {
+  /** Render the same tree sequentially and return its useId values. */
+  async function getIdsSequential(depth: number): Promise<string[]> {
+    function Inner() {
+      const id = React.useId();
+      return React.createElement("span", { id }, null) as any;
+    }
+    // Build a `depth`-deep chain so the tree-context stack is non-trivial.
+    function Wrap({ d }: { d: number }): any {
+      if (d === 0) return React.createElement(Inner as any, null);
+      return React.createElement("div", null, React.createElement(Wrap as any, { d: d - 1 }));
+    }
+    const html = await slimRenderToString(React.createElement(Wrap as any, { d: depth }) as any);
+    return [...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+  }
+
+  test("concurrent renders produce IDs identical to sequential renders", async () => {
+    // An async parent yields so that the two renders interleave.  The sync
+    // child then calls useId — the tree context it reads must match what a
+    // sequential render would produce.
+    async function AsyncParent({ label, children }: { label: string; children?: any }) {
+      await Promise.resolve(); // yield — the other render runs here
+      return React.createElement("div", { "data-r": label }, children) as any;
+    }
+    function IdChild() {
+      const id = slimUseId();
+      return React.createElement("span", { id }, null) as any;
+    }
+    function Tree({ label }: { label: string }) {
+      return React.createElement(AsyncParent as any, { label },
+        React.createElement(IdChild as any, null)
+      ) as any;
+    }
+
+    // Baseline: what does a single sequential render produce?
+    const baseline = await slimRenderToString(React.createElement(Tree as any, { label: "solo" }) as any);
+    const [baselineId] = [...baseline.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+
+    // Concurrent: run two identical trees at the same time.
+    const [html1, html2] = await Promise.all([
+      slimRenderToString(React.createElement(Tree as any, { label: "A" }) as any),
+      slimRenderToString(React.createElement(Tree as any, { label: "B" }) as any),
+    ]);
+
+    const [id1] = [...html1.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+    const [id2] = [...html2.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+
+    // Both concurrent renders must produce the same ID as the solo baseline.
+    expect(id1).toBe(baselineId);
+    expect(id2).toBe(baselineId);
+  });
+
+  test("concurrent renders with deep tree context do not corrupt sibling IDs", async () => {
+    // Regression: resetRenderState() from render B used to stomp render A's
+    // _treeIdStack/_treeOvStack mid-render, producing shorter/wrong IDs.
+    // AsyncParent yields; the sync IdChild then reads tree context.
+    async function AsyncParent({ children }: { children?: any }) {
+      await Promise.resolve();
+      return React.createElement("div", null, children) as any;
+    }
+    function IdChild() {
+      const id = slimUseId();
+      return React.createElement("i", { id }, null) as any;
+    }
+    function Leaf() {
+      return React.createElement(AsyncParent as any, null,
+        React.createElement(IdChild as any, null)
+      ) as any;
+    }
+    function Deep({ n }: { n: number }): any {
+      if (n === 0) return React.createElement(Leaf as any, null);
+      return React.createElement("div", null,
+        React.createElement(Deep as any, { n: n - 1 }),
+        React.createElement(Deep as any, { n: n - 1 }),
+      );
+    }
+
+    // Sequential baseline at depth 2 (produces 4 leaf IDs).
+    const baselineHtml = await slimRenderToString(React.createElement(Deep as any, { n: 2 }) as any);
+    const baselineIds = [...baselineHtml.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+    expect(baselineIds).toHaveLength(4);
+    // All baseline IDs must be distinct.
+    expect(new Set(baselineIds).size).toBe(4);
+
+    // Two concurrent renders of the same tree.
+    const [h1, h2] = await Promise.all([
+      slimRenderToString(React.createElement(Deep as any, { n: 2 }) as any),
+      slimRenderToString(React.createElement(Deep as any, { n: 2 }) as any),
+    ]);
+
+    const ids1 = [...h1.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+    const ids2 = [...h2.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+
+    // Each concurrent render must produce 4 distinct IDs matching the baseline.
+    expect(ids1).toEqual(baselineIds);
+    expect(ids2).toEqual(baselineIds);
+  });
+
+  test("many concurrent renders all agree on useId output", async () => {
+    // Stress test: 10 renders running simultaneously.
+    async function AsyncParent({ children }: { children?: any }) {
+      await Promise.resolve();
+      return React.createElement("section", null, children) as any;
+    }
+    function IdSiblings() {
+      const a = slimUseId();
+      const b = slimUseId();
+      return React.createElement(React.Fragment, null,
+        React.createElement("b", { id: a }, null),
+        React.createElement("b", { id: b }, null),
+      ) as any;
+    }
+    function Tree() {
+      return React.createElement(AsyncParent as any, null,
+        React.createElement(IdSiblings as any, null)
+      ) as any;
+    }
+
+    const baseline = await slimRenderToString(React.createElement(Tree as any, null) as any);
+    const baselineIds = [...baseline.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+    expect(baselineIds).toHaveLength(2);
+    expect(baselineIds[0]).not.toBe(baselineIds[1]);
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        slimRenderToString(React.createElement(Tree as any, null) as any)
+      )
+    );
+
+    for (const html of results) {
+      const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+      expect(ids).toEqual(baselineIds);
+    }
+  });
+
+  test("renderPreflight + renderToString concurrent isolation", async () => {
+    // renderPreflight runs pass-1; renderToString runs pass-2.
+    // Both can be in-flight concurrently for different requests.
+    async function AsyncParent({ children }: { children?: any }) {
+      await Promise.resolve();
+      return React.createElement("div", null, children) as any;
+    }
+    function IdChild() {
+      const id = slimUseId();
+      return React.createElement("mark", { id }, null) as any;
+    }
+    const el = () => React.createElement(AsyncParent as any, null,
+      React.createElement(IdChild as any, null)
+    ) as any;
+
+    const baseline = await slimRenderToString(el());
+    const [baselineId] = [...baseline.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+
+    // Interleave a preflight from request B with a full render from request A.
+    const [html] = await Promise.all([
+      slimRenderToString(el()),
+      renderPreflight(el()),
+    ]);
+
+    const [id] = [...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+    expect(id).toBe(baselineId);
   });
 });

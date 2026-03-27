@@ -220,21 +220,44 @@ export function componentCalledUseId(): boolean {
   return s().localIdCounter > 0;
 }
 
-export function snapshotContext(): { tree: TreeContext; localId: number; treeDepth: number } {
-  const st  = s();
-  const ctx = st.currentTreeContext;
-  // Copy scalars directly — avoids a spread allocation.
-  return { tree: { id: ctx.id, overflow: ctx.overflow }, localId: st.localIdCounter, treeDepth: _treeDepth };
+export interface ContextSnapshot {
+  tree: TreeContext;
+  localId: number;
+  treeDepth: number;
+  /** Saved parent-context id values for the stack slots 0..treeDepth-1.
+   *  Required so that concurrent renders cannot corrupt popTreeContext calls
+   *  that run after an await continuation. */
+  idStack: number[];
+  ovStack: string[];
 }
 
-export function restoreContext(snap: { tree: TreeContext; localId: number; treeDepth: number }): void {
+export function snapshotContext(): ContextSnapshot {
+  const st    = s();
+  const ctx   = st.currentTreeContext;
+  const depth = _treeDepth;
+  return {
+    tree:      { id: ctx.id, overflow: ctx.overflow },
+    localId:   st.localIdCounter,
+    treeDepth: depth,
+    // Snapshot the live stack so that popTreeContext reads correct saved values
+    // even if another concurrent render's resetRenderState stomped the arrays.
+    idStack:   _treeIdStack.slice(0, depth),
+    ovStack:   _treeOvStack.slice(0, depth),
+  };
+}
+
+export function restoreContext(snap: ContextSnapshot): void {
   const st  = s();
   const ctx = st.currentTreeContext;
-  // Mutate in place — avoids allocating a new TreeContext object.
-  ctx.id             = snap.tree.id;
-  ctx.overflow       = snap.tree.overflow;
-  st.localIdCounter  = snap.localId;
-  _treeDepth         = snap.treeDepth;
+  ctx.id            = snap.tree.id;
+  ctx.overflow      = snap.tree.overflow;
+  st.localIdCounter = snap.localId;
+  _treeDepth        = snap.treeDepth;
+  // Restore the stack so subsequent popTreeContext calls see the right values.
+  for (let i = 0; i < snap.treeDepth; i++) {
+    _treeIdStack[i] = snap.idStack[i]!;
+    _treeOvStack[i] = snap.ovStack[i]!;
+  }
 }
 
 /**
