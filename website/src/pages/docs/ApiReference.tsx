@@ -37,6 +37,9 @@ const ApiReference: React.FC = () => (
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">htmlTemplate</code><span className="text-muted-foreground">string</span><span className="text-muted-foreground">Path to a custom HTML template with <code className="text-sm bg-muted px-1 rounded">HADARS_HEAD</code> / <code className="text-sm bg-muted px-1 rounded">HADARS_BODY</code> markers.</span></div>
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">optimization</code><span className="text-muted-foreground">object</span><span className="text-muted-foreground">Override rspack <code className="text-sm bg-muted px-1 rounded">optimization</code> for production client builds.</span></div>
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">cache</code><span className="text-muted-foreground">function</span><span className="text-muted-foreground">SSR response cache for <code className="text-sm bg-muted px-1 rounded">run()</code> mode. Return <code className="text-sm bg-muted px-1 rounded">{'{ key, ttl? }'}</code> to cache a request.</span></div>
+                <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">paths</code><span className="text-muted-foreground">function</span><span className="text-muted-foreground">Returns URL list to pre-render with <code className="text-sm bg-muted px-1 rounded">hadars export static</code>. Receives <code className="text-sm bg-muted px-1 rounded">HadarsStaticContext</code>.</span></div>
+                <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">sources</code><span className="text-muted-foreground">array</span><span className="text-muted-foreground">Gatsby-compatible source plugins. hadars infers a GraphQL schema from their nodes automatically.</span></div>
+                <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">graphql</code><span className="text-muted-foreground">function</span><span className="text-muted-foreground">Custom GraphQL executor. Passed to <code className="text-sm bg-muted px-1 rounded">paths()</code>, <code className="text-sm bg-muted px-1 rounded">getInitProps()</code>, and <code className="text-sm bg-muted px-1 rounded">useGraphQL()</code>.</span></div>
             </div>
 
             <h3 className="text-lg font-semibold mb-3 text-gradient-soft">Example</h3>
@@ -148,6 +151,31 @@ function useServerData<T>(
                 For client-side navigation, fires a single <code className="text-sm bg-muted px-1.5 py-0.5 rounded">GET &lt;url&gt;</code> with{' '}
                 <code className="text-sm bg-muted px-1.5 py-0.5 rounded">Accept: application/json</code> and suspends via React Suspense until resolved.
                 All <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code> calls within the same render share one request.
+            </p>
+        </section>
+
+        <section className="mb-10">
+            <h2 className="text-xl font-semibold mb-3 text-gradient-soft">useGraphQL</h2>
+            <Code lang="typescript">{`
+// Typed — result.data shape is inferred from the DocumentNode
+function useGraphQL<TData, TVariables>(
+    query: HadarsDocumentNode<TData, TVariables>,
+    variables?: TVariables,
+): { data?: TData } | undefined
+
+// Untyped fallback for plain query strings
+function useGraphQL(
+    query: string,
+    variables?: Record<string, unknown>,
+): { data?: Record<string, unknown> } | undefined
+            `}</Code>
+            <p className="text-muted-foreground mt-4">
+                Executes a GraphQL query inside any component using the executor configured via{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">sources</code> or{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">graphql</code> in{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">hadars.config.ts</code>.
+                Integrates with <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code> — the query runs on the server during SSR/export and is hydrated on the client at no extra cost.
+                Returns <code className="text-sm bg-muted px-1.5 py-0.5 rounded">undefined</code> while pending. GraphQL errors throw, marking the page as failed during static export.
             </p>
         </section>
 

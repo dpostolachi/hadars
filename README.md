@@ -2,6 +2,8 @@
 
 A minimal server-side rendering framework for React built on [rspack](https://rspack.dev). Runs on Bun, Node.js, and Deno.
 
+**[hadars.xyz](https://hadars.xyz)** — docs & website
+
 ## Why hadars?
 
 hadars is an alternative to Next.js for apps that just need SSR.
