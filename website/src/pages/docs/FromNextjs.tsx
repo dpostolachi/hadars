@@ -118,7 +118,7 @@ const FromNextjs: React.FC = () => (
                 </div>
                 <Row feature="Routing"          next="File-based (pages/ or app/)"    hadar="Bring your own (react-router, TanStack Router, …)" />
                 <Row feature="Data fetching"    next={<><code className="text-xs bg-muted px-1 rounded">getServerSideProps</code> / Server Components</>} hadar={<><code className="text-xs bg-muted px-1 rounded">getInitProps</code> + <code className="text-xs bg-muted px-1 rounded">useServerData</code></>} />
-                <Row feature="Rendering modes"  next="SSR, SSG, ISR, PPR, edge"       hadar="SSR only (fast, predictable)" />
+                <Row feature="Rendering modes"  next="SSR, SSG, ISR, PPR, edge"       hadar="SSR + static export (hadars export static)" />
                 <Row feature="Head management"  next={<><code className="text-xs bg-muted px-1 rounded">next/head</code> / metadata API</>} hadar={<><code className="text-xs bg-muted px-1 rounded">{'<HadarsHead>'}</code> anywhere in the tree</>} />
                 <Row feature="Static files"     next="public/ directory"              hadar="static/ directory at project root — served automatically" />
                 <Row feature="Image handling"   next="next/image (automatic)"         hadar="Plain <img> (your CDN, your rules)" />
@@ -126,7 +126,7 @@ const FromNextjs: React.FC = () => (
                 <Row feature="Config"           next="next.config.js (large API)"     hadar="hadars.config.ts (~10 options)" />
                 <Row feature="Bundle tool"      next="SWC + Webpack/Turbopack"        hadar="rspack + SWC" />
                 <Row feature="Runtime"          next="Node.js / edge runtimes"        hadar="Node.js, Bun, Deno" />
-                <Row feature="Deploy target"    next="Vercel / self-hosted"           hadar="Any HTTP server or AWS Lambda" />
+                <Row feature="Deploy target"    next="Vercel / self-hosted"           hadar="Any HTTP server, AWS Lambda, or Cloudflare Workers" />
             </div>
         </section>
 
@@ -230,9 +230,13 @@ const App: HadarsApp<Props> = ({ location }) => {
             <h2 className="text-xl font-semibold mb-3 text-gradient-soft">Data fetching</h2>
             <p className="text-muted-foreground mb-4">
                 Next.js has several patterns depending on the rendering mode.
-                hadars has two: <code className="text-sm bg-muted px-1.5 py-0.5 rounded">getInitProps</code> for
-                request-level data, and <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code> for
-                component-level data.
+                hadars has three:{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">getInitProps</code> for
+                request-level data,{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code> for
+                component-level async data, and{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useGraphQL</code> for
+                component-level GraphQL queries (when source plugins or a custom executor are configured).
             </p>
 
             <SideBySide
@@ -482,8 +486,8 @@ const HeavyChart = React.lazy(
                     <span>Next.js feature</span><span>hadars equivalent / alternative</span>
                 </div>
                 {[
-                    ['Static Site Generation (SSG / getStaticProps)', 'Not supported — hadars is SSR-only. Pre-render with a script + CDN if needed.'],
-                    ['Incremental Static Regeneration (ISR)', 'Use the SSR cache option with a TTL, or an external CDN cache.'],
+                    ['Static Site Generation (SSG / getStaticProps)', 'hadars export static — pre-renders pages to HTML files. Add source plugins to pull data from any CMS.'],
+                    ['Incremental Static Regeneration (ISR)', 'Use the SSR cache option with a TTL, or an external CDN cache. Full ISR is not supported.'],
                     ['Server Components / React RSC', 'Not yet. Use useServerData for component-level server data.'],
                     ['Middleware (edge, request rewriting)', 'Use the fetch hook in config or a reverse proxy (nginx, Cloudflare).'],
                     ['next/image (automatic optimisation)', 'Use your CDN or <img> directly. No build-time image processing.'],
@@ -509,6 +513,7 @@ const HeavyChart = React.lazy(
                     { title: 'AWS Lambda', desc: 'hadars export lambda builds a single self-contained .mjs. No filesystem reads on cold start.' },
                     { title: 'Bun or Deno', desc: 'Uses the standard Fetch API throughout. Same code runs on Node.js, Bun, and Deno unchanged.' },
                     { title: 'Minimal dependencies', desc: 'No peer deps beyond React. The only coupling is the config file — swap it out when you outgrow it.' },
+                    { title: 'Static sites with a CMS', desc: 'hadars export static + Gatsby-compatible source plugins. Pull data from Contentful, local files, or any API — no Gatsby required.' },
                     { title: 'Dynamic, authenticated apps', desc: 'If every response depends on the user\'s session, SSG buys you nothing. SSR with a short cache TTL is faster to reason about.' },
                 ].map(({ title, desc }) => (
                     <div
