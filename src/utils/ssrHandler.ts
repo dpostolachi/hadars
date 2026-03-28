@@ -89,6 +89,18 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     let preHead: string | null = null;
     let postHead: string | null = null;
     let postContent: string | null = null;
+
+    // Parse the template as soon as the file read completes — during the
+    // process's idle time before the first request arrives.  This way the
+    // first real request finds preHead !== null and takes the sync path.
+    const primed = htmlFilePromise.then(html => {
+        const headEnd = html.indexOf(HEAD_MARKER);
+        const contentStart = html.indexOf(BODY_MARKER);
+        preHead = html.slice(0, headEnd);
+        postHead = html.slice(headEnd + HEAD_MARKER.length, contentStart);
+        postContent = html.slice(contentStart + BODY_MARKER.length);
+    });
+
     // Returns synchronously once the template has been loaded and parsed
     // (every request after the first).  Callers can check `instanceof Promise`
     // to take a zero-await hot path.
@@ -97,14 +109,7 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
             // Hot path — sync return, no Promise allocation.
             return [preHead + headHtml + postHead!, postContent!];
         }
-        return htmlFilePromise.then(html => {
-            const headEnd = html.indexOf(HEAD_MARKER);
-            const contentStart = html.indexOf(BODY_MARKER);
-            preHead = html.slice(0, headEnd);
-            postHead = html.slice(headEnd + HEAD_MARKER.length, contentStart);
-            postContent = html.slice(contentStart + BODY_MARKER.length);
-            return [preHead + headHtml + postHead, postContent];
-        });
+        return primed.then(() => [preHead! + headHtml + postHead!, postContent!]);
     };
 };
 

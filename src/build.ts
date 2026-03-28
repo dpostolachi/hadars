@@ -701,6 +701,14 @@ export const run = async (options: HadarsRuntimeOptions) => {
         fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8')
     );
 
+    // Hoist and pre-import the SSR module at startup so the first request does
+    // not pay the module parse/eval cost.  The file: URL is stable for the life
+    // of the process (no cache-busting needed in run mode).
+    const componentPath = pathToFileURL(
+        pathMod.resolve(__dirname, HadarsFolder, SSR_FILENAME)
+    ).href;
+    const ssrModulePromise = import(componentPath) as Promise<HadarsEntryModule<any>>;
+
     const runHandler: CacheFetchHandler = async (req, ctx) => {
         const request = parseRequest(req);
         if (handler) {
@@ -733,16 +741,12 @@ export const run = async (options: HadarsRuntimeOptions) => {
             if (routeRes) return routeRes;
         }
 
-        const componentPath = pathToFileURL(
-            pathMod.resolve(__dirname, HadarsFolder, SSR_FILENAME)
-        ).href;
-
         try {
             const {
                 default: Component,
                 getInitProps,
                 getFinalProps,
-            } = (await import(componentPath)) as HadarsEntryModule<any>;
+            } = await ssrModulePromise;
 
             if (renderPool && request.headers.get('Accept') !== 'application/json') {
                 // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.

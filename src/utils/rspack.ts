@@ -338,6 +338,12 @@ const buildCompilerConfig = (
         // changed files, making repeat dev starts significantly faster.
         cache: true,
         externals,
+        // externalsPresets.node externalises ALL Node.js built-ins (bare names
+        // and the node: prefix) for both static and dynamic imports.  This
+        // complements the explicit `externals` array: the preset handles the
+        // node: URI scheme that rspack cannot resolve as a file, while the
+        // array keeps '@emotion/server' as an explicit external.
+        ...(isServerBuild ? { externalsPresets: { node: true } } : {}),
         ...(optimization !== undefined ? { optimization } : {}),
         plugins: [
             !isServerBuild && new rspack.HtmlRspackPlugin({
@@ -393,7 +399,7 @@ const buildCompilerConfig = (
         // SSR watcher writing .hadars/index.ssr.js triggers the client compiler
         // and vice versa, causing an infinite rebuild loop.
         watchOptions: {
-            ignored: ['**/node_modules/**', '**/.hadars/**'],
+            ignored: ['**/node_modules/**', '**/.hadars/**', '/tmp/**'],
         },
     };
 };
@@ -418,7 +424,7 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
             let first = true;
             // Pass ignored patterns directly — compiler.watch(watchOptions) replaces
             // the config-level watchOptions, so we must repeat them here.
-            compiler.watch({ ignored: ['**/node_modules/**', '**/.hadars/**'] }, (err: any, stats: any) => {
+            compiler.watch({ ignored: ['**/node_modules/**', '**/.hadars/**', '/tmp/**'] }, (err: any, stats: any) => {
                 if (err) {
                     if (first) { first = false; reject(err); }
                     else { console.error('rspack watch error', err); }
@@ -452,10 +458,7 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
 
             console.log(stats?.toString({
                 colors: true,
-                modules: true,
-                children: true,
-                chunks: true,
-                chunkModules: true,
+                preset: 'minimal',
             }));
 
             resolve(stats);

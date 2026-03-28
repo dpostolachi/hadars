@@ -193,20 +193,13 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
         ? makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml))
         : makePrecontentHtmlGetter(fs.readFile(pathMod.join(cwd, StaticPath, 'out.html'), 'utf-8'));
 
-    // Hoist the SSR module reference so it is resolved once, not on every
-    // request. In bundled mode the module is already in-memory; in file-based
-    // mode we lazily import it and cache the promise so Node's module cache is
-    // only consulted once.
-    let ssrModulePromise: Promise<HadarsEntryModule<any>> | null = null;
-    const getSsrModule = (): Promise<HadarsEntryModule<any>> => {
-        if (bundled) return Promise.resolve(bundled.ssrModule);
-        if (!ssrModulePromise) {
-            ssrModulePromise = import(
-                pathToFileURL(pathMod.resolve(cwd, HadarsFolder, SSR_FILENAME)).href
-            ) as Promise<HadarsEntryModule<any>>;
-        }
-        return ssrModulePromise;
-    };
+    // Start loading the SSR module immediately — during Lambda's init phase this
+    // is "free" time not billed against request latency.  Lazy loading would
+    // push the module parse cost onto the first request.
+    const ssrModulePromise: Promise<HadarsEntryModule<any>> = bundled
+        ? Promise.resolve(bundled.ssrModule)
+        : import(pathToFileURL(pathMod.resolve(cwd, HadarsFolder, SSR_FILENAME)).href) as Promise<HadarsEntryModule<any>>;
+    const getSsrModule = () => ssrModulePromise;
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
