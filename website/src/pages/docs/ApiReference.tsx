@@ -137,21 +137,33 @@ export const getClientProps = async (props: PublicProps): Promise<ClientProps> =
             <h2 className="text-xl font-semibold mb-3 text-gradient-soft">useServerData</h2>
             <Code lang="typescript">{`
 function useServerData<T>(
-    key: string | string[],
-    fn: () => Promise<T> | T
+    fn: () => Promise<T> | T,
+    options?: { cache?: boolean }
 ): T | undefined
             `}</Code>
             <p className="text-muted-foreground mt-4">
                 Fetches async data during SSR inside any component. Returns <code className="text-sm bg-muted px-1.5 py-0.5 rounded">undefined</code>{' '}
                 on the first pass(es) while the promise is in-flight, then the resolved value on
                 the final pass. On the client, reads from the hydration cache — <code className="text-sm bg-muted px-1.5 py-0.5 rounded">fn</code>{' '}
-                is never called in the browser.
+                is never called in the browser. The cache key is derived automatically from the
+                call-site's position in the component tree via <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useId()</code>.
             </p>
             <p className="text-muted-foreground mt-3">
                 For client-side navigation, fires a single <code className="text-sm bg-muted px-1.5 py-0.5 rounded">GET &lt;url&gt;</code> with{' '}
                 <code className="text-sm bg-muted px-1.5 py-0.5 rounded">Accept: application/json</code> and suspends via React Suspense until resolved.
                 All <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code> calls within the same render share one request.
             </p>
+            <h3 className="text-base font-semibold mt-4 mb-2">Options</h3>
+            <table className="w-full text-sm text-muted-foreground mb-4">
+                <thead><tr className="text-left border-b border-border"><th className="pb-2 pr-4">Option</th><th className="pb-2 pr-4">Type</th><th className="pb-2 pr-4">Default</th><th className="pb-2">Description</th></tr></thead>
+                <tbody>
+                    <tr className="border-b border-border/50"><td className="py-2 pr-4 font-mono text-xs">cache</td><td className="py-2 pr-4">boolean</td><td className="py-2 pr-4">true</td><td className="py-2">When <code className="bg-muted px-1 rounded">false</code>, the cached value is evicted when the component unmounts so the next mount fetches fresh data from the server. Safe with React Strict Mode.</td></tr>
+                </tbody>
+            </table>
+            <Code>{`
+// cache: false — next mount always fetches fresh data from the server
+const uptime = useServerData(() => process.uptime(), { cache: false });
+            `}</Code>
         </section>
 
         <section className="mb-10">

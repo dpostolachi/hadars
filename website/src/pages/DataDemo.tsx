@@ -3,10 +3,10 @@ import { HadarsHead } from 'hadars';
 import { useServerData } from 'hadars';
 
 const DemoHostnameRow: React.FC = () => {
-    const val = useServerData<string>('demo_hostname', async () => {
+    const val = useServerData<string>(async () => {
         const os = await import('node:os');
         return (os as any).hostname?.() ?? 'unknown';
-    });
+    }, { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">Hostname</span>
@@ -16,9 +16,9 @@ const DemoHostnameRow: React.FC = () => {
 };
 
 const DemoUptimeRow: React.FC = () => {
-    const val = useServerData<number>('demo_uptime', async () =>
+    const val = useServerData<number>(async () =>
         Math.round((globalThis as any).process?.uptime?.() ?? 0)
-    );
+    , { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">Process uptime (s)</span>
@@ -28,9 +28,9 @@ const DemoUptimeRow: React.FC = () => {
 };
 
 const DemoEnvRow: React.FC = () => {
-    const val = useServerData<string>('demo_node_env', async () =>
+    const val = useServerData<string>(async () =>
         (globalThis as any).process?.env?.NODE_ENV ?? 'unknown'
-    );
+    , { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">NODE_ENV</span>
@@ -40,9 +40,9 @@ const DemoEnvRow: React.FC = () => {
 };
 
 const DemoPlatformRow: React.FC = () => {
-    const val = useServerData<string>('demo_platform', async () =>
+    const val = useServerData<string>(async () =>
         (globalThis as any).process?.platform ?? 'unknown'
-    );
+    , { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">Platform</span>
@@ -58,9 +58,7 @@ const DemoPlatformRow: React.FC = () => {
 // string "validate-token" — it will only be found in index.ssr.js (server),
 // never in the client chunks.
 const ServerOnlySecretRow: React.FC = () => {
-    useServerData<{ user: string; role: string }>(
-        'internal_auth_demo',
-        async () => {
+    useServerData<{ user: string; role: string }>(async () => {
             // Everything inside this callback is stripped from the browser bundle.
             const TOKEN = 'Bearer ey_super_secret_internal_token';
             const url = 'https://internal-auth.internal/validate-token';
@@ -68,7 +66,7 @@ const ServerOnlySecretRow: React.FC = () => {
                 .then(r => r.json() as Promise<{ user: string; role: string }>)
                 .catch(() => null);
             return data ?? { user: 'demo', role: 'viewer' };
-        },
+        }, { cache: false },
     );
     return null;
 };
@@ -125,7 +123,7 @@ const DataDemo: React.FC = () => {
 
             <h1 className="text-3xl font-bold mb-3 text-gradient">Batched useServerData</h1>
             <p className="text-lg text-muted-foreground mb-8 max-w-2xl">
-                Four independent components each call <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code> with a different key.
+                Four independent components each call <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code>.
                 During client-side navigation a single <code className="text-sm bg-muted px-1.5 py-0.5 rounded">GET /data-demo</code> with{' '}
                 <code className="text-sm bg-muted px-1.5 py-0.5 rounded">Accept: application/json</code> fetches all four values in one request.
             </p>

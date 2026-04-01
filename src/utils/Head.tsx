@@ -188,9 +188,8 @@ export function initServerDataCache(data: Record<string, unknown>) {
  * On the client the pre-resolved value is read from the hydration cache
  * serialised into the page by the server, so no fetch is issued in the browser.
  *
- * The `key` (string or array of strings) uniquely identifies the cached value
- * across all SSR render passes and client hydration — it must be stable and
- * unique within the page.
+ * The cache key is derived automatically from the call-site's position in the
+ * component tree via `useId()` — no manual key is required.
  *
  * `fn` may return a `Promise<T>` (async usage) or return `T` synchronously.
  * The resolved value is serialised into `__serverData` and returned from cache
@@ -202,12 +201,35 @@ export function initServerDataCache(data: Record<string, unknown>) {
  * React Suspense until the server returns the JSON map of resolved values.
  *
  * @example
- * const user = useServerData('current_user', () => db.getUser(id));
- * const post = useServerData(['post', postId], () => db.getPost(postId));
+ * const user = useServerData(() => db.getUser(id));
+ * const post = useServerData(() => db.getPost(postId));
  * if (!user) return null; // undefined while pending on the first SSR pass
+ *
+ * // cache: false — evicts the entry on unmount so the next mount fetches fresh data
+ * const stats = useServerData(() => getServerStats(), { cache: false });
  */
-export function useServerData<T>(key: string | string[], fn: () => Promise<T> | T): T | undefined {
-    const cacheKey = Array.isArray(key) ? JSON.stringify(key) : key;
+export function useServerData<T>(fn: () => Promise<T> | T, options?: { cache?: boolean }): T | undefined {
+    const cacheKey = React.useId();
+
+    // When cache: false, evict the entry on unmount so the next mount fetches
+    // fresh data from the server. The eviction is deferred via setTimeout so
+    // that React Strict Mode's synchronous fake-unmount/remount cycle can cancel
+    // it before it fires — a real unmount has no follow-up effect to cancel it.
+    const evictTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    React.useEffect(() => {
+        if (options?.cache !== false) return;
+        // Cancel any timer left over from a Strict Mode fake unmount.
+        if (evictTimerRef.current !== null) {
+            clearTimeout(evictTimerRef.current);
+            evictTimerRef.current = null;
+        }
+        return () => {
+            evictTimerRef.current = setTimeout(() => {
+                clientServerDataCache.delete(cacheKey);
+                evictTimerRef.current = null;
+            }, 0);
+        };
+    }, []);
 
     if (typeof window !== 'undefined') {
         // Cache hit — return the server-resolved value directly (covers both initial
@@ -281,21 +303,7 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
     const unsuspend: AppUnsuspend | undefined = (globalThis as any).__hadarsUnsuspend;
     if (!unsuspend) return undefined;
 
-    // ── unstable-key detection ───────────────────────────────────────────────
-    // Track the last key thrown as a pending promise and whether it was accessed
-    // as a cache hit in the current pass. If a new pending entry appears while
-    // the previous pending key resolved but was never requested, the key is
-    // changing between passes (e.g. Date.now() or Math.random() in the key).
-    const _u = unsuspend as any;
-    if (!_u.pendingCreated) _u.pendingCreated = 0;
-    // ────────────────────────────────────────────────────────────────────────
-
     const existing = unsuspend.cache.get(cacheKey);
-
-    // Mark the previous pending key as accessed when it appears as a cache hit.
-    if (existing?.status === 'fulfilled' && _u.lastPendingKey === cacheKey) {
-        _u.lastPendingKeyAccessed = true;
-    }
 
     if (!existing) {
         // First encounter — call fn(), which may:
@@ -313,35 +321,6 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
         }
 
         // (a) Async Promise — standard useServerData usage.
-
-        // Unstable-key detection: the previous pending key resolved but was never
-        // requested in the current pass — a new key replaced it, which means the
-        // key is not stable between render passes.
-        if (_u.lastPendingKey != null && !_u.lastPendingKeyAccessed) {
-            const prev = unsuspend.cache.get(_u.lastPendingKey);
-            if (prev?.status === 'fulfilled') {
-                throw new Error(
-                    `[hadars] useServerData: key ${JSON.stringify(cacheKey)} is not stable between render passes. ` +
-                    `The previous pass resolved ${JSON.stringify(_u.lastPendingKey)} but it was not ` +
-                    `requested in this pass — the key is changing between renders. ` +
-                    `Avoid dynamic values in keys (e.g. Date.now() or Math.random()); ` +
-                    `use stable, deterministic identifiers instead.`,
-                );
-            }
-        }
-
-        _u.pendingCreated++;
-        if (_u.pendingCreated > 100) {
-            throw new Error(
-                `[hadars] useServerData: more than 100 async keys created in a single render. ` +
-                `This usually means a key is not stable between renders (e.g. it contains ` +
-                `Date.now() or Math.random()). Currently offending key: ${JSON.stringify(cacheKey)}.`,
-            );
-        }
-
-        _u.lastPendingKey = cacheKey;
-        _u.lastPendingKeyAccessed = false;
-
         const promise = (result as Promise<T>).then(
             value => { unsuspend.cache.set(cacheKey, { status: 'fulfilled', value }); },
             reason => { unsuspend.cache.set(cacheKey, { status: 'rejected', reason }); },
@@ -362,26 +341,6 @@ export function useServerData<T>(key: string | string[], fn: () => Promise<T> | 
 // Execute a GraphQL query during SSR via the hadars data layer. The executor
 // is stored in globalThis.__hadarsGraphQL by the framework before each render.
 // On the client, useServerData handles hydration + client-side navigation.
-
-/**
- * Derive a stable cache key string from a query argument.
- * For string queries the key is the trimmed query string.
- * For document nodes we use the operation name when available (fast, concise)
- * and fall back to stringifying the definitions (always stable).
- * The key is ONLY used for cache lookup — the original document is passed to
- * the executor so it can call print() itself.
- */
-function toCacheKey(doc: any): string {
-    if (typeof doc === 'string') return doc.trim();
-    // Use the operation name for named operations — compact and stable.
-    for (const def of doc?.definitions ?? []) {
-        if (def.kind === 'OperationDefinition' && def.name?.value) {
-            return `op:${def.name.value}`;
-        }
-    }
-    // Anonymous operation — fall back to stringifying definitions.
-    return JSON.stringify(doc?.definitions ?? doc);
-}
 
 /**
  * Execute a GraphQL query server-side and return the result.
@@ -421,9 +380,7 @@ export function useGraphQL(
     query: string | HadarsDocumentNode<unknown, Record<string, unknown>>,
     variables?: Record<string, unknown>,
 ): { data?: unknown } | undefined {
-    const key = ['__gql', toCacheKey(query), JSON.stringify(variables ?? {})];
-
-    return useServerData(key, async () => {
+    return useServerData(async () => {
         const executor: ((q: any, v?: Record<string, unknown>) => Promise<any>) | undefined =
             (globalThis as any).__hadarsGraphQL;
 

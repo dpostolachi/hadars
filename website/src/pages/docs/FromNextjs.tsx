@@ -260,7 +260,7 @@ import { useServerData } from 'hadars';
 // Runs inside the component during SSR.
 // On the client, reads from the hydration cache.
 const Profile: React.FC<{ userId: string }> = ({ userId }) => {
-    const user = useServerData(['user', userId], () =>
+    const user = useServerData(() =>
         fetch(\`/api/users/\${userId}\`).then(r => r.json())
     );
     if (!user) return null;

@@ -146,7 +146,7 @@ import { useServerData } from 'hadars';
 const Blog: React.FC = () => {
     const { slug } = useParams<{ slug: string }>();
 
-    const post = useServerData(['post', slug!], () => db.getPost(slug!));
+    const post = useServerData(() => db.getPost(slug!));
     if (!post) return null;
 
     return (

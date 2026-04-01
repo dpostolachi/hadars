@@ -148,16 +148,28 @@ Fetch async data inside a component during SSR. The framework's render loop awai
 import { useServerData } from 'hadars';
 
 const UserCard = ({ userId }: { userId: string }) => {
-    const user = useServerData(['user', userId], () => db.getUser(userId));
+    const user = useServerData(() => db.getUser(userId));
     if (!user) return null; // undefined while pending on the first SSR pass
     return <p>{user.name}</p>;
 };
 ```
 
-- **`key`** - string or string array; must be stable and unique within the page
+The cache key is derived automatically from the call-site's position in the component tree via `useId()` — no manual key is needed.
+
 - **Server (SSR)** - calls `fn()`, awaits the result across render iterations, returns `undefined` until resolved
 - **Client (hydration)** - reads the pre-resolved value from the hydration cache serialised by the server; `fn()` is never called in the browser
-- **Client (navigation)** - when a component mounts during client-side navigation and its key is not in the cache, hadars fires a single `GET <current-url>` with `Accept: application/json`; all `useServerData` calls within the same render are batched into one request and suspended via React Suspense until the server returns the JSON data map
+- **Client (navigation)** - when a component mounts during client-side navigation and its data is not in the cache, hadars fires a single `GET <current-url>` with `Accept: application/json`; all `useServerData` calls within the same render are batched into one request and suspended via React Suspense until the server returns the JSON data map
+
+### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `cache` | `boolean` | `true` | When `false`, the cached value is evicted when the component unmounts so the next mount fetches fresh data from the server. Safe with React Strict Mode. |
+
+```tsx
+// Uptime changes every request — evict on unmount so re-mounting always fetches fresh
+const uptime = useServerData(() => process.uptime(), { cache: false });
+```
 
 ## Data lifecycle hooks
 

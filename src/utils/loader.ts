@@ -99,11 +99,11 @@ function swcTransform(this: any, swc: any, source: string, isServer: boolean, re
 
         const name: string = callee.value;
 
-        // ── useServerData(key, fn) — strip fn on client builds ────────────────
+        // ── useServerData(fn) — strip fn on client builds ────────────────────
         if (!isServer && name === 'useServerData') {
             const args: any[] = node.arguments;
-            if (!args || args.length < 2) return;
-            const fnArg = args[1].expression ?? args[1];
+            if (!args || args.length < 1) return;
+            const fnArg = args[0].expression ?? args[0];
             // Normalise to 0-based local byte offsets and replace with stub.
             replacements.push({
                 start: fnArg.span.start - fileOffset,
@@ -278,7 +278,7 @@ function scanExpressionEnd(source: string, pos: number): number {
 }
 
 /**
- * Strip the `fn` argument from `useServerData(key, fn)` calls in client builds.
+ * Strip the `fn` argument from `useServerData(fn)` calls in client builds.
  * Uses a character-level scanner to handle arbitrary fn expressions (arrow
  * functions with nested calls, async functions, object literals, etc.).
  */
@@ -290,16 +290,8 @@ function stripUseServerDataFns(source: string): string {
     let match: RegExpExecArray | null;
     CALL_RE.lastIndex = 0;
     while ((match = CALL_RE.exec(source)) !== null) {
-        const callStart = match.index;
         let i = match.index + match[0].length;
-        // Skip whitespace before first arg
-        while (i < source.length && /\s/.test(source[i]!)) i++;
-        // Skip first argument (key: string or array)
-        i = scanExpressionEnd(source, i);
-        // Expect comma separator
-        if (i >= source.length || source[i] !== ',') continue;
-        i++; // skip comma
-        // Skip whitespace before fn
+        // Skip whitespace before fn arg
         while (i < source.length && /\s/.test(source[i]!)) i++;
         const fnStart = i;
         // Scan to end of fn argument

@@ -13,13 +13,13 @@ const LazyPanel = React.lazy(() => loadModule<{ default: React.FC }>('../LazyPan
 interface ProcessStats { pid: number; mem: number }
 
 const ServerStatsRow: React.FC = () => {
-    const stats = useServerData<ProcessStats>('server_stats', async () => {
+    const stats = useServerData<ProcessStats>(async () => {
         const proc = (globalThis as any).process;
         return {
             pid: proc?.pid ?? 0,
             mem: Math.round((proc?.memoryUsage?.()?.rss ?? 0) / 1024 / 1024),
         };
-    });
+    }, { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">useServerData</span>
