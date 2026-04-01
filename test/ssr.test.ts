@@ -102,12 +102,13 @@ test('SSR renders the correct <title> tag', async () => {
 
 test('useServerData: server_stats is populated on the server', async () => {
     const { props } = await getPage();
-    const stats = props.__serverData?.server_stats;
+    // Keys are now auto-generated via useId() — find the entry by shape.
+    const stats = Object.values(props.__serverData ?? {}).find(
+        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
+    ) as { pid: number; mem: number } | undefined;
     expect(stats).toBeDefined();
-    expect(typeof stats.pid).toBe('number');
-    expect(typeof stats.mem).toBe('number');
-    expect(stats.pid).toBeGreaterThan(0);
-    expect(stats.mem).toBeGreaterThan(0);
+    expect(stats!.pid).toBeGreaterThan(0);
+    expect(stats!.mem).toBeGreaterThan(0);
 });
 
 test('getInitProps: serverTime and bunVersion are in the serialised props', async () => {
@@ -215,10 +216,11 @@ test('Accept: application/json returns JSON serverData map for the current route
     const json = await res.json() as { serverData: Record<string, unknown> };
     expect(json.serverData).toBeDefined();
 
-    // server_stats is a useServerData call on the home page
-    const stats = json.serverData.server_stats as { pid: number; mem: number } | undefined;
+    // server_stats is a useServerData call on the home page — key is auto-generated.
+    const stats = Object.values(json.serverData).find(
+        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
+    ) as { pid: number; mem: number } | undefined;
     expect(stats).toBeDefined();
-    expect(typeof stats!.pid).toBe('number');
     expect(stats!.pid).toBeGreaterThan(0);
 
     // Should not return a full HTML document

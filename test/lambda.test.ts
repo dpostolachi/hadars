@@ -137,11 +137,12 @@ test('lambda: GET / contains <div id="app"> with rendered content', async () => 
 test('lambda: useServerData server_stats is in the serialised props', async () => {
     const result = await handler(makeV2Event('/'));
     const props  = extractProps(result.body);
-    const stats  = props.__serverData?.server_stats;
+    // Keys are now auto-generated via useId() — find the entry by shape.
+    const stats = Object.values(props.__serverData ?? {}).find(
+        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
+    ) as { pid: number; mem: number } | undefined;
     expect(stats).toBeDefined();
-    expect(typeof stats.pid).toBe('number');
-    expect(typeof stats.mem).toBe('number');
-    expect(stats.pid).toBeGreaterThan(0);
+    expect(stats!.pid).toBeGreaterThan(0);
 });
 
 test('lambda: getInitProps serverTime and bunVersion are present', async () => {
@@ -158,7 +159,8 @@ test('lambda: Accept: application/json returns JSON serverData', async () => {
     expect(result.headers['content-type']).toContain('application/json');
     const json = JSON.parse(result.body) as { serverData: Record<string, unknown> };
     expect(json.serverData).toBeDefined();
-    expect(json.serverData.server_stats).toBeDefined();
+    // Key is auto-generated via useId() — verify at least one entry exists.
+    expect(Object.keys(json.serverData).length).toBeGreaterThan(0);
 });
 
 test('lambda: custom fetch handler returns stubbed /api/data JSON (v2 event)', async () => {
