@@ -134,7 +134,12 @@ function getCtx(): InnerContext | null {
 // ── useServerData ─────────────────────────────────────────────────────────────
 //
 // Client-side cache pre-populated from the server's resolved data before
-// hydration. Keyed by the same React useId() values that the server used.
+// hydration. During the initial SSR load, keyed by the server's useId() values
+// (which match React's hydrateRoot IDs). During client-side navigation the
+// server keys are _R_..._  (slim-react format) but the client is NOT in
+// hydration mode so useId() returns _r_..._  — a completely different format.
+// We bridge this by storing navigation results as an ordered array and consuming
+// them sequentially on the retry, then caching by the client's own useId() key.
 const clientServerDataCache = new Map<string, unknown>();
 
 // Tracks in-flight data-only requests keyed by pathname+search so that all
@@ -144,39 +149,21 @@ const pendingDataFetch = new Map<string, Promise<void>>();
 // when a key is genuinely absent from the server response for this path.
 const fetchedPaths = new Set<string>();
 
-// Keys that were seeded from SSR data and not yet claimed by any useServerData
-// call on the client. Used to detect server↔client key mismatches.
-let ssrInitialKeys: Set<string> | null = null;
-let unclaimedKeyCheckScheduled = false;
-
-function scheduleUnclaimedKeyCheck() {
-    if (unclaimedKeyCheckScheduled) return;
-    unclaimedKeyCheckScheduled = true;
-    // Wait for the current synchronous hydration pass to finish, then check.
-    setTimeout(() => {
-        unclaimedKeyCheckScheduled = false;
-        if (ssrInitialKeys && ssrInitialKeys.size > 0) {
-            console.warn(
-                `[hadars] useServerData: ${ssrInitialKeys.size} server-resolved key(s) were ` +
-                `never claimed during client hydration: ${[...ssrInitialKeys].map(k => JSON.stringify(k)).join(', ')}. ` +
-                `This usually means the key passed to useServerData was different on the server ` +
-                `than on the client (e.g. it contains Date.now(), Math.random(), or another ` +
-                `value that changes between renders). Keys must be stable and deterministic.`,
-            );
-        }
-        ssrInitialKeys = null;
-    }, 0);
-}
+// Ordered values from the most recent navigation fetch.
+// React retries suspended components in tree order (same order as SSR), so
+// consuming these positionally is safe and avoids the server/client key mismatch.
+let _navValues: unknown[] = [];
+let _navIdx = 0;
 
 /** Call this before hydrating to seed the client cache from the server's data.
  *  Invoked automatically by the hadars client bootstrap.
  *  Always clears the existing cache before populating — call with `{}` to just clear. */
 export function initServerDataCache(data: Record<string, unknown>) {
     clientServerDataCache.clear();
-    ssrInitialKeys = new Set<string>();
+    _navValues = [];
+    _navIdx = 0;
     for (const [k, v] of Object.entries(data)) {
         clientServerDataCache.set(k, v);
-        ssrInitialKeys.add(k);
     }
 }
 
@@ -232,19 +219,9 @@ export function useServerData<T>(fn: () => Promise<T> | T, options?: { cache?: b
     }, []);
 
     if (typeof window !== 'undefined') {
-        // Cache hit — return the server-resolved value directly (covers both initial
-        // SSR hydration and values fetched during client-side navigation).
+        // Cache hit — return the server-resolved value directly.
         if (clientServerDataCache.has(cacheKey)) {
-            // Mark this SSR key as claimed so the unclaimed-key check doesn't warn about it.
-            ssrInitialKeys?.delete(cacheKey);
             return clientServerDataCache.get(cacheKey) as T;
-        }
-
-        // Cache miss during the initial hydration pass (SSR data is present but
-        // this key wasn't in it) — schedule a deferred check for orphaned SSR keys
-        // which would signal a server↔client key mismatch.
-        if (ssrInitialKeys !== null && ssrInitialKeys.size > 0) {
-            scheduleUnclaimedKeyCheck();
         }
 
         // Cache miss — this component is mounting during client-side navigation
@@ -254,9 +231,17 @@ export function useServerData<T>(fn: () => Promise<T> | T, options?: { cache?: b
         // share one Promise so only one network request is made per navigation.
         const pathKey = window.location.pathname + window.location.search;
 
-        // If we already fetched this path and the key is still missing, the server
-        // doesn't produce a value for it — return undefined rather than looping.
+        // After a navigation fetch has completed, consume values positionally.
+        // The server returns keys in slim-react (_R_..._) format, but the client
+        // is not in hydration mode so useId() returns _r_..._  — they never match.
+        // We store the ordered values from the fetch and hand them out in tree
+        // order (which is identical on server and client for a given route).
         if (fetchedPaths.has(pathKey)) {
+            if (_navIdx < _navValues.length) {
+                const value = _navValues[_navIdx++] as T;
+                clientServerDataCache.set(cacheKey, value);
+                return value;
+            }
             return undefined;
         }
 
@@ -283,9 +268,10 @@ export function useServerData<T>(fn: () => Promise<T> | T, options?: { cache?: b
                         if (res.ok) json = await res.json();
                     }
 
-                    for (const [k, v] of Object.entries(json?.serverData ?? {})) {
-                        clientServerDataCache.set(k, v);
-                    }
+                    // Store as ordered array — consumed positionally on retry to
+                    // avoid the server (_R_..._) vs client (_r_..._) key mismatch.
+                    _navValues = Object.values(json?.serverData ?? {});
+                    _navIdx = 0;
                 } finally {
                     fetchedPaths.add(pathKey);
                     pendingDataFetch.delete(pathKey);
