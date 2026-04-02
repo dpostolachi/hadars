@@ -242,7 +242,12 @@ export function useServerData<T>(fn: () => Promise<T> | T, options?: { cache?: b
                 clientServerDataCache.set(cacheKey, value);
                 return value;
             }
-            return undefined;
+            // Positional data exhausted — cache:false eviction or remount with new
+            // useId() keys. Remove the path so a fresh fetch fires below.
+            fetchedPaths.delete(pathKey);
+            _navValues = [];
+            _navIdx = 0;
+            // fall through to trigger a new fetch
         }
 
         if (!pendingDataFetch.has(pathKey)) {
@@ -272,6 +277,10 @@ export function useServerData<T>(fn: () => Promise<T> | T, options?: { cache?: b
                     // avoid the server (_R_..._) vs client (_r_..._) key mismatch.
                     _navValues = Object.values(json?.serverData ?? {});
                     _navIdx = 0;
+                    // Only keep the freshly-fetched path in fetchedPaths — clear
+                    // others so stale positional data from a previous page cannot
+                    // be served if the user navigates back to it.
+                    fetchedPaths.clear();
                 } finally {
                     fetchedPaths.add(pathKey);
                     pendingDataFetch.delete(pathKey);
