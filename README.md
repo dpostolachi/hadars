@@ -204,6 +204,7 @@ const uptime = useServerData(() => process.uptime(), { cache: false });
 | `paths` | `function` | - | Returns URL list to pre-render with `hadars export static`; receives `HadarsStaticContext` |
 | `sources` | `array` | - | Gatsby-compatible source plugins; hadars infers a GraphQL schema from their nodes |
 | `graphql` | `function` | - | Custom GraphQL executor passed to `paths()` and `getInitProps()` as `ctx.graphql` |
+| `onError` | `function` | - | Called on every SSR render error; use to forward to Sentry, Datadog, etc. |
 
 ### moduleRules example
 
@@ -238,6 +239,24 @@ const config: HadarsOptions = {
 
 export default config;
 ```
+
+### Error monitoring example
+
+```ts
+import * as Sentry from '@sentry/node';
+import type { HadarsOptions } from 'hadars';
+
+const config: HadarsOptions = {
+    entry: 'src/App.tsx',
+    onError: (err, req) => Sentry.captureException(err, {
+        extra: { url: req.url, method: req.method },
+    }),
+};
+
+export default config;
+```
+
+`onError` is called on every SSR render error in `dev()`, `run()`, Lambda, and Cloudflare adapters. The handler may be async — hadars fires it without awaiting so it never delays the error response to the browser.
 
 ## Static Export
 

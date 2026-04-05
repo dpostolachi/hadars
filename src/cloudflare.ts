@@ -123,6 +123,7 @@ export function createCloudflareHandler(
             });
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
+            options.onError?.(err, request)?.catch?.(() => {});
             return new Response('Internal Server Error', { status: 500 });
         }
     };

@@ -575,6 +575,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             return buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
+            options.onError?.(err, request)?.catch?.(() => {});
             const msg = (err?.stack ?? err?.message ?? String(err)).replace(/</g, '&lt;');
             return new Response(`<!doctype html><pre style="white-space:pre-wrap">${msg}</pre>`, {
                 status: 500,
@@ -783,6 +784,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
             return buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
+            options.onError?.(err, request)?.catch?.(() => {});
             return new Response('Internal Server Error', { status: 500 });
         }
     };

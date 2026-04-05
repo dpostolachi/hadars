@@ -294,6 +294,23 @@ export interface HadarsOptions {
      * ]
      */
     sources?: HadarsSourceEntry[];
+    /**
+     * Called whenever an SSR render error is caught, in both `dev()` and `run()` mode
+     * as well as the Lambda and Cloudflare adapters.
+     *
+     * Use this to forward errors to your monitoring service (Sentry, Datadog, etc.)
+     * without affecting the response sent to the browser.
+     * The handler may be async — hadars fires it and does not await the result,
+     * so it never delays the error response.
+     *
+     * @example
+     * import * as Sentry from '@sentry/node';
+     * onError: (err, req) => Sentry.captureException(err, { extra: { url: req.url } })
+     *
+     * @example
+     * onError: (err, req) => console.error('[myapp]', req.method, req.url, err)
+     */
+    onError?: (err: Error, req: Request) => void | Promise<void>;
 }
 
 /**

@@ -40,11 +40,13 @@ const ApiReference: React.FC = () => (
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">paths</code><span className="text-muted-foreground">function</span><span className="text-muted-foreground">Returns URL list to pre-render with <code className="text-sm bg-muted px-1 rounded">hadars export static</code>. Receives <code className="text-sm bg-muted px-1 rounded">HadarsStaticContext</code>.</span></div>
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">sources</code><span className="text-muted-foreground">array</span><span className="text-muted-foreground">Gatsby-compatible source plugins. hadars infers a GraphQL schema from their nodes automatically.</span></div>
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">graphql</code><span className="text-muted-foreground">function</span><span className="text-muted-foreground">Custom GraphQL executor. Passed to <code className="text-sm bg-muted px-1 rounded">paths()</code>, <code className="text-sm bg-muted px-1 rounded">getInitProps()</code>, and <code className="text-sm bg-muted px-1 rounded">useGraphQL()</code>.</span></div>
+                <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm"><code className="text-primary">onError</code><span className="text-muted-foreground">function</span><span className="text-muted-foreground">Called on every SSR render error. Use to forward to Sentry, Datadog, etc. May be async — hadars fires it without awaiting.</span></div>
             </div>
 
             <h3 className="text-lg font-semibold mb-3 text-gradient-soft">Example</h3>
             <Code lang="typescript">{`
 import os from 'os';
+import * as Sentry from '@sentry/node';
 import type { HadarsOptions } from 'hadars';
 
 const config: HadarsOptions = {
@@ -69,6 +71,11 @@ const config: HadarsOptions = {
 
     // Expose a build-time constant to client bundles
     define: { '__APP_VERSION__': JSON.stringify('1.2.3') },
+
+    // Forward SSR errors to your monitoring service
+    onError: (err, req) => Sentry.captureException(err, {
+        extra: { url: req.url, method: req.method },
+    }),
 };
 
 export default config;
