@@ -11,10 +11,6 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "src",
-    "cli-lib.ts",
-    "cli.ts",
-    "index.ts",
     "LICENSE"
   ],
   "exports": {
@@ -40,7 +36,7 @@
   },
   "scripts": {
     "build:lib": "tsup src/index.tsx src/lambda.ts src/cloudflare.ts src/slim-react/index.ts src/slim-react/jsx-runtime.ts --format esm,cjs --dts --out-dir dist --clean --external '@rspack/*' --external '@rspack/binding'",
-    "build:cli": "node build-scripts/build-cli.mjs",
+    "build:cli": "bun build-scripts/build-cli.mjs",
     "build:all": "node build-scripts/build-all.mjs",
     "test": "bun test test/render-compare.test.tsx && bun test test/ssr.test.ts",
     "prepare": "npm run build:all",
@@ -75,7 +71,8 @@
     "@rspack/core": "1.6.8",
     "@rspack/dev-server": "^1.2.1",
     "@rspack/plugin-react-refresh": "^1.6.1",
-    "@swc/core": "^1.15.18",
+    "@svgr/webpack": "^8.1.0",
+    "@swc/core": "^1.15.24",
     "@types/bun": "latest",
     "react-refresh": "^0.17.0"
   },
@@ -84,15 +81,16 @@
     "@types/react-dom": "^19.2.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "tsup": "^8.3.5",
+    "tsup": "^8.5.1",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@svgr/webpack": "^8.1.0",
-    "esbuild": "^0.27.4",
     "postcss": "^8.5.8",
     "postcss-load-config": "^6.0.1",
     "postcss-loader": "^8.2.1"
+  },
+  "overrides": {
+    "js-yaml": "^4.1.1"
   },
   "license": "MIT",
   "repository": {

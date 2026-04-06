@@ -28,12 +28,12 @@ jobs:
 
       # ── Build & bundle the website ───────────────────────────────────────────
       - name: Install website dependencies
-        run: bun install --ignore-scripts
+        run: npm install --ignore-scripts
         working-directory: website
 
       - name: Bundle Lambda
-        # hadars export lambda internally runs `hadars build` then esbuild.
-        # Outputs a self-contained ESM bundle with React and the hadars runtime
+        # hadars export lambda internally runs `hadars build` then bundles
+        # into a self-contained ESM bundle with React and the hadars runtime
         # inlined — no node_modules needed in the Lambda package.
         run: bun node_modules/.bin/hadars export lambda lambda.mjs
         working-directory: website

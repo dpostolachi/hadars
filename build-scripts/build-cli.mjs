@@ -1,120 +1,75 @@
-#!/usr/bin/env node
-import { build } from 'esbuild';
-import { readFileSync, writeFileSync, mkdirSync, cpSync } from 'fs';
+#!/usr/bin/env bun
+import { writeFileSync, mkdirSync, cpSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 
-// Helper to mark package dependencies as external so native .node bindings are not bundled
-function computeExternals(root) {
-  try {
-    const p = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
-    const deps = Object.keys(p.dependencies || {})
-    const opt = Object.keys(p.optionalDependencies || {})
-    const peer = Object.keys(p.peerDependencies || {})
-    const all = Array.from(new Set([...deps, ...opt, ...peer]))
-    return all
-  } catch (e) {
-    return []
-  }
-}
-
-const root = process.cwd();
+const root         = process.cwd();
+const distDir      = resolve(root, 'dist');
+const distUtilsDir = resolve(distDir, 'utils');
 
 async function run() {
-  const externals = computeExternals(root);
-  const distDir = resolve(root, 'dist');
-  const distUtilsDir = resolve(distDir, 'utils');
-
-  const cliSrc             = resolve(root, 'cli.ts');
-  const cliOut             = resolve(distDir, 'cli.js');
-  const ssrWatchSrc        = resolve(root, 'src', 'ssr-watch.ts');
-  const ssrWatchOut        = resolve(distDir, 'ssr-watch.js');
-  const ssrRenderWorkerSrc = resolve(root, 'src', 'ssr-render-worker.ts');
-  const ssrRenderWorkerOut = resolve(distDir, 'ssr-render-worker.js');
-  const loaderSrc          = resolve(root, 'src', 'utils', 'loader.ts');
-  const loaderOut          = resolve(distDir, 'loader.cjs');
-
-  // All four esbuild targets are independent — run them in parallel.
-  await Promise.all([
-    build({
-      entryPoints: [cliSrc],
-      bundle: true,
-      platform: 'node',
+  // All four bundles are independent — run in parallel.
+  // packages: 'external' treats all node_modules as external (no bundling of deps).
+  const [cli, ssrWatch, ssrWorker, loader] = await Promise.all([
+    Bun.build({
+      entrypoints: [resolve(root, 'cli.ts')],
+      outdir: distDir,
+      target: 'node',
       format: 'esm',
-      target: ['node18'],
-      outfile: cliOut,
-      sourcemap: false,
-      external: externals,
+      packages: 'external',
+      naming: '[dir]/cli.[ext]',
     }),
-    // SSR watch worker — needed for Node.js/Deno where .ts cannot be
-    // run directly. Bun prefers the .ts source but falls back to this .js.
-    build({
-      entryPoints: [ssrWatchSrc],
-      bundle: true,
-      platform: 'node',
+    Bun.build({
+      entrypoints: [resolve(root, 'src', 'ssr-watch.ts')],
+      outdir: distDir,
+      target: 'node',
       format: 'esm',
-      target: ['node18'],
-      outfile: ssrWatchOut,
-      sourcemap: false,
-      external: externals,
+      packages: 'external',
+      naming: '[dir]/ssr-watch.[ext]',
     }),
-    // SSR render worker — thread pool for renderToString on Bun/Deno.
-    build({
-      entryPoints: [ssrRenderWorkerSrc],
-      bundle: true,
-      platform: 'node',
+    Bun.build({
+      entrypoints: [resolve(root, 'src', 'ssr-render-worker.ts')],
+      outdir: distDir,
+      target: 'node',
       format: 'esm',
-      target: ['node18'],
-      outfile: ssrRenderWorkerOut,
-      sourcemap: false,
-      external: externals,
+      packages: 'external',
+      naming: '[dir]/ssr-render-worker.[ext]',
     }),
-    // Rspack loader as CJS so rspack/webpack can require() it at runtime.
-    // The source is TypeScript; esbuild strips types and outputs plain JS.
-    // Use .cjs extension so Node.js treats it as CommonJS even when the
-    // package has "type": "module".
-    build({
-      entryPoints: [loaderSrc],
-      bundle: false,
-      platform: 'node',
+    // Rspack loader must be CJS so rspack can require() it at runtime.
+    Bun.build({
+      entrypoints: [resolve(root, 'src', 'utils', 'loader.ts')],
+      outdir: distDir,
+      target: 'node',
       format: 'cjs',
-      target: ['node18'],
-      outfile: loaderOut,
-      sourcemap: false,
+      packages: 'external',
+      naming: '[dir]/loader.cjs',
     }),
   ]);
 
-  // Ensure shebang is present on the CLI binary (done after parallel build completes).
+  // Check for build errors
+  for (const [result, name] of [[cli, 'cli'], [ssrWatch, 'ssr-watch'], [ssrWorker, 'ssr-render-worker'], [loader, 'loader']]) {
+    if (!result.success) {
+      console.error(`[build] ${name} failed:`);
+      result.logs.forEach(l => console.error(l));
+      process.exit(1);
+    }
+  }
+
+  // Ensure shebang is present on the CLI binary.
+  const cliOut     = resolve(distDir, 'cli.js');
   const cliContent = readFileSync(cliOut, 'utf8');
-  const cliBody = cliContent.startsWith('#!') ? cliContent.replace(/^#![^\n]*\n/, '') : cliContent;
+  const cliBody    = cliContent.startsWith('#!') ? cliContent.replace(/^#![^\n]*\n/, '') : cliContent;
   writeFileSync(cliOut, '#!/usr/bin/env node\n' + cliBody, 'utf8');
 
   console.log('Built', cliOut);
-  console.log('Built', ssrWatchOut);
-  console.log('Built', ssrRenderWorkerOut);
-  console.log('Built', loaderOut);
+  console.log('Built', resolve(distDir, 'ssr-watch.js'));
+  console.log('Built', resolve(distDir, 'ssr-render-worker.js'));
+  console.log('Built', resolve(distDir, 'loader.cjs'));
 
-  // Copy runtime assets that are read as files at runtime (not bundled into cli.js).
-  // When cli.js runs, import.meta.url points to dist/cli.js, so packageDir = dist/.
-  // These files must mirror the paths resolved from there.
+  // Copy runtime assets read as files at runtime (not bundled into cli.js).
   mkdirSync(distUtilsDir, { recursive: true });
-
-  // dist/utils/clientScript.tsx — rspack entry template used by dev() and build()
-  cpSync(
-    resolve(root, 'src', 'utils', 'clientScript.tsx'),
-    resolve(distUtilsDir, 'clientScript.tsx'),
-  );
-  // dist/utils/Head.tsx — imported by the generated client script at runtime via
-  // an absolute path (the $_HEAD_PATH$ placeholder). Rspack resolves .tsx extensions,
-  // so the raw source file is sufficient — no pre-compilation needed.
-  cpSync(
-    resolve(root, 'src', 'utils', 'Head.tsx'),
-    resolve(distUtilsDir, 'Head.tsx'),
-  );
-  // dist/template.html — HtmlRspackPlugin template (resolved from packageDir in rspack.ts)
-  cpSync(
-    resolve(root, 'src', 'utils', 'template.html'),
-    resolve(distDir, 'template.html'),
-  );
+  cpSync(resolve(root, 'src', 'utils', 'clientScript.tsx'), resolve(distUtilsDir, 'clientScript.tsx'));
+  cpSync(resolve(root, 'src', 'utils', 'Head.tsx'),         resolve(distUtilsDir, 'Head.tsx'));
+  cpSync(resolve(root, 'src', 'utils', 'template.html'),    resolve(distDir, 'template.html'));
   console.log('Copied dist/utils/clientScript.tsx, dist/utils/Head.tsx, dist/template.html');
 }
 

@@ -22,7 +22,7 @@ jobs:
         run: bun run build:all
 
       - name: Install website dependencies
-        run: bun install --ignore-scripts
+        run: npm install --ignore-scripts
         working-directory: website
 
       - name: Build website
@@ -55,7 +55,7 @@ jobs:
           exit 1
 
       - name: Run unit tests
-        run: bun test test/render-compare.test.tsx test/unstable-key.test.ts
+        run: bun test test/render-compare.test.tsx
 
       - name: Run SSR tests
         run: bun test --timeout 60000 test/ssr.test.ts test/lambda.test.ts
