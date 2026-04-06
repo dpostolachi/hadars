@@ -196,7 +196,15 @@ class RenderWorkerPool {
 /** Serialize a HadarsRequest into a structure-clonable object for postMessage. */
 async function serializeRequest(req: any): Promise<SerializableRequest> {
     const isGetOrHead = ['GET', 'HEAD'].includes(req.method ?? 'GET');
-    const body = isGetOrHead ? null : new Uint8Array(await req.clone().arrayBuffer());
+    let body: Uint8Array | null = null;
+    if (!isGetOrHead) {
+        try {
+            body = new Uint8Array(await req.arrayBuffer());
+        } catch {
+            // Body already consumed upstream (e.g. by options.fetch returning undefined
+            // after reading the body). Proceed without body — SSR does not need it.
+        }
+    }
     const headers: Record<string, string> = {};
     (req.headers as Headers).forEach((v: string, k: string) => { headers[k] = v; });
     return {
