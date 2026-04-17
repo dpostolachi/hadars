@@ -210,6 +210,22 @@ const HeavyChart = React.lazy(() => loadModule<{ default: React.FC }>('./HeavyCh
                 Transformed at compile time by the hadars rspack loader. The module is included in
                 the server bundle statically and downloaded on demand in the browser.
             </p>
+            <p className="text-muted-foreground mt-3">
+                <strong>The path must be a string literal</strong> at the <code>loadModule()</code> call
+                site. Passing a variable prevents the loader from transforming the call — the module
+                won't be bundled and build-time transforms (SWC plugins, etc.) won't run. If you use
+                a helper, pass the factory function rather than the path string:
+            </p>
+            <Code lang="typescript">{`
+// ✗ wrong — path is a variable, module is not bundled
+const lazy = (path: string) => React.lazy(() => loadModule(path));
+const Page = lazy('./Page');
+
+// ✓ correct — literal sits at the loadModule() call site
+type LazyFC = { default: React.ComponentType<any> };
+const lazy = (fn: () => Promise<LazyFC>) => React.lazy(fn);
+const Page = lazy(() => loadModule<LazyFC>('./Page'));
+            `}</Code>
         </section>
 
         <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: "1px solid oklch(0.68 0.28 285 / 0.15)" }}><p>hadars — MIT licence</p></footer>
