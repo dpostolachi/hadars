@@ -138,14 +138,19 @@ function swcTransform(this: any, swc: any, source: string, isServer: boolean, re
             modulePath = firstArg.quasis[0].raw;
             quoteChar = '`';
         } else {
-            // Dynamic (non-literal) path — emit a build warning
+            // Dynamic (non-literal) path — emit a build warning.
+            // The module will NOT be bundled and build-time transforms (SWC plugins,
+            // Relay, etc.) will not run. The path must be a string literal at the
+            // loadModule() call site. Wrap helper functions to accept a factory
+            // instead: const lazy = (fn) => React.lazy(fn);
+            //           const Page = lazy(() => loadModule('./Page'));
             const start0 = node.span.start - fileOffset;
             const bytesBefore = srcBytes.slice(0, start0);
             const line = bytesBefore.toString('utf8').split('\n').length;
             this.emitWarning(
                 new Error(
                     `[hadars] loadModule() called with a dynamic (non-literal) path at ${resourcePath}:${line}. ` +
-                    `Only string-literal paths are transformed by the loader; dynamic calls fall back to runtime import().`
+                    `The module will not be bundled. Use a string literal: loadModule('./myPage').`
                 )
             );
             return;
@@ -326,7 +331,7 @@ function regexTransform(this: any, source: string, isServer: boolean, resourcePa
         this.emitWarning(
             new Error(
                 `[hadars] loadModule() called with a dynamic (non-literal) path at ${resourcePath}:${line}. ` +
-                `Only string-literal paths are transformed by the loader; dynamic calls fall back to runtime import().`
+                `The module will not be bundled. Use a string literal: loadModule('./myPage').`
             )
         );
     }

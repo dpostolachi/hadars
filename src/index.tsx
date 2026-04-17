@@ -23,14 +23,18 @@ export { Head as HadarsHead, useServerData, useGraphQL, initServerDataCache } fr
  *   `Promise.resolve(require('./path'))`, which rspack bundles statically.
  *
  * The hadars rspack loader must be active for the transform to apply.
- * This runtime fallback uses a plain dynamic import (no code splitting).
+ * **The path argument must be a string literal** at the `loadModule()` call
+ * site — passing a variable prevents the loader from transforming the call,
+ * so the module is not bundled and build-time transforms (SWC plugins, etc.)
+ * are never applied.
  *
  * @example
- * // Code-split React component:
+ * // Correct — literal path at call site:
  * const MyComp = React.lazy(() => loadModule('./MyComp'));
  *
- * // Dynamic data:
- * const { default: fn } = await loadModule<typeof import('./util')>('./util');
+ * // Also correct — wrapper receives the factory, not the path string:
+ * const lazy = (fn: () => Promise<{ default: React.FC }>) => React.lazy(fn);
+ * const MyComp = lazy(() => loadModule('./MyComp'));
  */
 export function loadModule<T = any>(path: string): Promise<T> {
     // webpackIgnore suppresses rspack's "critical dependency" warning for the
