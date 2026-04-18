@@ -15,6 +15,7 @@ import Deployment from './pages/docs/Deployment';
 import CloudflareDeployment from './pages/docs/CloudflareDeployment';
 import FromNextjs from './pages/docs/FromNextjs';
 import StaticExport from './pages/docs/StaticExport';
+import SwcPlugins from './pages/docs/SwcPlugins';
 import CacheTest from './pages/CacheTest';
 import DataDemo from './pages/DataDemo';
 
@@ -37,6 +38,7 @@ const AppRoutes: React.FC<PageProps> = (props) => (
             <Route path="/docs/from-nextjs" element={<FromNextjs />} />
             <Route path="/docs/cloudflare" element={<CloudflareDeployment />} />
             <Route path="/docs/static-export" element={<StaticExport />} />
+            <Route path="/docs/swc-plugins" element={<SwcPlugins />} />
             <Route path="/cache-test" element={<CacheTest serverTime={props.serverTime} />} />
             <Route path="/data-demo" element={<DataDemo />} />
         </Routes>

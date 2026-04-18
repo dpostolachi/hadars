@@ -240,6 +240,45 @@ const config: HadarsOptions = {
 export default config;
 ```
 
+### swcPlugins example
+
+SWC plugins let you apply compiler transforms (Relay, emotion, styled-components, etc.) to every file in both the client and SSR bundles.
+
+```ts
+import type { HadarsOptions } from 'hadars';
+
+const config: HadarsOptions = {
+    entry: 'src/App.tsx',
+    swcPlugins: [
+        ['@swc/plugin-relay', { rootDir: process.cwd(), artifactDirectory: 'src/__generated__' }],
+    ],
+};
+
+export default config;
+```
+
+**Plugin version compatibility** — SWC plugins are compiled against a specific version of `swc_core` and will silently fail or crash if the version doesn't match rspack's internal SWC. For `@rspack/core@1.6.8` the compatible plugins are:
+
+| Plugin | Version |
+|---|---|
+| `@swc/plugin-relay` | `10.0.0` |
+| `@swc/plugin-emotion` | `12.0.0` |
+| `@swc/plugin-styled-components` | `10.0.0` |
+| `@swc/plugin-styled-jsx` | `11.0.0` |
+| `@swc/plugin-jest` | `10.0.0` |
+| `@swc/plugin-formatjs` | `7.0.0` |
+| `@swc/plugin-transform-imports` | `10.0.0` |
+| `@swc/plugin-loadable-components` | `9.0.0` |
+| `@swc/plugin-prefresh` | `10.0.0` |
+| `swc-plugin-css-modules` | `6.0.0` |
+| `swc-plugin-pre-paths` | `6.0.0` |
+| `swc-plugin-transform-remove-imports` | `7.0.0` |
+| `@lingui/swc-plugin` | `5.9.0` |
+
+Install the exact version listed — do **not** use `latest` or a semver range. The full compatibility matrix for other rspack versions is at [plugins.swc.rs](https://plugins.swc.rs).
+
+> The `@swc/core` package in hadars's `optionalDependencies` is used only by the hadars loader for its own AST transforms. It is a separate concern from the SWC version bundled inside rspack that runs your plugins.
+
 ### Error monitoring example
 
 ```ts

@@ -29,6 +29,7 @@ const NAV = [
             { to: '/docs/deployment', label: 'Deployment' },
             { to: '/docs/cloudflare', label: 'Cloudflare Workers' },
             { to: '/docs/static-export', label: 'Static Export & Sources' },
+            { to: '/docs/swc-plugins', label: 'SWC Plugins' },
         ],
     },
     {

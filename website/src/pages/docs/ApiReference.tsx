@@ -228,6 +228,68 @@ const Page = lazy(() => loadModule<LazyFC>('./Page'));
             `}</Code>
         </section>
 
+        <section className="mb-10">
+            <h2 className="text-xl font-semibold mb-3 text-gradient-soft">SWC plugins</h2>
+            <p className="text-muted-foreground mb-4">
+                Pass SWC compiler plugins via <code className="text-sm bg-muted px-1.5 py-0.5 rounded">swcPlugins</code> in{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">hadars.config.ts</code>. They run through rspack's built-in SWC
+                and are applied to every file in both the client and SSR bundles.
+            </p>
+            <Code lang="typescript">{`
+import type { HadarsOptions } from 'hadars';
+
+const config: HadarsOptions = {
+    entry: 'src/App.tsx',
+    swcPlugins: [
+        ['@swc/plugin-relay', { rootDir: process.cwd(), artifactDirectory: 'src/__generated__' }],
+    ],
+};
+
+export default config;
+            `}</Code>
+            <p className="text-muted-foreground mt-4">
+                <strong>Version pinning is required.</strong> SWC plugins are native WebAssembly modules
+                compiled against a specific version of <code className="text-sm bg-muted px-1.5 py-0.5 rounded">swc_core</code>. A version
+                mismatch causes a silent failure or a hard crash. Install the <em>exact</em> version below —
+                do not use <code className="text-sm bg-muted px-1.5 py-0.5 rounded">latest</code> or a semver range.
+            </p>
+            <p className="text-muted-foreground mt-2 mb-4">
+                Compatible plugin versions for <strong>{'@rspack/core@1.6.8'}</strong> (see{' '}
+                <a href="https://plugins.swc.rs" className="text-primary underline" target="_blank" rel="noopener noreferrer">plugins.swc.rs</a>{' '}
+                for other rspack versions):
+            </p>
+            <div className="rounded-xl overflow-hidden divide-y mb-4" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.15)" }}>
+                <div className="grid grid-cols-2 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider" style={{ background: "oklch(0.12 0.04 280)", color: "oklch(0.60 0.08 285)" }}>
+                    <span>Plugin</span><span>Version</span>
+                </div>
+                {[
+                    ['@swc/plugin-relay', '10.0.0'],
+                    ['@swc/plugin-emotion', '12.0.0'],
+                    ['@swc/plugin-styled-components', '10.0.0'],
+                    ['@swc/plugin-styled-jsx', '11.0.0'],
+                    ['@swc/plugin-jest', '10.0.0'],
+                    ['@swc/plugin-formatjs', '7.0.0'],
+                    ['@swc/plugin-transform-imports', '10.0.0'],
+                    ['@swc/plugin-loadable-components', '9.0.0'],
+                    ['@swc/plugin-prefresh', '10.0.0'],
+                    ['swc-plugin-css-modules', '6.0.0'],
+                    ['swc-plugin-pre-paths', '6.0.0'],
+                    ['swc-plugin-transform-remove-imports', '7.0.0'],
+                    ['@lingui/swc-plugin', '5.9.0'],
+                ].map(([pkg, ver]) => (
+                    <div key={pkg} className="grid grid-cols-2 gap-4 px-4 py-2.5 text-sm">
+                        <code className="text-primary">{pkg}</code>
+                        <code className="text-muted-foreground">{ver}</code>
+                    </div>
+                ))}
+            </div>
+            <p className="text-muted-foreground text-sm">
+                Note: the <code className="text-sm bg-muted px-1 rounded">@swc/core</code> package in hadars's{' '}
+                <code className="text-sm bg-muted px-1 rounded">optionalDependencies</code> is used only for hadars's own loader
+                AST transforms — it is unrelated to the SWC version bundled inside rspack that executes your plugins.
+            </p>
+        </section>
+
         <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: "1px solid oklch(0.68 0.28 285 / 0.15)" }}><p>hadars — MIT licence</p></footer>
     </>
 );
