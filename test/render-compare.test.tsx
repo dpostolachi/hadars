@@ -36,7 +36,10 @@ import {
   useId as slimUseId,
 } from "../src/slim-react/index";
 import { SUSPENSE_TYPE } from "../src/slim-react/types";
-import { REACT_MAJOR } from "../src/slim-react/renderContext";
+import { REACT_MAJOR, setReactVersion } from "../src/slim-react/renderContext";
+
+// Sync slim-react's version tracking to whichever React is installed.
+setReactVersion(parseInt(React.version.split('.')[0]!, 10), React.version);
 
 // Build version-aware ID pattern helpers so tests pass on both React 18 and 19.
 // React 18: :<prefix>R<treeId>:   React 19: _R_<prefix><treeId>_

@@ -33,16 +33,28 @@ import {
 import * as ReactNS from "react";
 
 // React 19 exposes its shared internals under this key; `.H` is the dispatcher.
-// Bracket notation prevents rspack from treating this as a named-export access
-// on the "react" module (which would produce an ESModulesLinkingWarning).
-const _r19: { H: object | null } | undefined =
-  (ReactNS as any)["__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE"];
+// Internals are discovered lazily on the first installDispatcher() call rather
+// than at module evaluation time. slim-react/index.js re-exports symbols from
+// the same bundled chunk as this file; accessing ReactNS properties at module
+// init time creates a circular reference where the chunk hasn't finished
+// evaluating yet, causing the getter to read an undefined module binding.
+let _r19: { H: object | null } | undefined;
+let _r18: { ReactCurrentDispatcher: { current: object | null } } | undefined;
+let _detected = false;
 
-// React 18 uses a different key; the dispatcher lives at `.ReactCurrentDispatcher.current`.
-// Only consulted when the React 19 internals are absent so we never double-patch.
-const _r18Raw = !_r19 ? (ReactNS as any)["__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED"] : undefined;
-const _r18: { ReactCurrentDispatcher: { current: object | null } } | undefined =
-  (_r18Raw?.ReactCurrentDispatcher) ? _r18Raw : undefined;
+// Keys split across string literals so rspack cannot statically resolve them as
+// named-export accesses on "react" (which would produce ESModulesLinkingWarnings).
+const _k19 = "__CLIENT_INTERNALS_DO_NOT_USE" + "_OR_WARN_USERS_THEY_CANNOT_UPGRADE";
+const _k18 = "__SECRET_INTERNALS_DO_NOT_USE" + "_OR_YOU_WILL_BE_FIRED";
+
+function _detect() {
+  if (_detected) return;
+  _detected = true;
+  const r19 = (ReactNS as any)[_k19];
+  if (r19) { _r19 = r19; return; }
+  const raw = (ReactNS as any)[_k18];
+  if (raw?.ReactCurrentDispatcher) _r18 = raw;
+}
 
 // The dispatcher object we install. We keep a stable reference so the same
 // object is reused across every component call.
@@ -77,6 +89,7 @@ const slimDispatcher: Record<string, unknown> = {
  * Call `restoreDispatcher(prev)` when the component finishes.
  */
 export function installDispatcher(): object | null {
+  _detect();
   if (_r19) {
     const prev = _r19.H;
     _r19.H = slimDispatcher;
@@ -91,6 +104,7 @@ export function installDispatcher(): object | null {
 }
 
 export function restoreDispatcher(prev: object | null): void {
+  _detect();
   if (_r19) _r19.H = prev;
   else if (_r18) _r18.ReactCurrentDispatcher.current = prev;
 }
