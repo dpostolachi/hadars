@@ -290,6 +290,36 @@ export default config;
             </p>
         </section>
 
+        <section className="mb-10">
+            <h2 className="text-xl font-semibold mb-3 text-gradient-soft">React 18 compatibility</h2>
+            <p className="text-muted-foreground mb-4">
+                hadars supports React 18 and React 19 as peer dependencies. The SSR renderer
+                automatically detects the installed version and generates{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useId</code> output in
+                the correct format for each ({' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">:R…:</code> for React 18,{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">_R_…_</code> for React 19).
+            </p>
+            <div className="rounded-xl p-4 mb-4 text-sm" style={{ background: 'oklch(0.10 0.04 40)', border: '1px solid oklch(0.55 0.18 40 / 0.4)' }}>
+                <strong className="text-orange-300">React 19-only hooks on the client</strong>
+                <p className="text-muted-foreground mt-1">
+                    The following hooks are stubbed in the SSR bundle so server rendering works
+                    regardless of React version. However, they do <strong>not exist in React 18's
+                    client runtime</strong> — calling them in client-rendered code will throw at
+                    runtime when React 18 is installed:
+                </p>
+                <ul className="mt-2 space-y-0.5 text-muted-foreground list-disc list-inside">
+                    <li><code className="text-sm bg-muted px-1 rounded">use</code></li>
+                    <li><code className="text-sm bg-muted px-1 rounded">useOptimistic</code></li>
+                    <li><code className="text-sm bg-muted px-1 rounded">useActionState</code></li>
+                    <li><code className="text-sm bg-muted px-1 rounded">useFormStatus</code> (from <code className="text-sm bg-muted px-1 rounded">react-dom</code>)</li>
+                </ul>
+                <p className="text-muted-foreground mt-2">
+                    Guard usage of these hooks with a React version check or avoid them when targeting React 18.
+                </p>
+            </div>
+        </section>
+
         <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: "1px solid oklch(0.68 0.28 285 / 0.15)" }}><p>hadars — MIT licence</p></footer>
     </>
 );

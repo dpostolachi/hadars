@@ -12,6 +12,8 @@
  * without any external dependencies.
  */
 
+import { createRequire as _nodeCreateRequire } from 'node:module';
+
 // The context map for the render that is currently executing (between awaits).
 // Kept on globalThis so both slim-react instances share the same slot.
 const MAP_KEY = "__slimReactContextMap";
@@ -273,12 +275,42 @@ function getTreeId(): string {
   return stripped + overflow;
 }
 
-declare const __HADARS_REACT_MAJOR__: number | undefined;
+declare const __HADARS_REACT_MAJOR__: string | number | undefined;
 
-// Resolved once at module evaluation from the compile-time define injected by
-// build.ts. Falls back to 19 when the constant is absent (e.g. unit tests).
-const REACT_MAJOR: number =
-  typeof __HADARS_REACT_MAJOR__ !== 'undefined' ? __HADARS_REACT_MAJOR__ : 19;
+// Resolved once at module evaluation.
+// Priority:
+//   1. Compile-time rspack define (__HADARS_REACT_MAJOR__) — always present in
+//      rspack-built SSR bundles where `react` is aliased to slim-react.
+//   2. bare require('react').version — works in CJS and Bun.
+//   3. createRequire fallback — for strict Node.js ESM where bare require is
+//      unavailable. Uses process.cwd() as the resolution base so monorepo
+//      hoisting is respected automatically.
+//   4. { major: 19, version: '19.1.1' } — last-resort default.
+const _detectReact = (): { major: number; version: string } => {
+  if (typeof __HADARS_REACT_MAJOR__ !== 'undefined') {
+    const major = parseInt(String(__HADARS_REACT_MAJOR__), 10);
+    return {
+      major,
+      // Exact patch version is unknown from the define alone; use a
+      // representative fallback. Most libraries only check the major.
+      version: major < 19 ? '18.3.1' : '19.1.1',
+    };
+  }
+  const parse = (ver: string) => ({ major: parseInt(ver.split('.')[0]!, 10), version: ver });
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return parse((require('react') as { version: string }).version);
+  } catch {}
+  try {
+    const req = _nodeCreateRequire(process.cwd() + '/__hadars__.js');
+    return parse((req('react') as { version: string }).version);
+  } catch {}
+  return { major: 19, version: '19.1.1' };
+};
+
+const _react = _detectReact();
+export const REACT_MAJOR: number = _react.major;
+export const REACT_VERSION: string = _react.version;
 
 /**
  * Generate a `useId`-compatible ID for the current call site.

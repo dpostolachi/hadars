@@ -239,12 +239,16 @@ const HADARS_TMP_DIR = pathMod.join(os.tmpdir(), 'hadars');
 const ensureHadarsTmpDir = () => fs.mkdir(HADARS_TMP_DIR, { recursive: true });
 
 const readReactMajor = async (): Promise<number> => {
-    try {
-        const pkgPath = pathMod.resolve(process.cwd(), 'node_modules', 'react', 'package.json');
-        const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
-        return parseInt((pkg.version as string).split('.')[0]!, 10);
-    } catch {
-        return 19;
+    let dir = process.cwd();
+    while (true) {
+        try {
+            const pkgPath = pathMod.join(dir, 'node_modules', 'react', 'package.json');
+            const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
+            return parseInt((pkg.version as string).split('.')[0]!, 10);
+        } catch {}
+        const parent = pathMod.dirname(dir);
+        if (parent === dir) return 19; // reached filesystem root without finding React
+        dir = parent;
     }
 };
 
@@ -424,7 +428,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     console.log('Spawning SSR worker:', workerCmd.join(' '), 'entry:', entry);
 
     const reactMajor = await readReactMajor();
-    const ssrDefine = { __HADARS_REACT_MAJOR__: reactMajor, ...options.define };
+    const ssrDefine = { __HADARS_REACT_MAJOR__: String(reactMajor), ...options.define };
 
     const child = spawn(workerCmd[0]!, [
         ...workerCmd.slice(1),
@@ -670,7 +674,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             target: 'node',
             mode: 'production',
             swcPlugins: options.swcPlugins,
-            define: { __HADARS_REACT_MAJOR__: reactMajor, ...options.define },
+            define: { __HADARS_REACT_MAJOR__: String(reactMajor), ...options.define },
             moduleRules: options.moduleRules,
             plugins: options.plugins,
             postcssPlugins: options.postcssPlugins,

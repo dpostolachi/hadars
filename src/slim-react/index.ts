@@ -15,6 +15,9 @@ export {
   type ComponentFunction,
 } from "./types";
 
+// ---- React version detection ----
+import { REACT_VERSION } from './renderContext';
+
 // ---- JSX runtime ----
 import { jsx, jsxs, jsxDEV, createElement, Fragment } from "./jsx";
 export { jsx, jsxs, jsxDEV, createElement, Fragment };
@@ -204,10 +207,7 @@ export class PureComponent<P = {}, S = {}> extends Component<P, S> {}
 // Exported as a named export so that namespace imports (`import * as React`)
 // — as used by react-redux and other libraries that check React.version —
 // find it on the module namespace rather than only on the default export.
-declare const __HADARS_REACT_MAJOR__: number | undefined;
-export const version = (typeof __HADARS_REACT_MAJOR__ !== 'undefined' && __HADARS_REACT_MAJOR__ < 19)
-    ? "18.3.1"
-    : "19.1.1";
+export const version = REACT_VERSION;
 
 // ---- React 18 internals stub ----
 // React 18 libraries (e.g. react-dom/client shims, some react-query internals)
