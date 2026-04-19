@@ -1,8 +1,9 @@
 /**
  * render-compare.test.tsx
  *
- * Compares slim-react's `renderToString` output against React 19's
+ * Compares slim-react's `renderToString` output against React's
  * `react-dom/server` `renderToString` for a wide range of component patterns.
+ * Supports React 18 and React 19 — ID format assertions are version-aware.
  *
  * Tests are split into two groups:
  *
@@ -35,6 +36,14 @@ import {
   useId as slimUseId,
 } from "../src/slim-react/index";
 import { SUSPENSE_TYPE } from "../src/slim-react/types";
+import { REACT_MAJOR } from "../src/slim-react/renderContext";
+
+// Build version-aware ID pattern helpers so tests pass on both React 18 and 19.
+// React 18: :<prefix>R<treeId>:   React 19: _R_<prefix><treeId>_
+const idPrefix = (prefix: string) =>
+  REACT_MAJOR < 19 ? new RegExp(`^:${prefix}R`) : new RegExp(`^_R_${prefix}`);
+const idPattern = () =>
+  REACT_MAJOR < 19 ? /for=":[^"]*".*:[^"]*:/s : /for="_R_[^"]*_".*_R_[^"]*_/s;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -738,8 +747,7 @@ describe("slim: useId", () => {
     const html = await slimRenderToString(
       React.createElement(WithId as any, null) as any
     );
-    // React 19.2+ useId format: _R_<base32tree>_ with optional "H<n>" suffix
-    expect(html).toMatch(/for="_R_[^"]*_".*_R_[^"]*_/s);
+    expect(html).toMatch(idPattern());
   });
 
   test("two useId calls in the same component produce different IDs", async () => {
@@ -1070,11 +1078,10 @@ describe("compare: identifierPrefix", () => {
       <FieldWithId label="Name" /> as any,
       { identifierPrefix: "myapp" }
     );
-    // All IDs must start with _R_myapp
     const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
     expect(ids.length).toBeGreaterThan(0);
     for (const id of ids) {
-      expect(id).toMatch(/^_R_myapp/);
+      expect(id).toMatch(idPrefix("myapp"));
     }
   });
 
@@ -1099,13 +1106,13 @@ describe("compare: identifierPrefix", () => {
     // First render with a custom prefix
     const html1 = await slimRenderToString(<Comp /> as any, { identifierPrefix: "pfx" });
     const ids1 = [...html1.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
-    expect(ids1[0]).toMatch(/^_R_pfx/);
+    expect(ids1[0]).toMatch(idPrefix("pfx"));
 
     // Second render with NO prefix — must not inherit the previous "pfx"
     const html2 = await slimRenderToString(<Comp /> as any);
     const ids2 = [...html2.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
-    expect(ids2[0]).not.toMatch(/^_R_pfx/);
-    expect(ids2[0]).toMatch(/^_R_[^p]/);  // prefix-less form: _R_<treeId>
+    expect(ids2[0]).not.toMatch(idPrefix("pfx"));
+    expect(ids2[0]).toMatch(REACT_MAJOR < 19 ? /^:[^p]/ : /^_R_[^p]/);
   });
 
   test("renderToStream identifierPrefix is embedded in generated IDs", async () => {
@@ -1114,7 +1121,7 @@ describe("compare: identifierPrefix", () => {
     const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
     expect(ids.length).toBeGreaterThan(0);
     for (const id of ids) {
-      expect(id).toMatch(/^_R_stream/);
+      expect(id).toMatch(idPrefix("stream"));
     }
   });
 
@@ -1128,7 +1135,7 @@ describe("compare: identifierPrefix", () => {
 
     const html = await slimRenderToString(<Comp /> as any);
     const ids = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
-    expect(ids[0]).not.toMatch(/^_R_st/);
+    expect(ids[0]).not.toMatch(idPrefix("st"));
   });
 });
 
