@@ -209,6 +209,17 @@ export const version = (typeof __HADARS_REACT_MAJOR__ !== 'undefined' && __HADAR
     ? "18.3.1"
     : "19.1.1";
 
+// ---- React 18 internals stub ----
+// React 18 libraries (e.g. react-dom/client shims, some react-query internals)
+// access React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentBatchConfig
+// at import time. Providing a minimal stub prevents a crash when slim-react is
+// aliased over react in the SSR bundle with React 18 installed.
+export const __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = {
+  ReactCurrentDispatcher: { current: null as unknown },
+  ReactCurrentBatchConfig: { transition: null as unknown },
+  ReactCurrentOwner: { current: null as unknown },
+};
+
 // ---- Default export ----
 // Mirrors `import React from 'react'` so code that uses React.useState,
 // React.createContext, React.Suspense, etc. works without changes.
@@ -230,6 +241,8 @@ const React = {
   renderToStream, renderToString, renderToReadableStream, renderPreflight,
   // Version
   version,
+  // React 18 internals
+  __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
 };
 
 export default React;
