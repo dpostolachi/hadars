@@ -542,6 +542,80 @@ function buildTemplates(name: string, opts: ScaffoldOptions): Record<string, str
   const appContent =
 `${appImports}
 
+const css = \`
+  *, *::before, *::after { box-sizing: border-box; }
+
+  :root {
+    font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    font-weight: 400;
+    color-scheme: light dark;
+    color: rgba(255, 255, 255, 0.87);
+    background-color: #242424;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body { margin: 0; }
+
+  #app {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+
+  .logos { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 1.5rem; }
+
+  .logo {
+    height: 6em;
+    padding: 1.5em;
+    will-change: filter;
+    transition: filter 300ms;
+  }
+  .logo-react { animation: spin 20s linear infinite; }
+  .logo-react:hover { filter: drop-shadow(0 0 2em #61dafbaa); }
+
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .logo-react { animation: none; } }
+
+  h1 { font-size: 3.2em; line-height: 1.1; }
+
+  .card { padding: 2em; }
+  .card p { color: #aaa; }
+
+  button {
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 0.6em 1.2em;
+    font-size: 1em;
+    font-weight: 500;
+    font-family: inherit;
+    background-color: #1a1a1a;
+    cursor: pointer;
+    transition: border-color 0.25s;
+  }
+  button:hover { border-color: #a78bfa; }
+  button:focus-visible { outline: 4px auto -webkit-focus-ring-color; }
+
+  .hint { color: #555; font-size: 0.9em; }
+  .hint a { color: inherit; }
+  .hint a:hover { color: #a78bfa; }
+
+  @media (prefers-color-scheme: light) {
+    :root { color: #213547; background-color: #ffffff; }
+    button { background-color: #f9f9f9; }
+    .card p { color: #666; }
+    .hint { color: #999; }
+  }
+\`;
+
 ${appSignature}
   const [count, setCount] = React.useState(0);
 
@@ -550,19 +624,40 @@ ${appSignature}
       <HadarsHead status={200}>
         <title>${name}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <style data-id="app-styles" dangerouslySetInnerHTML={{ __html: css }} />
       </HadarsHead>
 
-      <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '4rem auto', padding: '0 1rem', textAlign: 'center' }}>
-        <h1>${name}</h1>
-        <p style={{ color: '#666', margin: '1rem 0 2rem' }}>
-          Edit <code>src/App.${appExt}</code> to get started.
-        </p>
-        <p style={{ fontSize: '3rem', margin: '1rem 0' }}>{count}</p>
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-          <button onClick={() => setCount(c => c - 1)}>−</button>
-          <button onClick={() => setCount(c => c + 1)}>+</button>
+      <div id="app">
+        <div className="logos">
+          <a href="https://react.dev" target="_blank" rel="noopener noreferrer">
+            <svg className="logo logo-react" xmlns="http://www.w3.org/2000/svg" viewBox="-11.5 -10.232 23 20.463" aria-label="React">
+              <circle cx="0" cy="0" r="2.05" fill="#61dafb" />
+              <g stroke="#61dafb" strokeWidth="1" fill="none">
+                <ellipse rx="11" ry="4.2" />
+                <ellipse rx="11" ry="4.2" transform="rotate(60)" />
+                <ellipse rx="11" ry="4.2" transform="rotate(120)" />
+              </g>
+            </svg>
+          </a>
         </div>
-      </main>
+
+        <h1>React + hadars</h1>
+
+        <div className="card">
+          <button onClick={() => setCount(c => c + 1)}>
+            count is {count}
+          </button>
+          <p>
+            Edit <code>src/App.${appExt}</code> and save to test HMR
+          </p>
+        </div>
+
+        <p className="hint">
+          <a href="https://hadars.xyz" target="_blank" rel="noopener noreferrer">hadars docs</a>
+          &nbsp;·&nbsp;
+          <a href="https://react.dev" target="_blank" rel="noopener noreferrer">react docs</a>
+        </p>
+      </div>
     </>
   );
 };
