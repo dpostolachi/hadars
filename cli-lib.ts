@@ -326,8 +326,159 @@ async function bundleLambda(
 
 
 
-const TEMPLATES: Record<string, (name: string) => string> = {
-  'package.json': (name: string) => JSON.stringify({
+// ── Terminal UI ───────────────────────────────────────────────────────────────
+
+const _R  = '\x1B[0m'
+const _B  = '\x1B[1m'
+const _D  = '\x1B[2m'
+const _C  = '\x1B[36m'
+const _G  = '\x1B[32m'
+const _UP_KEY    = '\x1B[A'
+const _DOWN_KEY  = '\x1B[B'
+const _HIDE = '\x1B[?25l'
+const _SHOW = '\x1B[?25h'
+
+const _cl  = () => '\r\x1B[2K'
+const _up  = (n: number) => n > 0 ? `\x1B[${n}A` : ''
+
+function _readKeys(handler: (key: string) => boolean): Promise<void> {
+  return new Promise(resolve => {
+    const { stdin } = process
+    const wasRaw = stdin.isTTY && (stdin as any).isRaw
+    if (stdin.isTTY) stdin.setRawMode(true)
+    stdin.resume()
+    stdin.setEncoding('utf-8')
+    const onData = (key: string) => {
+      if (key === '\x03') { cleanup(); process.stdout.write(_SHOW); process.exit(130) }
+      if (handler(key)) cleanup()
+    }
+    const cleanup = () => {
+      stdin.removeListener('data', onData)
+      if (stdin.isTTY && !wasRaw) stdin.setRawMode(false)
+      stdin.pause()
+      resolve()
+    }
+    stdin.on('data', onData)
+  })
+}
+
+async function promptRadio(question: string, options: string[]): Promise<number> {
+  const out = process.stdout
+  let cursor = 0
+  const total = 1 + options.length
+
+  const render = (redraw: boolean) => {
+    if (redraw) out.write(_up(total))
+    out.write(`${_cl()}  ${_B}${question}${_R}\n`)
+    for (let i = 0; i < options.length; i++) {
+      const arrow = i === cursor ? `${_C}❯${_R}` : ' '
+      const text  = i === cursor ? `${_B}${options[i]}${_R}` : `${_D}${options[i]}${_R}`
+      out.write(`${_cl()}  ${arrow} ${text}\n`)
+    }
+  }
+
+  out.write(_HIDE)
+  render(false)
+  await _readKeys(key => {
+    if      (key === _UP_KEY   && cursor > 0)                   { cursor--; render(true) }
+    else if (key === _DOWN_KEY && cursor < options.length - 1)  { cursor++; render(true) }
+    else if (key === '\r')                                       { return true }
+    return false
+  })
+
+  out.write(_up(total))
+  out.write(`${_cl()}  ${question}  ${_C}${_B}${options[cursor]}${_R}\n`)
+  for (let i = 0; i < options.length; i++) out.write(`${_cl()}\n`)
+  out.write(_up(options.length))
+  out.write(_SHOW)
+  return cursor
+}
+
+async function promptMultiSelect(question: string, options: string[]): Promise<number[]> {
+  const out = process.stdout
+  let cursor = 0
+  const selected = new Set<number>()
+  const total = 2 + options.length  // question + hint + options
+
+  const render = (redraw: boolean) => {
+    if (redraw) out.write(_up(total))
+    out.write(`${_cl()}  ${_B}${question}${_R}\n`)
+    out.write(`${_cl()}  ${_D}↑↓ navigate · Space select · Enter confirm${_R}\n`)
+    for (let i = 0; i < options.length; i++) {
+      const arrow   = i === cursor ? `${_C}❯${_R}` : ' '
+      const box     = selected.has(i) ? `${_G}●${_R}` : `${_D}○${_R}`
+      const text    = i === cursor ? `${_B}${options[i]}${_R}` : `${_D}${options[i]}${_R}`
+      out.write(`${_cl()}  ${arrow} ${box}  ${text}\n`)
+    }
+  }
+
+  out.write(_HIDE)
+  render(false)
+  await _readKeys(key => {
+    if      (key === _UP_KEY   && cursor > 0)                   { cursor--; render(true) }
+    else if (key === _DOWN_KEY && cursor < options.length - 1)  { cursor++; render(true) }
+    else if (key === ' ')  { selected.has(cursor) ? selected.delete(cursor) : selected.add(cursor); render(true) }
+    else if (key === '\r')                                       { return true }
+    return false
+  })
+
+  const picked = [...selected].sort((a, b) => a - b)
+  const summary = picked.length > 0 ? picked.map(i => options[i]).join(', ') : 'none'
+  out.write(_up(total))
+  out.write(`${_cl()}  ${question}  ${_C}${_B}${summary}${_R}\n`)
+  for (let i = 0; i < total - 1; i++) out.write(`${_cl()}\n`)
+  out.write(_up(total - 1))
+  out.write(_SHOW)
+  return picked
+}
+
+// ── Plugin metadata ───────────────────────────────────────────────────────────
+
+interface PluginMeta {
+  pkg: string
+  version: string
+  label: string
+}
+
+const PLUGINS: PluginMeta[] = [
+  { pkg: '@swc/plugin-emotion',             version: '12.0.0', label: 'Emotion (CSS-in-JS)' },
+  { pkg: '@swc/plugin-styled-components',   version: '10.0.0', label: 'styled-components' },
+  { pkg: '@swc/plugin-relay',               version: '10.0.0', label: 'Relay (GraphQL)' },
+  { pkg: '@swc/plugin-styled-jsx',          version: '11.0.0', label: 'styled-jsx' },
+  { pkg: '@swc/plugin-transform-imports',   version: '10.0.0', label: 'transform-imports' },
+  { pkg: '@swc/plugin-loadable-components', version: '9.0.0',  label: 'Loadable Components' },
+  { pkg: '@swc/plugin-formatjs',            version: '7.0.0',  label: 'FormatJS (i18n)' },
+]
+
+function renderSwcPluginsConfig(plugins: PluginMeta[]): string {
+  if (plugins.length === 0) return ''
+  const lines = plugins.map(p => {
+    if (p.pkg === '@swc/plugin-relay') {
+      return `    ['${p.pkg}', { rootDir: process.cwd(), artifactDirectory: 'src/__generated__' }],`
+    }
+    return `    ['${p.pkg}', {}],`
+  })
+  return `\n  swcPlugins: [\n${lines.join('\n')}\n  ],`
+}
+
+// ── Template generators ───────────────────────────────────────────────────────
+
+interface ScaffoldOptions {
+  useTypeScript: boolean
+  plugins: PluginMeta[]
+}
+
+
+function buildTemplates(name: string, opts: ScaffoldOptions): Record<string, string> {
+  const { useTypeScript, plugins } = opts
+  const appExt  = useTypeScript ? 'tsx' : 'jsx'
+  const cfgExt  = useTypeScript ? 'ts'  : 'js'
+  const tsOrJs  = useTypeScript ? 'tsconfig.json' : 'jsconfig.json'
+
+  const pluginDeps: Record<string, string> = {}
+  for (const p of plugins) pluginDeps[p.pkg] = p.version
+
+  const packageJson = JSON.stringify({
     name,
     version: '0.1.0',
     type: 'module',
@@ -338,231 +489,94 @@ const TEMPLATES: Record<string, (name: string) => string> = {
       start: 'hadars run',
     },
     dependencies: {
-      'hadars': 'latest',
-      react:      '^19.0.0',
-      'react-dom':'^19.0.0',
+      hadars:      'latest',
+      react:       '^19.0.0',
+      'react-dom': '^19.0.0',
     },
-  }, null, 2) + '\n',
+    ...(Object.keys(pluginDeps).length > 0 ? { devDependencies: pluginDeps } : {}),
+  }, null, 2) + '\n'
 
-  'hadars.config.ts': () =>
-`import type { HadarsOptions } from 'hadars';
+  const swcSection = renderSwcPluginsConfig(plugins)
 
-const config: HadarsOptions = {
-  entry: 'src/App.tsx',
-  port: 3000,
-};
+  const hadarsConfig = useTypeScript
+    ? `import type { HadarsOptions } from 'hadars';\n\nconst config: HadarsOptions = {\n  entry: 'src/App.tsx',\n  port: 3000,${swcSection}\n};\n\nexport default config;\n`
+    : `/** @type {import('hadars').HadarsOptions} */\nconst config = {\n  entry: 'src/App.jsx',\n  port: 3000,${swcSection}\n};\n\nexport default config;\n`
 
-export default config;
-`,
+  const tsConfigContent = useTypeScript
+    ? JSON.stringify({
+        compilerOptions: {
+          lib:                        ['ESNext', 'DOM'],
+          target:                     'ESNext',
+          module:                     'Preserve',
+          moduleDetection:            'force',
+          jsx:                        'react-jsx',
+          moduleResolution:           'bundler',
+          allowImportingTsExtensions: true,
+          verbatimModuleSyntax:       true,
+          noEmit:                     true,
+          strict:                     true,
+          skipLibCheck:               true,
+        },
+      }, null, 2) + '\n'
+    : JSON.stringify({
+        compilerOptions: {
+          lib:              ['ESNext', 'DOM'],
+          target:           'ESNext',
+          module:           'ESNext',
+          moduleResolution: 'bundler',
+          jsx:              'react-jsx',
+          checkJs:          true,
+          noEmit:           true,
+          skipLibCheck:     true,
+        },
+      }, null, 2) + '\n'
 
-  'tsconfig.json': () => JSON.stringify({
-    compilerOptions: {
-      lib:                        ['ESNext', 'DOM'],
-      target:                     'ESNext',
-      module:                     'Preserve',
-      moduleDetection:            'force',
-      jsx:                        'react-jsx',
-      moduleResolution:           'bundler',
-      allowImportingTsExtensions: true,
-      verbatimModuleSyntax:       true,
-      noEmit:                     true,
-      strict:                     true,
-      skipLibCheck:               true,
-    },
-  }, null, 2) + '\n',
+  const appImports = useTypeScript
+    ? `import React from 'react';\nimport { HadarsHead, type HadarsApp } from 'hadars';`
+    : `import React from 'react';\nimport { HadarsHead } from 'hadars';`
 
-  '.gitignore': () =>
-`node_modules/
-.hadars/
-dist/
-`,
+  const appSignature = useTypeScript
+    ? `const App: HadarsApp<{}> = () => {`
+    : `const App = () => {`
 
-  'src/App.tsx': () =>
-`import React from 'react';
-import { HadarsHead, type HadarsApp } from 'hadars';
+  const appContent =
+`${appImports}
 
-const css = \`
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0f0f13;
-    color: #e2e8f0;
-    min-height: 100vh;
-  }
-
-  .nav {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 2rem;
-    border-bottom: 1px solid #1e1e2e;
-  }
-  .nav-brand { font-weight: 700; font-size: 1.1rem; color: #a78bfa; letter-spacing: -0.02em; }
-  .nav-links { display: flex; gap: 1.5rem; }
-  .nav-links a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
-  .nav-links a:hover { color: #e2e8f0; }
-
-  .hero {
-    text-align: center;
-    padding: 5rem 1rem 4rem;
-    max-width: 680px;
-    margin: 0 auto;
-  }
-  .hero-badge {
-    display: inline-block;
-    background: #1e1a2e;
-    border: 1px solid #4c1d95;
-    color: #a78bfa;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 0.3rem 0.8rem;
-    border-radius: 999px;
-    margin-bottom: 1.5rem;
-  }
-  .hero h1 {
-    font-size: clamp(2rem, 5vw, 3.25rem);
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    line-height: 1.15;
-    margin-bottom: 1rem;
-  }
-  .hero h1 span { color: #a78bfa; }
-  .hero p {
-    font-size: 1.1rem;
-    color: #94a3b8;
-    line-height: 1.7;
-    margin-bottom: 2.5rem;
-  }
-  .hero-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.65rem 1.4rem;
-    border-radius: 8px;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    border: none;
-    transition: opacity 0.15s, transform 0.1s;
-    text-decoration: none;
-  }
-  .btn:hover { opacity: 0.85; transform: translateY(-1px); }
-  .btn:active { transform: translateY(0); }
-  .btn-primary { background: #7c3aed; color: #fff; }
-  .btn-ghost { background: #1e1e2e; color: #e2e8f0; border: 1px solid #2d2d3e; }
-
-  .features {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1rem;
-    max-width: 900px;
-    margin: 0 auto 4rem;
-    padding: 0 1.5rem;
-  }
-  .card {
-    background: #16161f;
-    border: 1px solid #1e1e2e;
-    border-radius: 12px;
-    padding: 1.5rem;
-  }
-  .card-icon { font-size: 1.5rem; margin-bottom: 0.75rem; }
-  .card h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.4rem; }
-  .card p { font-size: 0.85rem; color: #64748b; line-height: 1.6; }
-
-  .demo {
-    max-width: 480px;
-    margin: 0 auto 4rem;
-    padding: 0 1.5rem;
-    text-align: center;
-  }
-  .demo-box {
-    background: #16161f;
-    border: 1px solid #1e1e2e;
-    border-radius: 12px;
-    padding: 2rem;
-  }
-  .demo-box h2 { font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 1.25rem; }
-  .counter { font-size: 3.5rem; font-weight: 800; color: #a78bfa; letter-spacing: -0.04em; margin-bottom: 1.25rem; }
-  .demo-actions { display: flex; gap: 0.75rem; justify-content: center; }
-
-\`;
-
-const App: HadarsApp<{}> = () => {
+${appSignature}
   const [count, setCount] = React.useState(0);
 
   return (
     <>
       <HadarsHead status={200}>
-        <title>My App</title>
+        <title>${name}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <style data-id="app-styles" dangerouslySetInnerHTML={{ __html: css }} />
       </HadarsHead>
 
-      <nav className="nav">
-        <span className="nav-brand">my-app</span>
-        <div className="nav-links">
-          <a href="https://github.com/dpostolachi/hadar" target="_blank" rel="noopener">github</a>
-        </div>
-      </nav>
-
-      <section className="hero">
-        <div className="hero-badge">built with hadars</div>
-        <h1>Ship <span>React apps</span><br />at full speed</h1>
-        <p>
-          SSR out of the box, zero config, instant hot-reload.
-          Edit <code>src/App.tsx</code> to get started.
+      <main style={{ fontFamily: 'sans-serif', maxWidth: 480, margin: '4rem auto', padding: '0 1rem', textAlign: 'center' }}>
+        <h1>${name}</h1>
+        <p style={{ color: '#666', margin: '1rem 0 2rem' }}>
+          Edit <code>src/App.${appExt}</code> to get started.
         </p>
-        <div className="hero-actions">
-          <button className="btn btn-primary" onClick={() => setCount(c => c + 1)}>
-            Try the counter ↓
-          </button>
+        <p style={{ fontSize: '3rem', margin: '1rem 0' }}>{count}</p>
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+          <button onClick={() => setCount(c => c - 1)}>−</button>
+          <button onClick={() => setCount(c => c + 1)}>+</button>
         </div>
-      </section>
-
-      <div className="features">
-        <div className="card">
-          <div className="card-icon">⚡</div>
-          <h3>Server-side rendering</h3>
-          <p>Pages render on the server and hydrate on the client — great for SEO and first paint.</p>
-        </div>
-        <div className="card">
-          <div className="card-icon">🔥</div>
-          <h3>Hot module reload</h3>
-          <p>Changes in <code>src/App.tsx</code> reflect instantly in the browser during development.</p>
-        </div>
-        <div className="card">
-          <div className="card-icon">📦</div>
-          <h3>Zero config</h3>
-          <p>One config file. Export a React component, run <code>hadars dev</code>, done.</p>
-        </div>
-        <div className="card">
-          <div className="card-icon">🗄️</div>
-          <h3>Server data hooks</h3>
-          <p>Use <code>useServerData</code> to fetch data on the server without extra round-trips.</p>
-        </div>
-      </div>
-
-      <div className="demo">
-        <div className="demo-box">
-          <h2>Client interactivity works</h2>
-          <div className="counter">{count}</div>
-          <div className="demo-actions">
-            <button className="btn btn-ghost" onClick={() => setCount(c => c - 1)}>− dec</button>
-            <button className="btn btn-primary" onClick={() => setCount(c => c + 1)}>+ inc</button>
-          </div>
-        </div>
-      </div>
-
+      </main>
     </>
   );
 };
 
 export default App;
-`,
+`
+
+  return {
+    'package.json':                    packageJson,
+    [`hadars.config.${cfgExt}`]:       hadarsConfig,
+    [tsOrJs]:                          tsConfigContent,
+    '.gitignore':                      'node_modules/\n.hadars/\ndist/\n',
+    [`src/App.${appExt}`]:             appContent,
+  }
 }
 
 async function createProject(name: string, cwd: string): Promise<void> {
@@ -573,21 +587,36 @@ async function createProject(name: string, cwd: string): Promise<void> {
     process.exit(1)
   }
 
-  console.log(`Creating hadars project in ${dir}`)
+  // ── Interactive prompts ──────────────────────────────────────────────────
+  const useTypeScript = (await promptRadio('Language?', ['TypeScript', 'JavaScript'])) === 0
+
+  const selectedIndices = await promptMultiSelect(
+    'Select SWC plugins to enable (optional):',
+    PLUGINS.map(p => p.label),
+  )
+  const plugins = selectedIndices.map(i => PLUGINS[i]!)
+
+  // ── Write files ──────────────────────────────────────────────────────────
+  console.log(`\nCreating hadars project in ${dir}`)
 
   await mkdir(join(dir, 'src'), { recursive: true })
 
-  for (const [file, template] of Object.entries(TEMPLATES)) {
-    const content = template(name)
+  const files = buildTemplates(name, { useTypeScript, plugins })
+
+  for (const [file, content] of Object.entries(files)) {
     await writeFile(join(dir, file), content, 'utf-8')
     console.log(`  created  ${file}`)
   }
+
+  const installHint = plugins.length > 0
+    ? `\n  # Also install selected SWC plugins:\n  npm install -D ${plugins.map(p => `${p.pkg}@${p.version}`).join(' ')}\n`
+    : ''
 
   console.log(`
 Done! Next steps:
 
   cd ${name}
-  npm install       # or: bun install / pnpm install
+  npm install       # or: bun install / pnpm install${installHint}
   npm run dev       # or: bun run dev
 `)
 }
