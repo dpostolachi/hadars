@@ -11,6 +11,16 @@ interface ReactResponseOptions {
         getFinalProps: HadarsEntryModule<HadarsEntryBase>['getFinalProps'];
     }
     staticCtx?: HadarsStaticContext;
+    /**
+     * Skip the preflight pass and render in a single tree walk.
+     *
+     * `renderToString` already self-retries on suspension (it handles
+     * `useServerData` inline), so the only purpose of the preflight is to
+     * populate `context.head` before the body is streamed. When the head is
+     * small (title + a few metas) and early-flush is not critical — e.g. in
+     * dev mode — a single pass halves the render work.
+     */
+    singlePass?: boolean;
 }
 
 // ── Head HTML serialisation ────────────────────────────────────────────────
@@ -89,25 +99,38 @@ export const getReactResponse = async (
 
     const element = createElement(App as any, props as any);
 
-    // Phase 1 — preflight: walk the tree with a null writer (no HTML output).
-    // This resolves all useServerData promises into the cache and populates
-    // context.head so head can be flushed to the client immediately.
-    try {
-        await renderPreflight(element);
-    } finally {
-        // Clear the global immediately — the closure-captured `unsuspend`
-        // keeps the cache alive. Re-set inside getAppBody() for the second pass.
-        (globalThis as any).__hadarsUnsuspend = null;
-        (globalThis as any).__hadarsContext = null;
+    let bodyHtml: string | null = null;
+
+    if (opts.singlePass) {
+        // Single-pass: renderToString already self-retries on suspension so it
+        // resolves useServerData inline and populates context.head in one walk.
+        // getAppBody() returns the pre-rendered string immediately.
+        (globalThis as any).__hadarsUnsuspend = unsuspend;
+        (globalThis as any).__hadarsContext = context;
+        try {
+            bodyHtml = await renderToString(element);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
+            (globalThis as any).__hadarsContext = null;
+        }
+    } else {
+        // Two-pass: preflight walk populates context.head before the body is
+        // rendered so the head can be streamed to the client first (early CSS/font
+        // hints). Useful in production where LCP matters.
+        try {
+            await renderPreflight(element);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
+            (globalThis as any).__hadarsContext = null;
+        }
     }
 
     // Head is fully populated — status is known.
     const status = context.head.status;
 
-    // Phase 2 is deferred: getAppBody() triggers the actual HTML render.
-    // All data is cached from the preflight, so the second pass is fast
-    // (no async waits). The caller flushes head BEFORE calling this.
     const getAppBody = async (): Promise<string> => {
+        if (bodyHtml !== null) return bodyHtml;
+        // Two-pass: all data cached from preflight, second pass is fast.
         (globalThis as any).__hadarsUnsuspend = unsuspend;
         (globalThis as any).__hadarsContext = context;
         try {
