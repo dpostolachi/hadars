@@ -12,6 +12,8 @@
  * without any external dependencies.
  */
 
+import { createRequire as _nodeCreateRequire } from 'node:module';
+
 // The context map for the render that is currently executing (between awaits).
 // Kept on globalThis so both slim-react instances share the same slot.
 const MAP_KEY = "__slimReactContextMap";
@@ -57,8 +59,11 @@ export function restoreUnsuspend(u: unknown): void {
 export function getContextValue<T>(context: object): T {
   const map: Map<object, unknown> | null = _g[MAP_KEY];
   if (map && map.has(context)) return map.get(context) as T;
-  const c = context as any;
-  return ("_defaultValue" in c ? c._defaultValue : c._currentValue) as T;
+  // _currentValue holds the user-provided default in both slim-react and real
+  // React (18 and 19). React also has _defaultValue but it is an internal
+  // server-context field that React 18 always initialises to null regardless
+  // of the user-provided default — do not use it as a fallback.
+  return (context as any)._currentValue as T;
 }
 
 /**
@@ -73,10 +78,9 @@ export function pushContextValue(context: object, value: unknown): unknown {
     map = new Map();
     _g[MAP_KEY] = map;
   }
-  const c = context as any;
   const prev = map.has(context)
     ? map.get(context)
-    : ("_defaultValue" in c ? c._defaultValue : c._currentValue);
+    : (context as any)._currentValue;
   map.set(context, value);
   return prev;
 }
@@ -273,22 +277,59 @@ function getTreeId(): string {
   return stripped + overflow;
 }
 
+declare const __HADARS_REACT_MAJOR__: string | number | undefined;
+
+// Resolved once at module evaluation.
+// Priority:
+//   1. Compile-time rspack define (__HADARS_REACT_MAJOR__) — always present in
+//      rspack-built SSR bundles where `react` is aliased to slim-react.
+//   2. bare require('react').version — works in CJS and Bun.
+//   3. createRequire fallback — for strict Node.js ESM where bare require is
+//      unavailable. Uses process.cwd() as the resolution base so monorepo
+//      hoisting is respected automatically.
+//   4. { major: 19, version: '19.1.1' } — last-resort default.
+const _detectReact = (): { major: number; version: string } => {
+  if (typeof __HADARS_REACT_MAJOR__ !== 'undefined') {
+    const major = parseInt(String(__HADARS_REACT_MAJOR__), 10);
+    return {
+      major,
+      // Exact patch version is unknown from the define alone; use a
+      // representative fallback. Most libraries only check the major.
+      version: major < 19 ? '18.3.1' : '19.1.1',
+    };
+  }
+  const parse = (ver: string) => ({ major: parseInt(ver.split('.')[0]!, 10), version: ver });
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return parse((require('react') as { version: string }).version);
+  } catch {}
+  try {
+    const req = _nodeCreateRequire(process.cwd() + '/__hadars__.js');
+    return parse((req('react') as { version: string }).version);
+  } catch {}
+  return { major: 19, version: '19.1.1' };
+};
+
+const _react = _detectReact();
+export const REACT_MAJOR: number = _react.major;
+export const REACT_VERSION: string = _react.version;
+
 /**
  * Generate a `useId`-compatible ID for the current call site.
  *
- * Format: `_R_<idPrefix><treeId>_`  (React 19.2+)
- *   with an optional `H<n>` suffix for the n-th useId call in the same
- *   component (matching React 19's `localIdCounter` behaviour).
+ * React 18 format : `:<idPrefix>R<treeId>:`  (colon-delimited)
+ * React 19 format : `_R_<idPrefix><treeId>_` (underscore-delimited)
  *
- * React 19.2 uses `_R_<id>_` (underscore-delimited).
- * This matches React 19.2's output from both renderToString (Fizz) and
- * hydrateRoot, so SSR-generated IDs agree with client React during hydration.
+ * The format must match what `hydrateRoot` produces on the client side so that
+ * SSR-generated IDs agree with client React during hydration.
  */
 export function makeId(): string {
   const st = s();
   const treeId = getTreeId();
   const n = st.localIdCounter++;
-  let id = "_R_" + st.idPrefix + treeId;
-  if (n > 0) id += "H" + n.toString(32);
-  return id + "_";
+  const suffix = n > 0 ? "H" + n.toString(32) : "";
+  if (REACT_MAJOR < 19) {
+    return ":" + st.idPrefix + "R" + treeId + suffix + ":";
+  }
+  return "_R_" + st.idPrefix + treeId + suffix + "_";
 }

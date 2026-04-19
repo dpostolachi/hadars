@@ -38,6 +38,7 @@ import {
   captureMap,
   captureUnsuspend,
   restoreUnsuspend,
+  REACT_MAJOR,
   type ContextSnapshot,
 } from "./renderContext";
 
@@ -322,6 +323,8 @@ function writeAttributes(writer: Writer, props: Record<string, any>, isSvg: bool
         : key === "tabIndex"   ? "tabindex"
         : key === "defaultValue"   ? "value"
         : key === "defaultChecked" ? "checked"
+        // React 18 serialises contentEditable as lowercase; React 19 keeps camelCase.
+        : key === "contentEditable" && REACT_MAJOR < 19 ? "contenteditable"
         : key;
     }
 
@@ -654,8 +657,14 @@ function renderComponent(
     return renderComponent(LazyComp, props, writer, isSvg);
   }
 
-  // React.Consumer (React 19) — call the children render prop with the current value
-  if (typeOf === REACT_CONSUMER) {
+  // React.Consumer — call the children render prop with the current context value.
+  // React 19:    $$typeof === REACT_CONSUMER, _context points to parent context.
+  // React 18.3+: $$typeof === REACT_CONTEXT with a ._context back-pointer (NOT a
+  //              provider — providers carry a `value` prop, consumers do not).
+  const isConsumer =
+    typeOf === REACT_CONSUMER ||
+    (typeOf === REACT_CONTEXT && "_context" in type && !("value" in props));
+  if (isConsumer) {
     const ctx = (type as any)._context;
     const value = ctx ? getContextValue(ctx) : undefined;
     const result: SlimNode =
@@ -674,6 +683,7 @@ function renderComponent(
   //   slim-react:   Provider function has `_context` property
   //   React 18:     Provider object has $$typeof === react.provider and ._context
   //   React 19:     Context object itself is the provider ($$typeof === react.context + value prop)
+  // Note: React 18.3+ Consumer also has `_context` but is already handled above.
   const isProvider =
     "_context" in type ||
     typeOf === REACT_PROVIDER ||

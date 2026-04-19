@@ -15,6 +15,9 @@ export {
   type ComponentFunction,
 } from "./types";
 
+// ---- React version detection ----
+import { REACT_VERSION } from './renderContext';
+
 // ---- JSX runtime ----
 import { jsx, jsxs, jsxDEV, createElement, Fragment } from "./jsx";
 export { jsx, jsxs, jsxDEV, createElement, Fragment };
@@ -204,7 +207,18 @@ export class PureComponent<P = {}, S = {}> extends Component<P, S> {}
 // Exported as a named export so that namespace imports (`import * as React`)
 // — as used by react-redux and other libraries that check React.version —
 // find it on the module namespace rather than only on the default export.
-export const version = "19.1.1";
+export const version = REACT_VERSION;
+
+// ---- React 18 internals stub ----
+// React 18 libraries (e.g. react-dom/client shims, some react-query internals)
+// access React.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentBatchConfig
+// at import time. Providing a minimal stub prevents a crash when slim-react is
+// aliased over react in the SSR bundle with React 18 installed.
+export const __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED = {
+  ReactCurrentDispatcher: { current: null as unknown },
+  ReactCurrentBatchConfig: { transition: null as unknown },
+  ReactCurrentOwner: { current: null as unknown },
+};
 
 // ---- Default export ----
 // Mirrors `import React from 'react'` so code that uses React.useState,
@@ -227,6 +241,8 @@ const React = {
   renderToStream, renderToString, renderToReadableStream, renderPreflight,
   // Version
   version,
+  // React 18 internals
+  __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
 };
 
 export default React;

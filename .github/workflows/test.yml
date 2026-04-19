@@ -7,6 +7,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        react-version: ["19", "18"]
 
     steps:
       - name: Checkout
@@ -18,11 +21,20 @@ jobs:
       - name: Install hadars dependencies
         run: bun install --ignore-scripts
 
+      - name: Pin React 18
+        if: matrix.react-version == '18'
+        run: bun add -d react@^18.3.0 react-dom@^18.3.0
+
       - name: Build hadars
         run: bun run build:all
 
       - name: Install website dependencies
         run: npm install --ignore-scripts
+        working-directory: website
+
+      - name: Pin website React 18
+        if: matrix.react-version == '18'
+        run: npm install react@^18.3.0 react-dom@^18.3.0 --legacy-peer-deps
         working-directory: website
 
       - name: Build website
