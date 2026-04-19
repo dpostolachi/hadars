@@ -15,8 +15,9 @@ export {
   type ComponentFunction,
 } from "./types";
 
-// ---- React version detection ----
-import { REACT_VERSION } from './renderContext';
+// ---- React version ----
+import { REACT_VERSION, setReactVersion } from './renderContext';
+export { setReactVersion };
 
 // ---- JSX runtime ----
 import { jsx, jsxs, jsxDEV, createElement, Fragment } from "./jsx";
