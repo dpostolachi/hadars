@@ -42,14 +42,17 @@ let _r19: { H: object | null } | undefined;
 let _r18: { ReactCurrentDispatcher: { current: object | null } } | undefined;
 let _detected = false;
 
+// Keys split across string literals so rspack cannot statically resolve them as
+// named-export accesses on "react" (which would produce ESModulesLinkingWarnings).
+const _k19 = "__CLIENT_INTERNALS_DO_NOT_USE" + "_OR_WARN_USERS_THEY_CANNOT_UPGRADE";
+const _k18 = "__SECRET_INTERNALS_DO_NOT_USE" + "_OR_YOU_WILL_BE_FIRED";
+
 function _detect() {
   if (_detected) return;
   _detected = true;
-  // Bracket notation prevents rspack from treating this as a named-export access
-  // on the "react" module (which would produce an ESModulesLinkingWarning).
-  const r19 = (ReactNS as any)["__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE"];
+  const r19 = (ReactNS as any)[_k19];
   if (r19) { _r19 = r19; return; }
-  const raw = (ReactNS as any)["__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED"];
+  const raw = (ReactNS as any)[_k18];
   if (raw?.ReactCurrentDispatcher) _r18 = raw;
 }
 
