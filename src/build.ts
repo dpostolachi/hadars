@@ -364,6 +364,11 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // SSR live-reload id to force re-import
     let ssrBuildId = crypto.randomBytes(4).toString('hex');
 
+    // Cached SSR module — re-resolved only when ssrBuildId rotates after a rebuild.
+    // Avoids a dynamic import() cache lookup on every request.
+    let cachedSsrModule: HadarsEntryModule<any> | null = null;
+    let cachedSsrBuildId = '';
+
     // Pre-process the HTML template's <style> blocks through PostCSS (e.g. Tailwind).
     const resolvedHtmlTemplate = options.htmlTemplate
         ? await processHtmlTemplate(pathMod.resolve(__dirname, options.htmlTemplate))
@@ -560,16 +565,18 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         if (projectRes) return projectRes;
 
         const ssrComponentPath = pathMod.join(__dirname, HadarsFolder, SSR_FILENAME);
-        // Use a file: URL so the ?t= suffix is treated as a URL query string
-        // (cache-busting key) rather than a literal filename character on Linux.
-        const importPath = pathToFileURL(ssrComponentPath).href + `?t=${ssrBuildId}`;
 
         try {
+            if (ssrBuildId !== cachedSsrBuildId) {
+                const importPath = pathToFileURL(ssrComponentPath).href + `?t=${ssrBuildId}`;
+                cachedSsrModule = (await import(importPath)) as HadarsEntryModule<any>;
+                cachedSsrBuildId = ssrBuildId;
+            }
             const {
                 default: Component,
                 getInitProps,
                 getFinalProps,
-            } = (await import(importPath)) as HadarsEntryModule<any>;
+            } = cachedSsrModule!;
 
             // Expose the executor globally so useGraphQL() in components can reach it.
             (globalThis as any).__hadarsGraphQL = devStaticCtx?.graphql;
@@ -582,6 +589,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                     getFinalProps,
                 },
                 staticCtx: devStaticCtx,
+                singlePass: true,
             });
 
             // Content negotiation: if the client only accepts JSON (client-side
@@ -794,6 +802,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                     getInitProps,
                     getFinalProps,
                 },
+                singlePass: true,
             });
 
             // Content negotiation: if the client only accepts JSON (client-side
