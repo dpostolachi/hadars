@@ -211,7 +211,7 @@ describe("compare: attributes", () => {
       <div contentEditable="true" suppressContentEditableWarning>editable</div>
     );
     expect(html).not.toContain("suppressContentEditableWarning");
-    expect(html).toContain('contentEditable="true"');
+    expect(html).toContain(REACT_MAJOR < 19 ? 'contenteditable="true"' : 'contentEditable="true"');
   });
 
   test("HTML escaping in text content", async () => {

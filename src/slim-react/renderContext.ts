@@ -59,8 +59,11 @@ export function restoreUnsuspend(u: unknown): void {
 export function getContextValue<T>(context: object): T {
   const map: Map<object, unknown> | null = _g[MAP_KEY];
   if (map && map.has(context)) return map.get(context) as T;
-  const c = context as any;
-  return ("_defaultValue" in c ? c._defaultValue : c._currentValue) as T;
+  // _currentValue holds the user-provided default in both slim-react and real
+  // React (18 and 19). React also has _defaultValue but it is an internal
+  // server-context field that React 18 always initialises to null regardless
+  // of the user-provided default — do not use it as a fallback.
+  return (context as any)._currentValue as T;
 }
 
 /**
@@ -75,10 +78,9 @@ export function pushContextValue(context: object, value: unknown): unknown {
     map = new Map();
     _g[MAP_KEY] = map;
   }
-  const c = context as any;
   const prev = map.has(context)
     ? map.get(context)
-    : ("_defaultValue" in c ? c._defaultValue : c._currentValue);
+    : (context as any)._currentValue;
   map.set(context, value);
   return prev;
 }

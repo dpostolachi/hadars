@@ -38,6 +38,7 @@ import {
   captureMap,
   captureUnsuspend,
   restoreUnsuspend,
+  REACT_MAJOR,
   type ContextSnapshot,
 } from "./renderContext";
 
@@ -322,6 +323,8 @@ function writeAttributes(writer: Writer, props: Record<string, any>, isSvg: bool
         : key === "tabIndex"   ? "tabindex"
         : key === "defaultValue"   ? "value"
         : key === "defaultChecked" ? "checked"
+        // React 18 serialises contentEditable as lowercase; React 19 keeps camelCase.
+        : key === "contentEditable" && REACT_MAJOR < 19 ? "contenteditable"
         : key;
     }
 
