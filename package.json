@@ -1,6 +1,6 @@
 {
   "name": "hadars",
-  "version": "0.4.3-rc.3",
+  "version": "0.4.3-rc.4",
   "description": "Minimal SSR framework for React — rspack, HMR, TypeScript, Bun/Node/Deno",
   "module": "./dist/index.js",
   "type": "module",
