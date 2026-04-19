@@ -238,6 +238,16 @@ const StaticPath = `${HadarsFolder}/static`;
 const HADARS_TMP_DIR = pathMod.join(os.tmpdir(), 'hadars');
 const ensureHadarsTmpDir = () => fs.mkdir(HADARS_TMP_DIR, { recursive: true });
 
+const readReactMajor = async (): Promise<number> => {
+    try {
+        const pkgPath = pathMod.resolve(process.cwd(), 'node_modules', 'react', 'package.json');
+        const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
+        return parseInt((pkg.version as string).split('.')[0]!, 10);
+    } catch {
+        return 19;
+    }
+};
+
 const validateOptions = (options: HadarsRuntimeOptions) => {
     if (!options.entry) {
         throw new Error("Entry file is required");
@@ -413,6 +423,9 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const workerCmd = resolveWorkerCmd(packageDir);
     console.log('Spawning SSR worker:', workerCmd.join(' '), 'entry:', entry);
 
+    const reactMajor = await readReactMajor();
+    const ssrDefine = { __HADARS_REACT_MAJOR__: reactMajor, ...options.define };
+
     const child = spawn(workerCmd[0]!, [
         ...workerCmd.slice(1),
         `--entry=${entry}`,
@@ -420,7 +433,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         `--outFile=${SSR_FILENAME}`,
         `--base=${baseURL}`,
         ...(options.swcPlugins ? [`--swcPlugins=${JSON.stringify(options.swcPlugins)}`] : []),
-        ...(options.define ? [`--define=${JSON.stringify(options.define)}`] : []),
+        `--define=${JSON.stringify(ssrDefine)}`,
         ...(options.moduleRules ? [`--moduleRules=${JSON.stringify(options.moduleRules, (_k, v) => v instanceof RegExp ? { __re: v.source, __flags: v.flags } : v)}`] : []),
     ], { stdio: 'pipe' });
     child.stdin?.end();
@@ -623,6 +636,8 @@ export const build = async (options: HadarsRuntimeOptions) => {
     // Compile client and SSR bundles in parallel — they write to different
     // output directories and use different entry files, so they are fully
     // independent and safe to run concurrently.
+    const reactMajor = await readReactMajor();
+
     console.log("Building client and server bundles in parallel...");
     await Promise.all([
         compileEntry(tmpFilePath, {
@@ -655,7 +670,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             target: 'node',
             mode: 'production',
             swcPlugins: options.swcPlugins,
-            define: options.define,
+            define: { __HADARS_REACT_MAJOR__: reactMajor, ...options.define },
             moduleRules: options.moduleRules,
             plugins: options.plugins,
             postcssPlugins: options.postcssPlugins,

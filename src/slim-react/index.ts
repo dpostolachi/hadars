@@ -204,7 +204,10 @@ export class PureComponent<P = {}, S = {}> extends Component<P, S> {}
 // Exported as a named export so that namespace imports (`import * as React`)
 // — as used by react-redux and other libraries that check React.version —
 // find it on the module namespace rather than only on the default export.
-export const version = "19.1.1";
+declare const __HADARS_REACT_MAJOR__: number | undefined;
+export const version = (typeof __HADARS_REACT_MAJOR__ !== 'undefined' && __HADARS_REACT_MAJOR__ < 19)
+    ? "18.3.1"
+    : "19.1.1";
 
 // ---- Default export ----
 // Mirrors `import React from 'react'` so code that uses React.useState,

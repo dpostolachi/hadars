@@ -273,22 +273,29 @@ function getTreeId(): string {
   return stripped + overflow;
 }
 
+declare const __HADARS_REACT_MAJOR__: number | undefined;
+
+// Resolved once at module evaluation from the compile-time define injected by
+// build.ts. Falls back to 19 when the constant is absent (e.g. unit tests).
+const REACT_MAJOR: number =
+  typeof __HADARS_REACT_MAJOR__ !== 'undefined' ? __HADARS_REACT_MAJOR__ : 19;
+
 /**
  * Generate a `useId`-compatible ID for the current call site.
  *
- * Format: `_R_<idPrefix><treeId>_`  (React 19.2+)
- *   with an optional `H<n>` suffix for the n-th useId call in the same
- *   component (matching React 19's `localIdCounter` behaviour).
+ * React 18 format : `:<idPrefix>R<treeId>:`  (colon-delimited)
+ * React 19 format : `_R_<idPrefix><treeId>_` (underscore-delimited)
  *
- * React 19.2 uses `_R_<id>_` (underscore-delimited).
- * This matches React 19.2's output from both renderToString (Fizz) and
- * hydrateRoot, so SSR-generated IDs agree with client React during hydration.
+ * The format must match what `hydrateRoot` produces on the client side so that
+ * SSR-generated IDs agree with client React during hydration.
  */
 export function makeId(): string {
   const st = s();
   const treeId = getTreeId();
   const n = st.localIdCounter++;
-  let id = "_R_" + st.idPrefix + treeId;
-  if (n > 0) id += "H" + n.toString(32);
-  return id + "_";
+  const suffix = n > 0 ? "H" + n.toString(32) : "";
+  if (REACT_MAJOR < 19) {
+    return ":" + st.idPrefix + "R" + treeId + suffix + ":";
+  }
+  return "_R_" + st.idPrefix + treeId + suffix + "_";
 }
