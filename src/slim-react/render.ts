@@ -38,21 +38,23 @@ import {
   captureMap,
   captureUnsuspend,
   restoreUnsuspend,
+  captureHadarsCtx,
+  restoreHadarsCtx,
   REACT_MAJOR,
   type ContextSnapshot,
 } from "./renderContext";
 
 /**
- * Capture all three concurrent-render globals in one call.
+ * Capture all concurrent-render globals in one call.
  * Must be called immediately before every `await` and the returned token
  * passed to restoreRenderCtx immediately after resuming — just like the
  * individual captureMap / captureUnsuspend calls they replace.
  */
-function captureRenderCtx(): { m: ReturnType<typeof captureMap>; u: unknown; t: ContextSnapshot } {
-  return { m: captureMap(), u: captureUnsuspend(), t: snapshotContext() };
+function captureRenderCtx(): { m: ReturnType<typeof captureMap>; u: unknown; t: ContextSnapshot; h: unknown } {
+  return { m: captureMap(), u: captureUnsuspend(), t: snapshotContext(), h: captureHadarsCtx() };
 }
 function restoreRenderCtx(ctx: ReturnType<typeof captureRenderCtx>): void {
-  swapContextMap(ctx.m); restoreUnsuspend(ctx.u); restoreContext(ctx.t);
+  swapContextMap(ctx.m); restoreUnsuspend(ctx.u); restoreContext(ctx.t); restoreHadarsCtx(ctx.h);
 }
 import { installDispatcher, restoreDispatcher } from "./dispatcher";
 
