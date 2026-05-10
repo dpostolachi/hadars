@@ -38,21 +38,23 @@ import {
   captureMap,
   captureUnsuspend,
   restoreUnsuspend,
+  captureHadarsCtx,
+  restoreHadarsCtx,
   REACT_MAJOR,
   type ContextSnapshot,
 } from "./renderContext";
 
 /**
- * Capture all three concurrent-render globals in one call.
+ * Capture all concurrent-render globals in one call.
  * Must be called immediately before every `await` and the returned token
  * passed to restoreRenderCtx immediately after resuming — just like the
  * individual captureMap / captureUnsuspend calls they replace.
  */
-function captureRenderCtx(): { m: ReturnType<typeof captureMap>; u: unknown; t: ContextSnapshot } {
-  return { m: captureMap(), u: captureUnsuspend(), t: snapshotContext() };
+function captureRenderCtx(): { m: ReturnType<typeof captureMap>; u: unknown; t: ContextSnapshot; h: unknown } {
+  return { m: captureMap(), u: captureUnsuspend(), t: snapshotContext(), h: captureHadarsCtx() };
 }
 function restoreRenderCtx(ctx: ReturnType<typeof captureRenderCtx>): void {
-  swapContextMap(ctx.m); restoreUnsuspend(ctx.u); restoreContext(ctx.t);
+  swapContextMap(ctx.m); restoreUnsuspend(ctx.u); restoreContext(ctx.t); restoreHadarsCtx(ctx.h);
 }
 import { installDispatcher, restoreDispatcher } from "./dispatcher";
 
@@ -864,11 +866,18 @@ function renderChildArrayFrom(
     const r = renderNode(child, writer, isSvg);
     if (r && typeof (r as any).then === "function") {
       const rctx = captureRenderCtx();
-      return (r as Promise<void>).then(() => {
-        restoreRenderCtx(rctx);
-        popTreeContext(savedTree);
-        return renderChildArrayFrom(children, i + 1, writer, isSvg);
-      });
+      return (r as Promise<void>).then(
+        () => {
+          restoreRenderCtx(rctx);
+          popTreeContext(savedTree);
+          return renderChildArrayFrom(children, i + 1, writer, isSvg);
+        },
+        (e) => {
+          restoreRenderCtx(rctx);
+          popTreeContext(savedTree);
+          throw e;
+        },
+      );
     }
     popTreeContext(savedTree);
   }
@@ -1025,18 +1034,10 @@ export function renderToStream(
 // Preflight renderer
 // ---------------------------------------------------------------------------
 
-/** A writer that discards all output — only side-effects (cache warming, head
- *  population) are preserved. Used as the no-op sink for Pass 1. */
-const NULL_WRITER: Writer = {
-  lastWasText: false,
-  write(_c: string) {},
-  text(_s: string) {},
-};
-
 /**
  * Pass-1 preflight render.
  *
- * Walks the component tree with a NullWriter (discards all HTML output) so
+ * Walks the component tree with a discard writer (no HTML output) so
  * that all `useServerData` promises are resolved into the `__hadarsUnsuspend`
  * cache and all `context.head` mutations are applied.
  *
@@ -1051,15 +1052,17 @@ export async function renderPreflight(
   options?: RenderOptions,
 ): Promise<void> {
   const idPrefix = options?.identifierPrefix ?? "";
+  // Fresh writer per call — avoids shared mutable state across concurrent
+  // renderPreflight calls (lastWasText would otherwise be a race).
+  const writer: Writer = { lastWasText: false, write() {}, text() {} };
   // Start with null — pushContextValue lazily creates the Map only if a
   // Context.Provider is actually rendered.
   const prev = swapContextMap(null);
   try {
     resetRenderState(idPrefix);
-    NULL_WRITER.lastWasText = false;
     // Components self-retry on suspension (see renderComponent catch block),
     // so a single pass is guaranteed to complete with all promises resolved.
-    const r = renderNode(element, NULL_WRITER);
+    const r = renderNode(element, writer);
     if (r && typeof (r as any).then === "function") {
       const rctx = captureRenderCtx(); await r; restoreRenderCtx(rctx);
     }

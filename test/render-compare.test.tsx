@@ -1315,3 +1315,112 @@ describe("slim: concurrent render isolation — useId", () => {
     expect(id).toBe(baselineId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// slim: __hadarsContext isolation — HadarsHead concurrent safety
+//
+// Regression: captureRenderCtx() did not capture __hadarsContext, so a
+// concurrent request could overwrite the slot between an await and its
+// continuation.  Synchronous components that read __hadarsContext (like
+// HadarsHead) would then write SEO tags into the wrong request's head context.
+// ---------------------------------------------------------------------------
+
+describe("slim: __hadarsContext isolation", () => {
+  // Simulate what HadarsHead does: read __hadarsContext synchronously during
+  // the renderer's tree walk and write a value into it.  This is deliberately
+  // synchronous — the bug only manifests because HadarsHead is sync while the
+  // renderer may resume after an await that another concurrent render used to
+  // overwrite the global.
+  function SyncHeadWriter({ title }: { title: string }) {
+    const ctx = (globalThis as any).__hadarsContext as { title: string } | null;
+    if (ctx) ctx.title = title;
+    return React.createElement("span", null, title) as any;
+  }
+
+  // Async parent that yields once — simulates a useServerData suspension.
+  // The renderer captures __hadarsContext before the await and must restore
+  // it exactly when resuming.
+  async function AsyncParent({ children }: { children?: any }) {
+    await Promise.resolve();
+    return React.createElement("div", null, children) as any;
+  }
+
+  function App({ title }: { title: string }) {
+    return React.createElement(
+      AsyncParent as any, null,
+      React.createElement(SyncHeadWriter as any, { title }),
+    ) as any;
+  }
+
+  test("concurrent renderToString calls do not cross-contaminate __hadarsContext", async () => {
+    const ctxA = { title: "" };
+    const ctxB = { title: "" };
+    const prev = (globalThis as any).__hadarsContext;
+
+    try {
+      // Both IIFEs run synchronously before either reaches its first await, so
+      // render A captures __hadarsContext = ctxA before render B sets ctxB.
+      // After the yield, restoreRenderCtx must put ctxA back before
+      // SyncHeadWriter runs — otherwise it writes into ctxB instead.
+      await Promise.all([
+        ((): Promise<string> => {
+          (globalThis as any).__hadarsContext = ctxA;
+          return slimRenderToString(React.createElement(App as any, { title: "Page A" }) as any);
+        })(),
+        ((): Promise<string> => {
+          (globalThis as any).__hadarsContext = ctxB;
+          return slimRenderToString(React.createElement(App as any, { title: "Page B" }) as any);
+        })(),
+      ]);
+    } finally {
+      (globalThis as any).__hadarsContext = prev;
+    }
+
+    expect(ctxA.title).toBe("Page A");
+    expect(ctxB.title).toBe("Page B");
+  });
+
+  test("concurrent renderPreflight + renderToString do not cross-contaminate __hadarsContext", async () => {
+    const ctxA = { title: "" };
+    const ctxB = { title: "" };
+    const prev = (globalThis as any).__hadarsContext;
+
+    try {
+      await Promise.all([
+        ((): Promise<string> => {
+          (globalThis as any).__hadarsContext = ctxA;
+          return slimRenderToString(React.createElement(App as any, { title: "Page A" }) as any);
+        })(),
+        ((): Promise<void> => {
+          (globalThis as any).__hadarsContext = ctxB;
+          return renderPreflight(React.createElement(App as any, { title: "Page B" }) as any);
+        })(),
+      ]);
+    } finally {
+      (globalThis as any).__hadarsContext = prev;
+    }
+
+    expect(ctxA.title).toBe("Page A");
+    expect(ctxB.title).toBe("Page B");
+  });
+
+  test("stress: ten concurrent renders each write into their own __hadarsContext", async () => {
+    const contexts = Array.from({ length: 10 }, (_, i) => ({ title: "", index: i }));
+    const prev = (globalThis as any).__hadarsContext;
+
+    try {
+      await Promise.all(
+        contexts.map((ctx, i) => (): Promise<string> => {
+          (globalThis as any).__hadarsContext = ctx;
+          return slimRenderToString(React.createElement(App as any, { title: `Page ${i}` }) as any);
+        }).map(fn => fn()),
+      );
+    } finally {
+      (globalThis as any).__hadarsContext = prev;
+    }
+
+    for (let i = 0; i < contexts.length; i++) {
+      expect(contexts[i]!.title).toBe(`Page ${i}`);
+    }
+  });
+});

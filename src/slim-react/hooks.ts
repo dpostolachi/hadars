@@ -22,9 +22,10 @@ export function useState<T>(
 // ---- useReducer ----
 export function useReducer<S, A>(
   _reducer: (state: S, action: A) => S,
-  initialState: S,
+  initialArg: S,
+  init?: (arg: S) => S,
 ): [S, (action: A) => void] {
-  return [initialState, () => {}];
+  return [init ? init(initialArg) : initialArg, () => {}];
 }
 
 // ---- useEffect / useLayoutEffect / useInsertionEffect ----

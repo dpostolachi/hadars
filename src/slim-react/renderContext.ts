@@ -54,6 +54,23 @@ export function restoreUnsuspend(u: unknown): void {
   _g[UNSUSPEND_KEY] = u;
 }
 
+const HADARS_CTX_KEY = "__hadarsContext";
+
+/**
+ * Capture the current __hadarsContext (per-request head context) before an
+ * async boundary.  HadarsHead writes into this global during rendering; without
+ * capture/restore, a concurrent request can stomp the slot and cause one page's
+ * SEO tags to appear in a completely different page's rendered output.
+ */
+export function captureHadarsCtx(): unknown {
+  return _g[HADARS_CTX_KEY];
+}
+
+/** Restore a previously captured __hadarsContext slot after an await. */
+export function restoreHadarsCtx(h: unknown): void {
+  _g[HADARS_CTX_KEY] = h;
+}
+
 /** Read the current value for a context within the active render. */
 export function getContextValue<T>(context: object): T {
   const map: Map<object, unknown> | null = _g[MAP_KEY];
