@@ -27,19 +27,25 @@ export function buildSsrResponse(
                     ? await precontentResult
                     : precontentResult;
 
+                // Kick off finalize() immediately — unsuspend.cache is already fully
+                // settled at this point (single-pass pre-rendered the body), so
+                // getFinalProps can run in parallel with encoding and flushing chunks
+                // 1 and 2 rather than waiting until after they land.
+                const finalizePromise = finalize();
+
                 // Chunk 1 — flush the full <head> shell immediately so the browser
                 // can start loading CSS / fonts / preload hints before the body arrives.
                 controller.enqueue(encoder.encode(precontentHtml));
 
-                // Chunk 2 — body HTML. getAppBody() triggers the actual renderToString
-                // now that head has been flushed. All data is cached from the preflight
-                // so this pass is fast (no async waits).
+                // Chunk 2 — body HTML. getAppBody() returns the pre-rendered string
+                // immediately in single-pass mode (no async waits).
                 const bodyHtml = await getAppBody();
                 controller.enqueue(encoder.encode(`<div id="app">${bodyHtml}</div>`));
 
-                // Chunk 3 — JSON props script + post-content. Separated so the browser
-                // can parse/render the body while getFinalProps is still completing.
-                const { clientProps } = await finalize();
+                // Chunk 3 — JSON props script + post-content. finalizePromise was
+                // started before chunk 1, so getFinalProps latency is hidden behind
+                // the encode+send of chunks 1 and 2.
+                const { clientProps } = await finalizePromise;
                 const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
                 controller.enqueue(encoder.encode(
                     `<script id="hadars" type="application/json">${scriptContent}</script>` +
