@@ -41,3 +41,23 @@ export async function tryServeFile(filePath: string): Promise<Response | null> {
         return null;
     }
 }
+
+/**
+ * Negative-result cache for {@link tryServeFileCached}.
+ * Paths that returned null are stored here so subsequent requests skip the
+ * readFile syscall entirely. Static assets never appear at runtime, so
+ * caching misses is safe for the lifetime of the process.
+ */
+const _notFound = new Set<string>();
+
+/**
+ * Like {@link tryServeFile} but caches negative results so that paths which
+ * don't exist (e.g. every SSR route tried against the static directory) only
+ * pay the readFile cost once.
+ */
+export async function tryServeFileCached(filePath: string): Promise<Response | null> {
+    if (_notFound.has(filePath)) return null;
+    const res = await tryServeFile(filePath);
+    if (!res) _notFound.add(filePath);
+    return res;
+}

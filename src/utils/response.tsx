@@ -21,6 +21,13 @@ interface ReactResponseOptions {
      * dev mode — a single pass halves the render work.
      */
     singlePass?: boolean;
+    /**
+     * Skip body rendering entirely — only resolve `useServerData` promises and
+     * populate `finalize()`. Use for `Accept: application/json` (data-only)
+     * requests where the HTML body is never sent, saving the full string-build
+     * cost of `renderToString`.
+     */
+    dataOnly?: boolean;
 }
 
 // ── Head HTML serialisation ────────────────────────────────────────────────
@@ -101,7 +108,19 @@ export const getReactResponse = async (
 
     let bodyHtml: string | null = null;
 
-    if (opts.singlePass) {
+    if (opts.dataOnly) {
+        // Data-only (Accept: application/json): resolve useServerData and populate
+        // finalize() without building any HTML. renderPreflight uses a discard
+        // writer so there is no string allocation or escaping overhead.
+        (globalThis as any).__hadarsUnsuspend = unsuspend;
+        (globalThis as any).__hadarsContext = context;
+        try {
+            await renderPreflight(element);
+        } finally {
+            (globalThis as any).__hadarsUnsuspend = null;
+            (globalThis as any).__hadarsContext = null;
+        }
+    } else if (opts.singlePass) {
         // Single-pass: renderToString already self-retries on suspension so it
         // resolves useServerData inline and populates context.head in one walk.
         // getAppBody() returns the pre-rendered string immediately.
@@ -117,6 +136,8 @@ export const getReactResponse = async (
         // Two-pass: preflight walk populates context.head before the body is
         // rendered so the head can be streamed to the client first (early CSS/font
         // hints). Useful in production where LCP matters.
+        (globalThis as any).__hadarsUnsuspend = unsuspend;
+        (globalThis as any).__hadarsContext = context;
         try {
             await renderPreflight(element);
         } finally {

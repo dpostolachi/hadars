@@ -4,7 +4,7 @@ import { upgradeHandler } from "./utils/upgradeRequest";
 import { getReactResponse } from "./utils/response";
 import { createClientCompiler, compileEntry } from "./utils/rspack";
 import { serve, nodeReadableToWebStream } from "./utils/serve";
-import { tryServeFile } from "./utils/staticFile";
+import { tryServeFileCached } from "./utils/staticFile";
 import { isBun, isDeno, isNode } from "./utils/runtime";
 import { RspackDevServer } from "@rspack/dev-server";
 import pathMod from "node:path";
@@ -533,6 +533,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const getPrecontentHtml = makePrecontentHtmlGetter(
         readyPromise.then(() => fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8'))
     );
+    const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
 
     await serve(port, async (req, ctx) => {
         // Hold requests until both builds are ready. Once resolved this is a no-op.
@@ -556,12 +557,11 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         const path = url.pathname;
 
         // static files in the hadars output folder
-        const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
+        const staticRes = await tryServeFileCached(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
         // project-level static/ directory (explicit paths only — never intercept root)
-        const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
-        const projectRes = await tryServeFile(pathMod.join(projectStaticPath, path));
+        const projectRes = await tryServeFileCached(pathMod.join(projectStaticPath, path));
         if (projectRes) return projectRes;
 
         const ssrComponentPath = pathMod.join(__dirname, HadarsFolder, SSR_FILENAME);
@@ -581,6 +581,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             // Expose the executor globally so useGraphQL() in components can reach it.
             (globalThis as any).__hadarsGraphQL = devStaticCtx?.graphql;
 
+            const isDataOnly = request.headers.get('Accept') === 'application/json';
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
@@ -589,14 +590,15 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                     getFinalProps,
                 },
                 staticCtx: devStaticCtx,
-                singlePass: true,
+                singlePass: !isDataOnly,
+                dataOnly: isDataOnly,
             });
 
             // Content negotiation: if the client only accepts JSON (client-side
             // navigation via useServerData), return the resolved data map as JSON
             // instead of a full HTML page. The same auth context applies — cookies
             // and headers are forwarded unchanged, so no new attack surface is created.
-            if (request.headers.get('Accept') === 'application/json') {
+            if (isDataOnly) {
                 const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {
@@ -736,6 +738,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
     const getPrecontentHtml = makePrecontentHtmlGetter(
         fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8')
     );
+    const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
 
     // Hoist and pre-import the SSR module at startup so the first request does
     // not pay the module parse/eval cost.  The file: URL is stable for the life
@@ -760,18 +763,17 @@ export const run = async (options: HadarsRuntimeOptions) => {
         const path = url.pathname;
 
         // static files in the hadars output folder
-        const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
+        const staticRes = await tryServeFileCached(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
         // project-level static/ directory (explicit paths only — never intercept root)
-        const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
-        const projectRes = await tryServeFile(pathMod.join(projectStaticPath, path));
+        const projectRes = await tryServeFileCached(pathMod.join(projectStaticPath, path));
         if (projectRes) return projectRes;
 
         // route-based fallback: try <path>/index.html
         const routeClean = path.replace(/(^\/|\/$)/g, '');
         if (routeClean) {
-            const routeRes = await tryServeFile(
+            const routeRes = await tryServeFileCached(
                 pathMod.join(__dirname, StaticPath, routeClean, 'index.html')
             );
             if (routeRes) return routeRes;
@@ -795,6 +797,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 });
             }
 
+            const isDataOnly = request.headers.get('Accept') === 'application/json';
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
@@ -802,13 +805,14 @@ export const run = async (options: HadarsRuntimeOptions) => {
                     getInitProps,
                     getFinalProps,
                 },
-                singlePass: true,
+                singlePass: !isDataOnly,
+                dataOnly: isDataOnly,
             });
 
             // Content negotiation: if the client only accepts JSON (client-side
             // navigation via useServerData), return the resolved data map as JSON
             // instead of a full HTML page.
-            if (request.headers.get('Accept') === 'application/json') {
+            if (isDataOnly) {
                 const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {
