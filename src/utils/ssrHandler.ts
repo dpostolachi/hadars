@@ -195,6 +195,7 @@ export async function buildCacheEntry(res: Response, ttl: number | undefined): P
         }
     });
     headers.push(['content-encoding', 'gzip']);
+    headers.push(['vary', 'accept-encoding']);
     return { body, status: res.status, headers, expiresAt: ttl != null ? Date.now() + ttl : null };
 }
 

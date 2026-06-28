@@ -167,6 +167,7 @@ async function exportStatic(
         paths,
         outputDir: outDir,
         graphql,
+        baseURL: config.baseURL,
     })
 
     for (const p of rendered) console.log(`  [200] ${p}`)

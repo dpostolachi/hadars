@@ -32,6 +32,7 @@ export async function renderStaticSite(opts: {
     paths:       string[];
     outputDir:   string;
     graphql?:    GraphQLExecutor;
+    baseURL?:    string;
 }): Promise<StaticRenderResult> {
     const { ssrModule, htmlSource, staticSrc, paths, outputDir } = opts;
 
@@ -95,6 +96,18 @@ export async function renderStaticSite(opts: {
                 error: err instanceof Error ? err : new Error(String(err)),
             });
         }
+    }
+
+    // Generate sitemap.xml when a baseURL is provided and at least one page rendered.
+    if (opts.baseURL && rendered.length > 0) {
+        const base = opts.baseURL.replace(/\/$/, '');
+        const urls = rendered.map(p => `  <url><loc>${base}${p}</loc></url>`).join('\n');
+        const sitemap =
+            '<?xml version="1.0" encoding="UTF-8"?>\n' +
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+            urls + '\n' +
+            '</urlset>';
+        await writeFile(join(outputDir, 'sitemap.xml'), sitemap, 'utf-8');
     }
 
     // Copy .hadars/static/ → <outputDir>/static/, excluding the SSR template.
