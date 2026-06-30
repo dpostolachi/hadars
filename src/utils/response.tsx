@@ -43,8 +43,8 @@ const ATTR: Record<string, string> = {
     hrefLang: 'hreflang',
 };
 
-function renderHeadTag(tag: string, id: string, opts: Record<string, unknown>, selfClose = false): string {
-    let attrs = ` id="${escAttr(id)}"`;
+function renderHeadTag(tag: string, _id: string, opts: Record<string, unknown>, selfClose = false): string {
+    let attrs = '';
     let inner = '';
     for (const [k, v] of Object.entries(opts)) {
         if (k === 'key' || k === 'children') continue;

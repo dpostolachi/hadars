@@ -240,6 +240,7 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
                 getFinalProps,
             } = await getSsrModule();
 
+            const isDataOnly = request.headers.get('Accept') === 'application/json';
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
@@ -247,9 +248,11 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
                     getInitProps,
                     getFinalProps,
                 },
+                singlePass: !isDataOnly,
+                dataOnly: isDataOnly,
             });
 
-            if (request.headers.get('Accept') === 'application/json') {
+            if (isDataOnly) {
                 const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {

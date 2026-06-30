@@ -99,18 +99,54 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     return { html, headHtml, status };
 }
 
+// ── Render queue — one render at a time per worker thread ─────────────────
+//
+// The tree-context push/pop stacks (_treeIdStack, _treeOvStack, _treeDepth)
+// in slim-react are module-level and are not captured by captureRenderCtx /
+// restoreRenderCtx.  If the async message handler processes a second message
+// while the first runFullLifecycle is suspended (e.g. at await getInitProps),
+// the second render's resetRenderState() zeroes _treeDepth and its
+// pushTreeContext calls overwrite stack entries still in use by the first
+// render.  When the first render resumes and calls popTreeContext it reads
+// corrupted entries, producing wrong useId() values and hydration mismatches.
+//
+// Processing one message at a time within each worker thread avoids the
+// interleaving entirely.  The pool provides parallelism across threads, so
+// serialising within a single worker does not reduce overall throughput.
+let _draining = false;
+const _queue: Array<() => Promise<void>> = [];
+
+function enqueue(task: () => Promise<void>): void {
+    _queue.push(task);
+    if (!_draining) drain();
+}
+
+async function drain(): Promise<void> {
+    _draining = true;
+    try {
+        while (_queue.length > 0) {
+            const task = _queue.shift()!;
+            await task();
+        }
+    } finally {
+        _draining = false;
+    }
+}
+
 // ── Message handler ────────────────────────────────────────────────────────
 
-parentPort!.on('message', async (msg: any) => {
+parentPort!.on('message', (msg: any) => {
     const { id, type, request } = msg;
-    try {
-        await init();
-        if (type !== 'renderFull') return;
+    enqueue(async () => {
+        try {
+            await init();
+            if (type !== 'renderFull') return;
 
-        const { html, headHtml, status } = await runFullLifecycle(request as SerializableRequest);
-        parentPort!.postMessage({ id, html, headHtml, status });
+            const { html, headHtml, status } = await runFullLifecycle(request as SerializableRequest);
+            parentPort!.postMessage({ id, html, headHtml, status });
 
-    } catch (err: any) {
-        parentPort!.postMessage({ id, error: err?.message ?? String(err) });
-    }
+        } catch (err: any) {
+            parentPort!.postMessage({ id, error: err?.message ?? String(err) });
+        }
+    });
 });

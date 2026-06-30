@@ -93,6 +93,7 @@ export function createCloudflareHandler(
         try {
             const { default: Component, getInitProps, getFinalProps } = ssrModule;
 
+            const isDataOnly = request.headers.get('Accept') === 'application/json';
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
@@ -100,10 +101,12 @@ export function createCloudflareHandler(
                     getInitProps,
                     getFinalProps,
                 },
+                singlePass: !isDataOnly,
+                dataOnly: isDataOnly,
             });
 
             // Data-only requests from client-side navigation.
-            if (request.headers.get('Accept') === 'application/json') {
+            if (isDataOnly) {
                 const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
                 return new Response(JSON.stringify({ serverData }), {

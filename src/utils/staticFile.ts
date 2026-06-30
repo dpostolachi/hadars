@@ -47,8 +47,12 @@ export async function tryServeFile(filePath: string): Promise<Response | null> {
  * Paths that returned null are stored here so subsequent requests skip the
  * readFile syscall entirely. Static assets never appear at runtime, so
  * caching misses is safe for the lifetime of the process.
+ *
+ * Capped at 50 000 entries to prevent unbounded growth on servers that
+ * receive many unique dynamic-route paths (e.g. /post/[slug]).
  */
 const _notFound = new Set<string>();
+const _NOT_FOUND_MAX = 50_000;
 
 /**
  * Like {@link tryServeFile} but caches negative results so that paths which
@@ -58,6 +62,6 @@ const _notFound = new Set<string>();
 export async function tryServeFileCached(filePath: string): Promise<Response | null> {
     if (_notFound.has(filePath)) return null;
     const res = await tryServeFile(filePath);
-    if (!res) _notFound.add(filePath);
+    if (!res && _notFound.size < _NOT_FOUND_MAX) _notFound.add(filePath);
     return res;
 }
