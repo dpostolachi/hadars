@@ -146,7 +146,7 @@ parentPort!.on('message', (msg: any) => {
             parentPort!.postMessage({ id, html, headHtml, status });
 
         } catch (err: any) {
-            parentPort!.postMessage({ id, error: err?.message ?? String(err) });
+            parentPort!.postMessage({ id, error: err?.message ?? String(err), stack: err?.stack });
         }
     });
 });

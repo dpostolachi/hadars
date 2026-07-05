@@ -121,13 +121,16 @@ class RenderWorkerPool {
         const w = new this._Worker(this._workerPath, { workerData: { ssrBundlePath: this._ssrBundlePath } });
         this.workerPending.set(w, new Set());
         w.on('message', (msg: any) => {
-            const { id, html, headHtml, status, error } = msg;
+            const { id, html, headHtml, status, error, stack } = msg;
             const p = this.pending.get(id);
             if (!p) return;
             this.pending.delete(id);
             this.workerPending.get(w)?.delete(id);
-            if (error) p.reject(new Error(error));
-            else p.resolve({ html, headHtml, status });
+            if (error) {
+                const e = new Error(error);
+                if (stack) e.stack = stack;
+                p.reject(e);
+            } else p.resolve({ html, headHtml, status });
         });
         w.on('error', (err: Error) => {
             console.error('[hadars] Render worker error:', err);
@@ -497,7 +500,20 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // processing, so they hold in-flight and all resolve together once ready.
     const readyPromise = Promise.all([clientBuildDone, ssrBuildDone]);
 
-    readyPromise.then(() => {
+    readyPromise.then(async () => {
+        // Generate image variants once after the initial build so /_images/ URLs
+        // resolve correctly in dev — falls back to the original <img src> if skipped.
+        if (options.images) {
+            try {
+                const { optimizeImages } = await import('./utils/imageOptimizer');
+                const projectStaticDir = pathMod.resolve(__dirname, 'static');
+                const hadarStaticDir = pathMod.resolve(__dirname, StaticPath);
+                await optimizeImages(projectStaticDir, hadarStaticDir, options.images);
+            } catch (err) {
+                console.warn('[hadars] Image optimization failed in dev mode:', err);
+            }
+        }
+
         // Continue reading stdout to forward logs and pick up SSR rebuild signals.
         if (stdoutReader) {
             const reader = stdoutReader as ReadableStreamDefaultReader<Uint8Array>;
@@ -691,6 +707,17 @@ export const build = async (options: HadarsRuntimeOptions) => {
         }),
     ]);
     await fs.rm(tmpFilePath);
+
+    // Generate image variants if `images` is configured in hadars.config.ts.
+    // Source images come from the project's static/ directory; variants are
+    // written to .hadars/static/_images/ and served at /_images/<path> by run().
+    if (options.images) {
+        const { optimizeImages } = await import('./utils/imageOptimizer');
+        const projectStaticDir = pathMod.resolve(__dirname, 'static');
+        const hadarStaticDir = pathMod.resolve(__dirname, StaticPath);
+        await optimizeImages(projectStaticDir, hadarStaticDir, options.images);
+    }
+
     console.log("Build complete.");
 };
 

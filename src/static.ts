@@ -5,7 +5,7 @@
  * Has no dependency on the rspack build pipeline — only SSR utilities.
  */
 
-import { cp, mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { parseRequest } from './utils/request';
 import { getReactResponse, buildHeadHtml } from './utils/response';
@@ -117,6 +117,16 @@ export async function renderStaticSite(opts: {
         recursive: true,
         filter: (src: string) => basename(src) !== 'out.html',
     });
+
+    // Image variants land in <outputDir>/static/_images/ after the copy above,
+    // but must be served at /_images/ (not /static/_images/).
+    // Move them up one level so static hosts serve them at the right URL.
+    const copiedImages = join(staticDest, '_images');
+    const imagesOut = join(outputDir, '_images');
+    try {
+        await cp(copiedImages, imagesOut, { recursive: true });
+        await rm(copiedImages, { recursive: true, force: true });
+    } catch { /* no _images were generated — nothing to move */ }
 
     return { rendered, errors };
 }

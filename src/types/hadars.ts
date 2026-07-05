@@ -311,6 +311,30 @@ export interface HadarsOptions {
      * onError: (err, req) => console.error('[myapp]', req.method, req.url, err)
      */
     onError?: (err: Error, req: Request) => void | Promise<void>;
+    /**
+     * Build-time image variant generation. When set, `hadars build` and
+     * `hadars export static` scan the project's `static/` directory and produce
+     * resized variants for every raster image (JPG, PNG, WebP, AVIF, TIFF, BMP).
+     *
+     * Variants are written to `/_images/<original-path>-<width>.<format>` and
+     * served automatically by the production server. Use the `<HadarsImage>`
+     * component (exported from `hadars`) to generate `<picture>` elements that
+     * reference these variants with proper `srcset` / `sizes` attributes.
+     *
+     * Requires `sharp` to be installed as a project dependency:
+     *   npm install sharp
+     *
+     * @example
+     * images: { widths: [640, 1280, 1920], formats: ['webp', 'avif'], quality: 85 }
+     */
+    images?: {
+        /** Pixel widths to generate per source image. Default: `[640, 1280, 1920]` */
+        widths?: number[];
+        /** Output formats. Default: `['webp']` */
+        formats?: ('webp' | 'avif')[];
+        /** Encoding quality 1–100. Default: `80` */
+        quality?: number;
+    };
 }
 
 /**

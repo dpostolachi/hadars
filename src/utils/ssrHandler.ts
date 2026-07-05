@@ -55,6 +55,7 @@ export function buildSsrResponse(
             } catch (err) {
                 // Head chunk may already be sent; signal a stream error so the
                 // connection is closed cleanly rather than hanging.
+                console.error('[hadars] SSR render error:', err);
                 controller.error(err);
             }
         },

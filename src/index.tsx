@@ -13,6 +13,8 @@ export type {
     HadarsDocumentNode,
 } from "./types/hadars";
 export { Head as HadarsHead, useServerData, useGraphQL, initServerDataCache } from './utils/Head';
+export { HadarsImage } from './components/Image';
+export type { HadarsImageProps } from './components/Image';
 
 /**
  * Dynamically loads a module with target-aware behaviour:
