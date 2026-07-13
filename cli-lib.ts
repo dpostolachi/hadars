@@ -10,6 +10,37 @@ import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './sr
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
 
+// Node built-in module names (without the `node:` prefix), used to redirect
+// bare specifiers like `util` or `zlib` to their `node:`-prefixed form.
+const NODE_BUILTINS = [
+    '_http_agent', '_http_client', '_http_common', '_http_incoming', '_http_outgoing', '_http_server',
+    '_stream_duplex', '_stream_passthrough', '_stream_readable', '_stream_transform', '_stream_wrap', '_stream_writable',
+    '_tls_common', '_tls_wrap', 'assert', 'async_hooks', 'buffer', 'child_process', 'cluster', 'console',
+    'constants', 'crypto', 'dgram', 'diagnostics_channel', 'dns', 'domain', 'events', 'fs', 'http', 'http2',
+    'https', 'inspector', 'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'punycode', 'querystring',
+    'readline', 'repl', 'stream', 'string_decoder', 'sys', 'timers', 'tls', 'trace_events', 'tty', 'url',
+    'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
+]
+
+// esbuild plugin: rewrite bare Node built-in imports (`util`) and already-
+// prefixed ones (`node:util`) to a normalized `node:`-prefixed external.
+// Deno (Bunny's edge runtime) only resolves Node built-ins via its
+// `node:`-prefixed compat layer — a bare specifier like `"util"` fails at
+// runtime even though esbuild itself would otherwise refuse to bundle it
+// under `platform: 'browser'`.
+function nodeBuiltinsExternalPlugin() {
+    return {
+        name: 'node-builtins-external',
+        setup(build: any) {
+            const pattern = new RegExp(`^(?:node:)?(${NODE_BUILTINS.join('|')})$`)
+            build.onResolve({ filter: pattern }, (args: { path: string }) => {
+                const name = args.path.replace(/^node:/, '')
+                return { path: `node:${name}`, external: true }
+            })
+        },
+    }
+}
+
 function findConfig(cwd: string): string | null {
   for (const name of SUPPORTED) {
     const p = resolve(cwd, name)
@@ -233,6 +264,9 @@ async function bundleCloudflare(
             // Cloudflare Workers supports the Web Crypto API natively; suppress
             // esbuild's attempt to polyfill node:crypto.
             define: { 'global': 'globalThis' },
+            // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
+            // externals — resolved at runtime by Cloudflare's `nodejs_compat` flag.
+            plugins: [nodeBuiltinsExternalPlugin()],
         })
         console.log(`Cloudflare Worker bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
@@ -369,7 +403,10 @@ async function bundleBunny(
 
     // 4. Bundle with esbuild.
     //    Bunny edge scripts run on Deno + V8 with Web APIs, so we target
-    //    'browser' (avoids Node.js built-ins) and ESM output.
+    //    'browser' and ESM output. Deno still supports Node built-ins via its
+    //    `node:`-prefixed compat layer, so those are externalized rather than
+    //    rejected (see nodeBuiltinsExternalPlugin) — SSR code (ours or a
+    //    dependency's) commonly touches things like `util` or `zlib`.
     //    The @bunny.net/edgescript-sdk is always available in the runtime
     //    environment and must NOT be bundled — mark it external.
     try {
@@ -386,6 +423,9 @@ async function bundleBunny(
             loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
             external: ['@rspack/*', '@bunny.net/edgescript-sdk'],
             define: { 'global': 'globalThis' },
+            // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
+            // externals — Deno's Node compat layer resolves these at runtime.
+            plugins: [nodeBuiltinsExternalPlugin()],
         })
         console.log(`Bunny Edge Script bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
