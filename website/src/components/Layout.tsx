@@ -28,6 +28,7 @@ const NAV = [
             { to: '/docs/slim-react', label: 'slim-react' },
             { to: '/docs/deployment', label: 'Deployment' },
             { to: '/docs/cloudflare', label: 'Cloudflare Workers' },
+            { to: '/docs/bunny', label: 'Bunny.net Edge Scripting' },
             { to: '/docs/static-export', label: 'Static Export & Sources' },
             { to: '/docs/swc-plugins', label: 'SWC Plugins' },
         ],

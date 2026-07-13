@@ -127,6 +127,9 @@ hadars export lambda [output.mjs]
 
 # Bundle the app into a single self-contained Cloudflare Worker .mjs file
 hadars export cloudflare [output.mjs]
+
+# Bundle the app into a single self-contained Bunny.net Edge Script .mjs file
+hadars export bunny [output.mjs]
 ```
 
 ## Features
@@ -295,7 +298,7 @@ const config: HadarsOptions = {
 export default config;
 ```
 
-`onError` is called on every SSR render error in `dev()`, `run()`, Lambda, and Cloudflare adapters. The handler may be async — hadars fires it without awaiting so it never delays the error response to the browser.
+`onError` is called on every SSR render error in `dev()`, `run()`, Lambda, Cloudflare, and Bunny adapters. The handler may be async — hadars fires it without awaiting so it never delays the error response to the browser.
 
 ## Static Export
 
@@ -701,6 +704,65 @@ The returned object is a standard Cloudflare Workers export (`{ fetch(req, env, 
 ### CPU time
 
 hadars uses [slim-react](#slim-react) for SSR which is synchronous and typically renders a page in under 3 ms — well within Cloudflare's 10 ms free-plan CPU budget. Paid plans (Workers Paid) have no CPU time limit.
+
+## Bunny.net Edge Scripting
+
+hadars apps can be deployed to bunny.net Edge Scripting as a **Standalone script**. The runtime is Deno + V8 with Web APIs — no event format conversion is needed, and the programming model is identical to Cloudflare Workers.
+
+### Single-file bundle
+
+`hadars export bunny` produces a self-contained `.mjs` edge script. The `@bunny.net/edgescript-sdk` is marked external — it is always provided by the Deno runtime and must not be bundled.
+
+```bash
+# Outputs bunny.mjs in the current directory
+hadars export bunny
+
+# Custom output path
+hadars export bunny dist/script.mjs
+```
+
+The command:
+1. Runs `hadars build`
+2. Generates an entry shim that imports the SSR module and `out.html` statically, then calls `BunnySDK.net.http.serve`
+3. Bundles everything into a single ESM `.mjs` with esbuild (`platform: browser`, `target: es2022`)
+4. Prints deploy instructions
+
+### Deploy steps
+
+1. In the [bunny.net dashboard](https://dash.bunny.net), go to **Edge Platform › Scripting** and create a new **Standalone** script.
+2. Paste or upload the contents of `bunny.mjs` (or connect your GitHub repository for automatic deployments).
+3. Upload `.hadars/static/` assets to a bunny.net Storage zone and connect it to a pull zone. Configure the pull zone to route requests for static file extensions (`*.js`, `*.css`, `*.woff2`, etc.) to Storage and all other requests to the edge script.
+4. Save and Publish.
+
+### `createBunnyHandler` API
+
+```ts
+import { createBunnyHandler, type BunnyBundled } from 'hadars/bunny';
+import * as BunnySDK from "@bunny.net/edgescript-sdk";
+import * as ssrModule from './.hadars/index.ssr.js';
+import outHtml from './.hadars/static/out.html';
+import config from './hadars.config';
+
+// createBunnyHandler returns (request: Request) => Promise<Response>
+BunnySDK.net.http.serve(createBunnyHandler(config, { ssrModule, outHtml }));
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `options` | `HadarsOptions` | Same config object used for `dev`/`run` |
+| `bundled` | `BunnyBundled` | Pre-loaded SSR module + HTML template |
+
+The returned handler is a plain `(request: Request) => Promise<Response>` function — compatible with any Web API environment, not just bunny.net. Static assets must be served separately (bunny.net Storage + pull zone).
+
+### Local development with Deno
+
+```bash
+# Normal development (recommended — full HMR)
+hadars dev
+
+# Test the bundled edge script locally
+hadars export bunny && deno run -A bunny.mjs
+```
 
 ## slim-react
 

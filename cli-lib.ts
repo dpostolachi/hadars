@@ -325,6 +325,84 @@ async function bundleLambda(
     }
 }
 
+// ── hadars export bunny ──────────────────────────────────────────────────────
+
+async function bundleBunny(
+    config: HadarsOptions,
+    configPath: string,
+    outputFile: string,
+    cwd: string,
+): Promise<void> {
+    // 1. Ensure the hadars production build is up to date.
+    console.log('Building hadars project...')
+    await Hadars.build({ ...config, mode: 'production' })
+
+    // 2. Resolve paths.
+    const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
+    const outHtml   = resolve(cwd, '.hadars', 'static', 'out.html')
+
+    if (!existsSync(ssrBundle)) {
+        console.error(`SSR bundle not found: ${ssrBundle}`)
+        process.exit(1)
+    }
+    if (!existsSync(outHtml)) {
+        console.error(`HTML template not found: ${outHtml}`)
+        process.exit(1)
+    }
+
+    // 3. Write a temporary entry shim.
+    //    The shim imports the SSR module + HTML template statically so esbuild
+    //    can inline both, then calls BunnySDK.net.http.serve with the handler.
+    //    BunnySDK is provided by the Bunny.net Deno runtime and is marked
+    //    external so it is never bundled.
+    const bunnyModule = resolve(dirname(fileURLToPath(import.meta.url)), 'bunny.js')
+    const shimPath = join(cwd, `.hadars-bunny-shim-${Date.now()}.ts`)
+    const shim = [
+        `import * as BunnySDK from "@bunny.net/edgescript-sdk";`,
+        `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
+        `import outHtml from ${JSON.stringify(outHtml)};`,
+        `import { createBunnyHandler } from ${JSON.stringify(bunnyModule)};`,
+        `import config from ${JSON.stringify(configPath)};`,
+        `BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml }));`,
+    ].join('\n') + '\n'
+    await writeFile(shimPath, shim, 'utf-8')
+
+    // 4. Bundle with esbuild.
+    //    Bunny edge scripts run on Deno + V8 with Web APIs, so we target
+    //    'browser' (avoids Node.js built-ins) and ESM output.
+    //    The @bunny.net/edgescript-sdk is always available in the runtime
+    //    environment and must NOT be bundled — mark it external.
+    try {
+        const { build: esbuild } = await import('esbuild')
+        console.log(`Bundling Bunny Edge Script → ${outputFile}`)
+        await esbuild({
+            entryPoints: [shimPath],
+            bundle: true,
+            platform: 'browser',
+            format: 'esm',
+            target: ['es2022'],
+            outfile: outputFile,
+            sourcemap: false,
+            loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
+            external: ['@rspack/*', '@bunny.net/edgescript-sdk'],
+            define: { 'global': 'globalThis' },
+        })
+        console.log(`Bunny Edge Script bundle written to ${outputFile}`)
+        console.log(`\nDeploy instructions:`)
+        console.log(`  1. In the bunny.net dashboard, go to Edge Platform > Scripting`)
+        console.log(`     and create a new Standalone script.`)
+        console.log(`  2. Paste or upload the contents of ${outputFile}.`)
+        console.log(`  3. Upload .hadars/static/ assets to bunny.net Storage and`)
+        console.log(`     configure the pull zone to route static paths (*.js, *.css,`)
+        console.log(`     *.woff2, etc.) to Storage and all other requests to the script.`)
+        console.log(`  4. Save and Publish the script.`)
+        console.log(`\nFor local testing with Deno:`)
+        console.log(`  deno run -A ${outputFile}`)
+    } finally {
+        await unlink(shimPath).catch(() => {})
+    }
+}
+
 
 
 // ── Terminal UI ───────────────────────────────────────────────────────────────
@@ -720,7 +798,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -776,6 +854,10 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 const outputFile = resolve(cwd, argv[4] ?? 'cloudflare.mjs')
                 await bundleCloudflare(cfg, configPath, outputFile, cwd)
                 process.exit(0)
+            } else if (subCmd === 'bunny') {
+                const outputFile = resolve(cwd, argv[4] ?? 'bunny.mjs')
+                await bundleBunny(cfg, configPath, outputFile, cwd)
+                process.exit(0)
             } else if (subCmd === 'static') {
                 const outDirArg = argv[4] ?? 'out'
                 await exportStatic(cfg, outDirArg, cwd)
@@ -785,7 +867,7 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 await exportSchema(cfg, outputFile)
                 process.exit(0)
             } else {
-                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, static, schema`)
+                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, bunny, static, schema`)
                 process.exit(1)
             }
         }

@@ -13,6 +13,7 @@ import Routing from './pages/docs/Routing';
 import SlimReact from './pages/docs/SlimReact';
 import Deployment from './pages/docs/Deployment';
 import CloudflareDeployment from './pages/docs/CloudflareDeployment';
+import BunnyDeployment from './pages/docs/BunnyDeployment';
 import FromNextjs from './pages/docs/FromNextjs';
 import StaticExport from './pages/docs/StaticExport';
 import SwcPlugins from './pages/docs/SwcPlugins';
@@ -37,6 +38,7 @@ const AppRoutes: React.FC<PageProps> = (props) => (
             <Route path="/docs/deployment" element={<Deployment />} />
             <Route path="/docs/from-nextjs" element={<FromNextjs />} />
             <Route path="/docs/cloudflare" element={<CloudflareDeployment />} />
+            <Route path="/docs/bunny" element={<BunnyDeployment />} />
             <Route path="/docs/static-export" element={<StaticExport />} />
             <Route path="/docs/swc-plugins" element={<SwcPlugins />} />
             <Route path="/cache-test" element={<CacheTest serverTime={props.serverTime} />} />
