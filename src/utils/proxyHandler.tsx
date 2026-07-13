@@ -80,12 +80,22 @@ export const createProxyHandler = (options: HadarsOptions): ProxyHandler => {
                 } as RequestInit);
 
                 const res = await fetch(proxyReq);
-                // Read the response body
+                // Read the response body — fetch() transparently decompresses it
+                // if the upstream sent a Content-Encoding, but leaves the response
+                // headers unchanged (undici does not rewrite them to match).
                 const body = await res.arrayBuffer();
-                // remove content-length and content-encoding headers to avoid issues with modified body
+                // The forwarded body is a single fully-buffered ArrayBuffer, so any
+                // header describing the *original* upstream transfer/encoding no
+                // longer matches it and must be stripped:
+                //  - content-length: original was the compressed size.
+                //  - content-encoding: body has already been decompressed above.
+                //  - transfer-encoding: body is no longer chunked once buffered;
+                //    forwarding "chunked" here produces an invalid response that
+                //    downstream HTTP clients may hang on or fail to parse.
                 const clonedRes = new Headers(res.headers);
                 clonedRes.delete('content-length');
                 clonedRes.delete('content-encoding');
+                clonedRes.delete('transfer-encoding');
                 if (proxyCORS) {
                     Object.entries(getCORSHeaders(req)).forEach(([key, value]) => {
                         clonedRes.set(key, value);
