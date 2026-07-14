@@ -10,6 +10,37 @@ import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './sr
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
 
+// Node built-in module names (without the `node:` prefix), used to redirect
+// bare specifiers like `util` or `zlib` to their `node:`-prefixed form.
+const NODE_BUILTINS = [
+    '_http_agent', '_http_client', '_http_common', '_http_incoming', '_http_outgoing', '_http_server',
+    '_stream_duplex', '_stream_passthrough', '_stream_readable', '_stream_transform', '_stream_wrap', '_stream_writable',
+    '_tls_common', '_tls_wrap', 'assert', 'async_hooks', 'buffer', 'child_process', 'cluster', 'console',
+    'constants', 'crypto', 'dgram', 'diagnostics_channel', 'dns', 'domain', 'events', 'fs', 'http', 'http2',
+    'https', 'inspector', 'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'punycode', 'querystring',
+    'readline', 'repl', 'stream', 'string_decoder', 'sys', 'timers', 'tls', 'trace_events', 'tty', 'url',
+    'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
+]
+
+// esbuild plugin: rewrite bare Node built-in imports (`util`) and already-
+// prefixed ones (`node:util`) to a normalized `node:`-prefixed external.
+// Deno (Bunny's edge runtime) only resolves Node built-ins via its
+// `node:`-prefixed compat layer — a bare specifier like `"util"` fails at
+// runtime even though esbuild itself would otherwise refuse to bundle it
+// under `platform: 'browser'`.
+function nodeBuiltinsExternalPlugin() {
+    return {
+        name: 'node-builtins-external',
+        setup(build: any) {
+            const pattern = new RegExp(`^(?:node:)?(${NODE_BUILTINS.join('|')})$`)
+            build.onResolve({ filter: pattern }, (args: { path: string }) => {
+                const name = args.path.replace(/^node:/, '')
+                return { path: `node:${name}`, external: true }
+            })
+        },
+    }
+}
+
 function findConfig(cwd: string): string | null {
   for (const name of SUPPORTED) {
     const p = resolve(cwd, name)
@@ -233,6 +264,9 @@ async function bundleCloudflare(
             // Cloudflare Workers supports the Web Crypto API natively; suppress
             // esbuild's attempt to polyfill node:crypto.
             define: { 'global': 'globalThis' },
+            // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
+            // externals — resolved at runtime by Cloudflare's `nodejs_compat` flag.
+            plugins: [nodeBuiltinsExternalPlugin()],
         })
         console.log(`Cloudflare Worker bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
@@ -320,6 +354,90 @@ async function bundleLambda(
         console.log(`  3. Set handler to: lambda.handler  (runtime: Node.js 20.x)`)
         console.log(`  4. Upload .hadars/static/ assets to S3 and serve via CloudFront`)
         console.log(`     (the Lambda handler does not serve static JS/CSS — route those to S3)`)
+    } finally {
+        await unlink(shimPath).catch(() => {})
+    }
+}
+
+// ── hadars export bunny ──────────────────────────────────────────────────────
+
+async function bundleBunny(
+    config: HadarsOptions,
+    configPath: string,
+    outputFile: string,
+    cwd: string,
+): Promise<void> {
+    // 1. Ensure the hadars production build is up to date.
+    console.log('Building hadars project...')
+    await Hadars.build({ ...config, mode: 'production' })
+
+    // 2. Resolve paths.
+    const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
+    const outHtml   = resolve(cwd, '.hadars', 'static', 'out.html')
+
+    if (!existsSync(ssrBundle)) {
+        console.error(`SSR bundle not found: ${ssrBundle}`)
+        process.exit(1)
+    }
+    if (!existsSync(outHtml)) {
+        console.error(`HTML template not found: ${outHtml}`)
+        process.exit(1)
+    }
+
+    // 3. Write a temporary entry shim.
+    //    The shim imports the SSR module + HTML template statically so esbuild
+    //    can inline both, then calls BunnySDK.net.http.serve with the handler.
+    //    BunnySDK is provided by the Bunny.net Deno runtime and is marked
+    //    external so it is never bundled.
+    const bunnyModule = resolve(dirname(fileURLToPath(import.meta.url)), 'bunny.js')
+    const shimPath = join(cwd, `.hadars-bunny-shim-${Date.now()}.ts`)
+    const shim = [
+        `import * as BunnySDK from "@bunny.net/edgescript-sdk";`,
+        `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
+        `import outHtml from ${JSON.stringify(outHtml)};`,
+        `import { createBunnyHandler } from ${JSON.stringify(bunnyModule)};`,
+        `import config from ${JSON.stringify(configPath)};`,
+        `BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml }));`,
+    ].join('\n') + '\n'
+    await writeFile(shimPath, shim, 'utf-8')
+
+    // 4. Bundle with esbuild.
+    //    Bunny edge scripts run on Deno + V8 with Web APIs, so we target
+    //    'browser' and ESM output. Deno still supports Node built-ins via its
+    //    `node:`-prefixed compat layer, so those are externalized rather than
+    //    rejected (see nodeBuiltinsExternalPlugin) — SSR code (ours or a
+    //    dependency's) commonly touches things like `util` or `zlib`.
+    //    The @bunny.net/edgescript-sdk is always available in the runtime
+    //    environment and must NOT be bundled — mark it external.
+    try {
+        const { build: esbuild } = await import('esbuild')
+        console.log(`Bundling Bunny Edge Script → ${outputFile}`)
+        await esbuild({
+            entryPoints: [shimPath],
+            bundle: true,
+            platform: 'browser',
+            format: 'esm',
+            target: ['es2022'],
+            outfile: outputFile,
+            sourcemap: false,
+            loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
+            external: ['@rspack/*', '@bunny.net/edgescript-sdk'],
+            define: { 'global': 'globalThis' },
+            // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
+            // externals — Deno's Node compat layer resolves these at runtime.
+            plugins: [nodeBuiltinsExternalPlugin()],
+        })
+        console.log(`Bunny Edge Script bundle written to ${outputFile}`)
+        console.log(`\nDeploy instructions:`)
+        console.log(`  1. In the bunny.net dashboard, go to Edge Platform > Scripting`)
+        console.log(`     and create a new Standalone script.`)
+        console.log(`  2. Paste or upload the contents of ${outputFile}.`)
+        console.log(`  3. Upload .hadars/static/ assets to bunny.net Storage and`)
+        console.log(`     configure the pull zone to route static paths (*.js, *.css,`)
+        console.log(`     *.woff2, etc.) to Storage and all other requests to the script.`)
+        console.log(`  4. Save and Publish the script.`)
+        console.log(`\nFor local testing with Deno:`)
+        console.log(`  deno run -A ${outputFile}`)
     } finally {
         await unlink(shimPath).catch(() => {})
     }
@@ -720,7 +838,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -776,6 +894,10 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 const outputFile = resolve(cwd, argv[4] ?? 'cloudflare.mjs')
                 await bundleCloudflare(cfg, configPath, outputFile, cwd)
                 process.exit(0)
+            } else if (subCmd === 'bunny') {
+                const outputFile = resolve(cwd, argv[4] ?? 'bunny.mjs')
+                await bundleBunny(cfg, configPath, outputFile, cwd)
+                process.exit(0)
             } else if (subCmd === 'static') {
                 const outDirArg = argv[4] ?? 'out'
                 await exportStatic(cfg, outDirArg, cwd)
@@ -785,7 +907,7 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 await exportSchema(cfg, outputFile)
                 process.exit(0)
             } else {
-                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, static, schema`)
+                console.error(`Unknown export target: ${subCmd ?? '(none)'}. Supported: lambda, cloudflare, bunny, static, schema`)
                 process.exit(1)
             }
         }
