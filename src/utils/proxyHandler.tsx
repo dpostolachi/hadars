@@ -68,6 +68,14 @@ export const createProxyHandler = (options: HadarsOptions): ProxyHandler => {
                 const sendHeaders = cloneHeaders(req.headers);
                 // Overwrite the Host header to match the target
                 sendHeaders.set('Host', targetURL.host);
+                // Force an Accept-Encoding the runtime's fetch() can actually
+                // transparently decompress. If left as-is, the client's header (or
+                // the runtime's own default) may advertise algorithms like `zstd`
+                // that undici (Node/Bun) does not decode — the upstream then
+                // legitimately responds with e.g. `content-encoding: zstd`, but
+                // res.arrayBuffer() below returns the still-compressed bytes,
+                // which we then forward as if they were plain text.
+                sendHeaders.set('Accept-Encoding', 'gzip, deflate, br');
 
                 const hasBody = !['GET', 'HEAD'].includes(req.method);
                 const proxyReq = new Request(targetURL.toString(), {
