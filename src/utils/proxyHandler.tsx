@@ -82,7 +82,7 @@ export const createProxyHandler = (options: HadarsOptions): ProxyHandler => {
                     method: req.method,
                     headers: sendHeaders,
                     body: hasBody ? req.body : undefined,
-                    redirect: 'follow',
+                    redirect: 'manual',
                     // Node.js (undici) requires duplex:'half' when body is a ReadableStream
                     ...(hasBody ? { duplex: 'half' } : {}),
                 } as RequestInit);
