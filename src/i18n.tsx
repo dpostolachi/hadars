@@ -3,6 +3,7 @@ import React, {
     useCallback,
     useContext,
     useEffect,
+    useMemo,
     useRef,
     useState,
     type ReactNode,
@@ -18,7 +19,7 @@ import { useServerData } from './utils/Head';
  * directly from `req.pathname` / `window.location.pathname`.
  *
  * Message files are treated as static assets (e.g. `static/locales/en/common.json`
- * in your project, which `hadars build` now copies into `.hadars/static/` and
+ * in your project, which `hadars build` copies into `.hadars/static/` and
  * therefore into both `run()` serving and `hadars export static` output) — not
  * as `useServerData` payloads on navigation, since translations don't need a
  * live server to be resolved per-request.
@@ -72,6 +73,34 @@ export function localizePath(page: string, locale: string, config: HadarsI18nCon
     return `/${locale}${page === '/' ? '' : page}`;
 }
 
+/**
+ * Resolves a set of namespaces for `newLocale`, cache-first, all in parallel.
+ *
+ * Pulled out of `LocaleProvider` as a plain function (no React) specifically
+ * so it's unit-testable without mounting a component tree — pass a fake
+ * `fetchImpl` to exercise cache hits/misses and batching directly.
+ */
+export async function fetchLocaleMessages(
+    newLocale: string,
+    namespaces: Iterable<string>,
+    basePath: string,
+    cache: Map<string, Record<string, string>>,
+    fetchImpl: typeof fetch = fetch,
+): Promise<Record<string, Record<string, string>>> {
+    const entries = await Promise.all(
+        Array.from(namespaces).map(async namespace => {
+            const key = `${newLocale}:${namespace}`;
+            const cached = cache.get(key);
+            if (cached) return [namespace, cached] as const;
+            const res = await fetchImpl(`${basePath}/${newLocale}/${namespace}.json`);
+            const data = (await res.json()) as Record<string, string>;
+            cache.set(key, data);
+            return [namespace, data] as const;
+        }),
+    );
+    return Object.fromEntries(entries);
+}
+
 interface LocaleContextValue {
     locale: string;
     config: HadarsI18nConfig;
@@ -81,7 +110,7 @@ interface LocaleContextValue {
     /** namespace → resolved messages for the *current* locale. */
     messages: Record<string, Record<string, string>>;
     /** @internal called by useTranslations to register itself and seed SSR data. */
-    registerNamespace: (namespace: string, ssrData?: Record<string, string>) => void;
+    registerNamespace: (namespace: string, forLocale: string, ssrData?: Record<string, string>) => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
@@ -101,7 +130,14 @@ export const LocaleProvider: React.FC<LocaleProviderProps> = ({
     basePath = '/static/locales',
     children,
 }) => {
-    const config: HadarsI18nConfig = { locales, defaultLocale };
+    // Keyed off a stable string so passing a fresh `locales={[...]}` array
+    // literal on every render doesn't defeat the memo below.
+    const localesKey = locales.join(',');
+    const config = useMemo<HadarsI18nConfig>(
+        () => ({ locales, defaultLocale }),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [localesKey, defaultLocale],
+    );
 
     const [locale, setLocaleState] = useState(initialLocale);
     const [messages, setMessages] = useState<Record<string, Record<string, string>>>({});
@@ -113,42 +149,41 @@ export const LocaleProvider: React.FC<LocaleProviderProps> = ({
     const namespacesRef = useRef(new Set<string>());
     const cacheRef = useRef(new Map<string, Record<string, string>>());
 
-    const registerNamespace = useCallback((namespace: string, ssrData?: Record<string, string>) => {
+    // Guards against a slow switch resolving *after* a newer one, which would
+    // otherwise silently override the user's latest choice (last-to-resolve
+    // would win instead of last-to-be-clicked).
+    const switchGenerationRef = useRef(0);
+
+    // No closure over `locale` here — the caller (useTranslations) passes the
+    // locale its SSR data was actually resolved for, so this stays correct
+    // even if a namespace registers long after the locale has changed.
+    const registerNamespace = useCallback((namespace: string, forLocale: string, ssrData?: Record<string, string>) => {
         if (namespacesRef.current.has(namespace)) return;
         namespacesRef.current.add(namespace);
         if (ssrData) {
-            cacheRef.current.set(`${locale}:${namespace}`, ssrData);
+            cacheRef.current.set(`${forLocale}:${namespace}`, ssrData);
             setMessages(prev => (prev[namespace] ? prev : { ...prev, [namespace]: ssrData }));
         }
-        // Intentionally locale-at-registration-time only — this just seeds the
-        // cache with whatever the server resolved for the *current* locale.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const setLocale = useCallback(async (newLocale: string) => {
         if (newLocale === locale || !locales.includes(newLocale)) return;
+
+        const myGeneration = ++switchGenerationRef.current;
         setIsSwitching(true);
 
         try {
-            // Fetch every namespace currently on screen for the new locale, in
-            // parallel, cache-first. Waiting for Promise.all (not resolving as
-            // each one lands) is what prevents some components from flipping to
-            // the new locale before others.
-            const entries = await Promise.all(
-                Array.from(namespacesRef.current).map(async namespace => {
-                    const key = `${newLocale}:${namespace}`;
-                    const cached = cacheRef.current.get(key);
-                    if (cached) return [namespace, cached] as const;
-                    const res = await fetch(`${basePath}/${newLocale}/${namespace}.json`);
-                    const data = (await res.json()) as Record<string, string>;
-                    cacheRef.current.set(key, data);
-                    return [namespace, data] as const;
-                }),
-            );
+            // Every namespace currently on screen, fetched for the new locale
+            // in parallel, cache-first. Waiting for the whole batch (rather
+            // than applying each namespace as it lands) is what prevents some
+            // components from flipping to the new locale before others.
+            const resolved = await fetchLocaleMessages(newLocale, namespacesRef.current, basePath, cacheRef.current);
 
-            // One batched update — every consumer reads `locale` and `messages`
-            // from the same context snapshot, so none can render a mix.
-            setMessages(prev => ({ ...prev, ...Object.fromEntries(entries) }));
+            // A newer switch started while this one was in flight — discard
+            // this (now-stale) result instead of overriding the later choice.
+            if (myGeneration !== switchGenerationRef.current) return;
+
+            setMessages(prev => ({ ...prev, ...resolved }));
             setLocaleState(newLocale);
 
             if (typeof window !== 'undefined') {
@@ -157,16 +192,24 @@ export const LocaleProvider: React.FC<LocaleProviderProps> = ({
                 window.history.replaceState(null, '', newPath + window.location.search);
             }
         } finally {
-            setIsSwitching(false);
+            if (myGeneration === switchGenerationRef.current) setIsSwitching(false);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [locale, locales, basePath]);
+    }, [locale, locales, basePath, config]);
 
-    return (
-        <LocaleContext.Provider value={{ locale, config, isSwitching, setLocale, messages, registerNamespace }}>
-            {children}
-        </LocaleContext.Provider>
+    // Keeps the document's declared language in sync on both the initial
+    // render and every subsequent switch — a single source of truth rather
+    // than setting it inline inside setLocale.
+    useEffect(() => {
+        if (typeof document !== 'undefined') document.documentElement.lang = locale;
+    }, [locale]);
+
+    const value = useMemo<LocaleContextValue>(
+        () => ({ locale, config, isSwitching, setLocale, messages, registerNamespace }),
+        [locale, config, isSwitching, setLocale, messages, registerNamespace],
     );
+
+    return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 };
 
 export function useLocale(): LocaleContextValue {
@@ -211,15 +254,18 @@ export function useTranslations(
     const ssrData = useServerData(() => loadMessages(locale, namespace)) as Record<string, string> | undefined;
 
     useEffect(() => {
-        registerNamespace(namespace, ssrData);
-        // Registers once per mount — the namespace's own messages then flow
-        // through LocaleProvider's `messages` state on every future switch.
+        // Registers once per mount, tagged with the locale this data was
+        // actually resolved for (the locale at mount time) — not whatever
+        // the provider's locale happens to be later.
+        registerNamespace(namespace, locale, ssrData);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    const namespaceMessages = messages[namespace];
+
     const t = useCallback(
         (key: string, vars?: Record<string, string | number>) => {
-            const ns = messages[namespace] ?? ssrData ?? {};
+            const ns = namespaceMessages ?? ssrData ?? {};
             let str = ns[key] ?? key;
             if (vars) {
                 for (const [k, v] of Object.entries(vars)) {
@@ -228,7 +274,7 @@ export function useTranslations(
             }
             return str;
         },
-        [messages, namespace, ssrData],
+        [namespaceMessages, ssrData],
     );
 
     return { t, isSwitching };
