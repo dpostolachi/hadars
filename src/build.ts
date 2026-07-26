@@ -708,6 +708,22 @@ export const build = async (options: HadarsRuntimeOptions) => {
     ]);
     await fs.rm(tmpFilePath);
 
+    // Copy the project's static/ directory into .hadars/static/. dev()/run()
+    // already serve project-root static/ directly from disk, but
+    // `hadars export static` only copies .hadars/static/ into the output
+    // folder — without this, anything placed in the project's static/ dir
+    // (e.g. i18n message JSON under static/locales/) would work in dev/run
+    // but silently go missing from a static export.
+    // force: false skips any path that already exists in .hadars/static/
+    // (build output — JS/CSS bundles, out.html) rather than clobbering it.
+    {
+        const projectStaticDirAll = pathMod.resolve(__dirname, 'static');
+        const hadarStaticDirAll = pathMod.resolve(__dirname, StaticPath);
+        if (existsSync(projectStaticDirAll)) {
+            await fs.cp(projectStaticDirAll, hadarStaticDirAll, { recursive: true, force: false });
+        }
+    }
+
     // Generate image variants if `images` is configured in hadars.config.ts.
     // Source images come from the project's static/ directory; variants are
     // written to .hadars/static/_images/ and served at /_images/<path> by run().

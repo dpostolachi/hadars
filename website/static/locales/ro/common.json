@@ -1,0 +1,5 @@
+{
+    "greeting": "Salut, {name}!",
+    "tagline": "Acest text este preluat dintr-un fișier JSON static per limbă.",
+    "switchLabel": "Limbă"
+}

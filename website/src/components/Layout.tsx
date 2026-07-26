@@ -31,6 +31,7 @@ const NAV = [
             { to: '/docs/bunny', label: 'Bunny.net Edge Scripting' },
             { to: '/docs/static-export', label: 'Static Export & Sources' },
             { to: '/docs/swc-plugins', label: 'SWC Plugins' },
+            { to: '/docs/i18n', label: 'i18n' },
         ],
     },
     {
@@ -38,6 +39,7 @@ const NAV = [
         links: [
             { to: '/cache-test', label: 'Cache Demo' },
             { to: '/data-demo', label: 'Data Fetch Demo' },
+            { to: '/i18n-demo', label: 'i18n Demo' },
         ],
     },
 ];
