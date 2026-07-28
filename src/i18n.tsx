@@ -136,7 +136,7 @@ export function checkLocaleParity(messages: LocaleMessageTree, baseLocale: strin
 
     const allNamespaces = new Set<string>();
     for (const locale of Object.keys(messages)) {
-        for (const namespace of Object.keys(messages[locale])) allNamespaces.add(namespace);
+        for (const namespace of Object.keys(messages[locale] ?? {})) allNamespaces.add(namespace);
     }
 
     for (const locale of Object.keys(messages)) {
