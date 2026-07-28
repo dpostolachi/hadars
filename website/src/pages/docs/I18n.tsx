@@ -224,6 +224,40 @@ const Nav = () => {
         </section>
 
         <section className="mb-10">
+            <h2 className="text-xl font-semibold mb-3 text-gradient-soft">Keeping locales in sync</h2>
+            <p className="text-muted-foreground mb-4">
+                A missing translation key doesn't throw \u2014 <code className="text-sm bg-muted px-1.5 py-0.5 rounded">t()</code> falls
+                back to the raw key, which is exactly why it's easy to ship silently. Set <code className="text-sm bg-muted px-1.5 py-0.5 rounded">i18n.defaultLocale</code> in{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">hadars.config.ts</code> and every{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">hadars build</code> prints a warning for any
+                locale whose keys don't match the base, per namespace \u2014 non-fatal, since a partially-translated
+                locale shouldn't block a build:
+            </p>
+            <Code>{`
+// hadars.config.ts
+export default {
+    entry: './src/App.tsx',
+    i18n: { defaultLocale: 'en' }, // warns if static/locales/{ro,ru,...} miss keys from en
+} satisfies HadarsOptions;
+            `}</Code>
+            <p className="text-muted-foreground mb-4">
+                For a hard CI gate instead of a warning, call the same checking logic directly \u2014{' '}
+                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">checkLocaleParity</code> is exported and
+                exits your script non-zero on any mismatch:
+            </p>
+            <Code>{`
+import { checkLocaleParity, formatParityIssues, type LocaleMessageTree } from 'hadars';
+
+const tree: LocaleMessageTree = /* build from static/locales/**\\/*.json */;
+const issues = checkLocaleParity(tree, 'en');
+if (issues.length) {
+    console.error(formatParityIssues(issues));
+    process.exit(1);
+}
+            `}</Code>
+        </section>
+
+        <section className="mb-10">
             <h2 className="text-xl font-semibold mb-3 text-gradient-soft">Live demo</h2>
             <p className="text-muted-foreground">
                 See it running on the <a className="underline" href="/i18n-demo">i18n demo page</a> —
