@@ -16,6 +16,9 @@ const config: HadarsOptions = {
     },
     // Only cache /cache-test — the main page is always freshly rendered.
     cache: (req) => req.pathname === '/cache-test' ? { key: req.pathname, ttl: 30_000 } : null,
+    // Warns (never fails the build) if static/locales/{ro,ru,...}/*.json
+    // don't have exactly the same keys as static/locales/en/*.json.
+    i18n: { defaultLocale: 'en' },
 };
 
 export default config;
