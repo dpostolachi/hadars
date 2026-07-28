@@ -734,8 +734,62 @@ export const build = async (options: HadarsRuntimeOptions) => {
         await optimizeImages(projectStaticDir, hadarStaticDir, options.images);
     }
 
+    // Translation-key parity warning — non-fatal by design. A locale that's
+    // only partially translated shouldn't block a build (t() still falls
+    // back to the raw key at runtime), but it should be impossible to miss.
+    if (options.i18n?.defaultLocale) {
+        await warnLocaleParity(options.i18n);
+    }
+
     console.log("Build complete.");
 };
+
+/**
+ * Scans `static/<localesDir>/<locale>/<namespace>.json`, builds the message
+ * tree, and prints a console warning listing any translation-key mismatches
+ * against `defaultLocale` — via the same `checkLocaleParity` used for
+ * unit testing and the standalone `scripts/check-i18n-parity.ts` pattern.
+ * Any error here (bad JSON, missing directory) is itself only warned about —
+ * this check must never fail a build.
+ */
+async function warnLocaleParity(i18n: { defaultLocale: string; localesDir?: string }): Promise<void> {
+    try {
+        const { checkLocaleParity, formatParityIssues } = await import('./i18n');
+        const localesDir = pathMod.resolve(process.cwd(), 'static', i18n.localesDir ?? 'locales');
+        if (!existsSync(localesDir)) return;
+
+        const tree: Record<string, Record<string, Record<string, string>>> = {};
+        const localeEntries = await fs.readdir(localesDir, { withFileTypes: true });
+
+        for (const localeEntry of localeEntries) {
+            if (!localeEntry.isDirectory()) continue;
+            const locale = localeEntry.name;
+            tree[locale] = {};
+
+            const fileEntries = await fs.readdir(pathMod.join(localesDir, locale), { withFileTypes: true });
+            for (const fileEntry of fileEntries) {
+                if (!fileEntry.isFile() || !fileEntry.name.endsWith('.json')) continue;
+                const namespace = fileEntry.name.replace(/\.json$/, '');
+                const raw = await fs.readFile(pathMod.join(localesDir, locale, fileEntry.name), 'utf-8');
+                tree[locale][namespace] = JSON.parse(raw);
+            }
+        }
+
+        if (!tree[i18n.defaultLocale]) {
+            console.warn(`[hadars] i18n: base locale "${i18n.defaultLocale}" not found under static/${i18n.localesDir ?? 'locales'}/ — skipping parity check.`);
+            return;
+        }
+
+        const issues = checkLocaleParity(tree, i18n.defaultLocale);
+        if (issues.length === 0) return;
+
+        console.warn(`\n[hadars] i18n: ${issues.length} translation parity mismatch(es) against base locale "${i18n.defaultLocale}":\n`);
+        console.warn(formatParityIssues(issues));
+        console.warn('');
+    } catch (err) {
+        console.warn('[hadars] i18n parity check skipped due to an error:', err instanceof Error ? err.message : err);
+    }
+}
 
 export const run = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
