@@ -118,7 +118,7 @@ const LocaleContext = createContext<LocaleContextValue | null>(null);
 export interface LocaleProviderProps extends HadarsI18nConfig {
     /** Locale resolved server-side, e.g. via `parseLocaleFromPath(req.pathname, config)`. */
     initialLocale: string;
-    /** Where translation JSON lives, relative to the site root. Default: `/static/locales`. */
+    /** Where translation JSON lives, relative to the site root. Default: `/locales`. */
     basePath?: string;
     children: ReactNode;
 }
@@ -127,7 +127,7 @@ export const LocaleProvider: React.FC<LocaleProviderProps> = ({
     initialLocale,
     locales,
     defaultLocale,
-    basePath = '/static/locales',
+    basePath = '/locales',
     children,
 }) => {
     // Keyed off a stable string so passing a fresh `locales={[...]}` array
