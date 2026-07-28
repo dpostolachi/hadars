@@ -25,6 +25,9 @@
 
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 GlobalRegistrator.register();
+// Silences React's "not configured to support act(...)" warning — this is
+// the documented flag for non-testing-library environments (see reactjs.org).
+(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { test, expect, describe, mock, beforeEach, afterEach } from 'bun:test';
 import React, { act, Suspense } from 'react';
