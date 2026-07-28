@@ -101,6 +101,74 @@ export async function fetchLocaleMessages(
     return Object.fromEntries(entries);
 }
 
+/**
+ * Message tree shape shared by parity checking and (optionally) your own
+ * tooling: locale → namespace → key → value.
+ */
+export type LocaleMessageTree = Record<string, Record<string, Record<string, string>>>;
+
+export interface LocaleParityIssue {
+    namespace: string;
+    locale: string;
+    /** Keys present in `baseLocale` but missing from this locale/namespace. */
+    missingKeys: string[];
+    /** Keys present in this locale/namespace but not in `baseLocale`. */
+    extraKeys: string[];
+}
+
+/**
+ * Diffs every locale's keys, per namespace, against `baseLocale`. Returns one
+ * issue per (locale, namespace) pair that has any missing or extra keys — an
+ * empty array means every locale has exactly the same keys as the base.
+ *
+ * A missing key isn't a hard runtime error (`t()` falls back to the raw key),
+ * which is exactly why it's easy to ship silently — this is meant to be run
+ * as a build/CI check, not at request time.
+ *
+ * @example
+ * const tree = await loadAllLocaleMessages('static/locales'); // your own loader
+ * const issues = checkLocaleParity(tree, 'en');
+ * if (issues.length) { console.error(formatParityIssues(issues)); process.exit(1); }
+ */
+export function checkLocaleParity(messages: LocaleMessageTree, baseLocale: string): LocaleParityIssue[] {
+    const issues: LocaleParityIssue[] = [];
+    const baseNamespaces = messages[baseLocale] ?? {};
+
+    const allNamespaces = new Set<string>();
+    for (const locale of Object.keys(messages)) {
+        for (const namespace of Object.keys(messages[locale])) allNamespaces.add(namespace);
+    }
+
+    for (const locale of Object.keys(messages)) {
+        if (locale === baseLocale) continue;
+        for (const namespace of allNamespaces) {
+            const baseKeys = new Set(Object.keys(baseNamespaces[namespace] ?? {}));
+            const localeKeys = new Set(Object.keys(messages[locale]?.[namespace] ?? {}));
+
+            const missingKeys = [...baseKeys].filter(k => !localeKeys.has(k)).sort();
+            const extraKeys = [...localeKeys].filter(k => !baseKeys.has(k)).sort();
+
+            if (missingKeys.length || extraKeys.length) {
+                issues.push({ namespace, locale, missingKeys, extraKeys });
+            }
+        }
+    }
+
+    return issues;
+}
+
+/** Pretty-prints `checkLocaleParity`'s output for a terminal/CI log. */
+export function formatParityIssues(issues: LocaleParityIssue[]): string {
+    return issues
+        .map(({ locale, namespace, missingKeys, extraKeys }) => {
+            const lines = [`${locale}/${namespace}.json`];
+            if (missingKeys.length) lines.push(`  missing: ${missingKeys.join(', ')}`);
+            if (extraKeys.length) lines.push(`  extra:   ${extraKeys.join(', ')}`);
+            return lines.join('\n');
+        })
+        .join('\n');
+}
+
 interface LocaleContextValue {
     locale: string;
     config: HadarsI18nConfig;
