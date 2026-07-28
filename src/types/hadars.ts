@@ -335,6 +335,23 @@ export interface HadarsOptions {
         /** Encoding quality 1–100. Default: `80` */
         quality?: number;
     };
+    /**
+     * Build-time translation-key parity check. When set, `hadars build` and
+     * `hadars export static` scan `static/<localesDir>/<locale>/<namespace>.json`
+     * and print a console **warning** (never fails the build) listing any
+     * locale whose keys don't match `defaultLocale`, per namespace — so a
+     * missing key is visible before it ships instead of silently falling back
+     * to the raw key at runtime.
+     *
+     * @example
+     * i18n: { defaultLocale: 'en' }
+     */
+    i18n?: {
+        /** The locale every other locale's keys are compared against. */
+        defaultLocale: string;
+        /** Directory under `static/` containing locale JSON. Default: `'locales'` */
+        localesDir?: string;
+    };
 }
 
 /**

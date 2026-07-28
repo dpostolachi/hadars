@@ -1,0 +1,5 @@
+{
+    "greeting": "Hello, {name}!",
+    "tagline": "This text is fetched from a static JSON file per locale.",
+    "switchLabel": "Language"
+}

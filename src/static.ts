@@ -128,5 +128,15 @@ export async function renderStaticSite(opts: {
         await rm(copiedImages, { recursive: true, force: true });
     } catch { /* no _images were generated — nothing to move */ }
 
+    // Same story for locales/ (i18n translation JSON, if the project uses it):
+    // live-server mode serves .hadars/static/locales/** at /locales/**, so the
+    // exported site needs to match, not leave it nested under /static/.
+    const copiedLocales = join(staticDest, 'locales');
+    const localesOut = join(outputDir, 'locales');
+    try {
+        await cp(copiedLocales, localesOut, { recursive: true });
+        await rm(copiedLocales, { recursive: true, force: true });
+    } catch { /* no locales/ dir present — nothing to move */ }
+
     return { rendered, errors };
 }

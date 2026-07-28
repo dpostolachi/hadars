@@ -74,6 +74,7 @@ export class WebsiteStack extends cdk.Stack {
                 '*.js':   staticBehavior,
                 '*.css':  staticBehavior,
                 '*.map':  staticBehavior,
+                '*.json': staticBehavior,
                 '*.ico':  staticBehavior,
                 '*.png':  staticBehavior,
                 '*.jpg':  staticBehavior,

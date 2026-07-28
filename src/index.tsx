@@ -15,6 +15,24 @@ export type {
 export { Head as HadarsHead, useServerData, useGraphQL, initServerDataCache } from './utils/Head';
 export { HadarsImage } from './components/Image';
 export type { HadarsImageProps } from './components/Image';
+export {
+    LocaleProvider,
+    useLocale,
+    useTranslations,
+    useLocalizedPath,
+    parseLocaleFromPath,
+    localizePath,
+    checkLocaleParity,
+    formatParityIssues,
+} from './i18n';
+export type {
+    HadarsI18nConfig,
+    ParsedLocalePath,
+    LocaleProviderProps,
+    UseTranslationsResult,
+    LocaleMessageTree,
+    LocaleParityIssue,
+} from './i18n';
 
 /**
  * Dynamically loads a module with target-aware behaviour:
