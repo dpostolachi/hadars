@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "hadars dev",
     "build": "hadars build",
-    "start": "hadars run"
+    "start": "hadars run",
+    "i18n:check": "bun scripts/check-i18n-parity.ts"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
