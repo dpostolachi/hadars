@@ -95,14 +95,16 @@ describe('html lang - streaming SSR path (buildSsrResponse)', () => {
             document: { body: LocalizedApp as any, getInitProps: undefined, getFinalProps: undefined },
             singlePass: true,
         });
-        const roHtml = await buildSsrResponse(ro.head, ro.status, ro.getAppBody, ro.finalize, getPrecontentHtml).then(r => r.text());
+        const roRes = buildSsrResponse(ro.head, ro.status, ro.getAppBody, ro.finalize, getPrecontentHtml);
+        const roHtml = await roRes.text();
 
         const enReq = parseRequest(new Request('http://localhost/about'));
         const en = await getReactResponse(enReq, {
             document: { body: LocalizedApp as any, getInitProps: undefined, getFinalProps: undefined },
             singlePass: true,
         });
-        const enHtml = await buildSsrResponse(en.head, en.status, en.getAppBody, en.finalize, getPrecontentHtml).then(r => r.text());
+        const enRes = buildSsrResponse(en.head, en.status, en.getAppBody, en.finalize, getPrecontentHtml);
+        const enHtml = await enRes.text();
 
         expect(roHtml).toContain('<html lang="ro">');
         expect(enHtml).toContain('<html lang="en">');
