@@ -22,12 +22,16 @@ export {
     useLocalizedPath,
     parseLocaleFromPath,
     localizePath,
+    checkLocaleParity,
+    formatParityIssues,
 } from './i18n';
 export type {
     HadarsI18nConfig,
     ParsedLocalePath,
     LocaleProviderProps,
     UseTranslationsResult,
+    LocaleMessageTree,
+    LocaleParityIssue,
 } from './i18n';
 
 /**
