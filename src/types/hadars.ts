@@ -83,6 +83,8 @@ export type HadarsEntryModule<T extends {}> = {
 export interface AppHead {
     title: string;
     status: number;
+    /** Value written to the document's `<html lang="...">` attribute. Defaults to `'en'`. */
+    lang: string;
     meta: Record<string, MetaProps>;
     link: Record<string, LinkProps>;
     style: Record<string, StyleProps>;

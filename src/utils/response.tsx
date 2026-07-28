@@ -33,7 +33,7 @@ interface ReactResponseOptions {
 // ── Head HTML serialisation ────────────────────────────────────────────────
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c] ?? c);
+export const escAttr = (s: string) => s.replace(/[&<>"]/g, c => ESC[c] ?? c);
 const escText = (s: string) => s.replace(/[&<>]/g, c => ESC[c] ?? c);
 
 const ATTR: Record<string, string> = {
@@ -85,7 +85,9 @@ export const getReactResponse = async (
     const { getInitProps, getFinalProps } = opts.document;
 
     const context: AppContext = {
-        head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200 },
+        // `document.lang` seeds the default — LocaleProvider (if the app uses
+        // one) overrides this per-request via setServerLang() during render.
+        head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200, lang: opts.document.lang ?? 'en' },
     };
 
     let props: HadarsEntryBase = {

@@ -1,9 +1,12 @@
 import { parseRequest } from './request';
-import { buildHeadHtml } from './response';
+import { buildHeadHtml, escAttr } from './response';
 import type { AppHead, HadarsOptions } from '../types/hadars';
 
 export const HEAD_MARKER = '<meta name="HADARS_HEAD">';
 export const BODY_MARKER = '<meta name="HADARS_BODY">';
+// Plain-text token inside the `<html lang="HADARS_LANG">` attribute in
+// template.html — swapped per-request for the resolved (escaped) locale.
+export const LANG_MARKER = 'HADARS_LANG';
 
 const encoder = new TextEncoder();
 
@@ -18,6 +21,7 @@ export function buildSsrResponse(
 ): Response {
     const headHtml = buildHeadHtml(head);
     const precontentResult = getPrecontentHtml(headHtml);
+    const langHtml = escAttr(head.lang || 'en');
 
     const responseStream = new ReadableStream({
         async start(controller) {
@@ -35,7 +39,9 @@ export function buildSsrResponse(
 
                 // Chunk 1 — flush the full <head> shell immediately so the browser
                 // can start loading CSS / fonts / preload hints before the body arrives.
-                controller.enqueue(encoder.encode(precontentHtml));
+                // The lang marker is swapped in per-request — this is the one part of
+                // the (otherwise cached) precontent that varies with the page's locale.
+                controller.enqueue(encoder.encode(precontentHtml.replace(LANG_MARKER, langHtml)));
 
                 // Chunk 2 — body HTML. getAppBody() returns the pre-rendered string
                 // immediately in single-pass mode (no async waits).
@@ -77,11 +83,12 @@ export async function buildSsrHtml(
     clientProps: Record<string, unknown>,
     headHtml: string,
     getPrecontentHtml: (headHtml: string) => [string, string] | Promise<[string, string]>,
+    lang: string = 'en',
 ): Promise<string> {
     const [precontentHtml, postContent] = await Promise.resolve(getPrecontentHtml(headHtml));
     const scriptContent = JSON.stringify({ hadars: { props: clientProps } }).replace(/</g, '\\u003c');
     return (
-        precontentHtml +
+        precontentHtml.replace(LANG_MARKER, escAttr(lang || 'en')) +
         `<div id="app">${bodyHtml}</div><script id="hadars" type="application/json">${scriptContent}</script>` +
         postContent
     );
