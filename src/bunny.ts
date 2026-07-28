@@ -118,7 +118,7 @@ export function createBunnyHandler(
             const bodyHtml = await getAppBody();
             const { clientProps } = await finalize();
             const headHtml = buildHeadHtml(head);
-            const html = await buildSsrHtml(bodyHtml, clientProps, headHtml, getPrecontentHtml);
+            const html = await buildSsrHtml(bodyHtml, clientProps, headHtml, getPrecontentHtml, head.lang);
 
             return new Response(html, {
                 status,

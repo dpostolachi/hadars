@@ -131,6 +131,24 @@ function getCtx(): InnerContext | null {
     return makeClientCtx();
 }
 
+/**
+ * Writes `lang` into the current request's head object during SSR so
+ * `<html lang="...">` reflects it in the initial HTML byte, before any
+ * client JS runs. No-op on the client — call sites that also need the
+ * client's `document.documentElement.lang` kept in sync (e.g. after a
+ * locale switch) should do that separately, since this only affects the
+ * per-request server render.
+ *
+ * @internal Used by LocaleProvider. Called directly in a component's render
+ * body (not inside useEffect) so it takes effect during SSR, matching how
+ * <Head status={...}> writes into the same per-request context.
+ */
+export function setServerLang(lang: string): void {
+    if (typeof window !== 'undefined') return;
+    const head: AppHead | undefined = (globalThis as any).__hadarsContext?.head;
+    if (head) head.lang = lang;
+}
+
 // ── useServerData ─────────────────────────────────────────────────────────────
 //
 // Client-side cache pre-populated from the server's resolved data before

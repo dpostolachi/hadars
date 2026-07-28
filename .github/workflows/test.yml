@@ -71,7 +71,7 @@ jobs:
           exit 1
 
       - name: Run unit tests
-        run: bun test test/render-compare.test.tsx test/i18n.test.ts test/i18n-runtime.test.ts test/i18n-parity.test.ts test/i18n-render.test.tsx
+        run: bun test test/render-compare.test.tsx test/i18n.test.ts test/i18n-runtime.test.ts test/i18n-parity.test.ts test/i18n-lang-attribute.test.tsx test/i18n-render.test.tsx
 
       - name: Run SSR tests
         run: bun test --timeout 60000 test/ssr.test.ts test/lambda.test.ts

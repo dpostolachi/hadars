@@ -8,7 +8,7 @@ import React, {
     useState,
     type ReactNode,
 } from 'react';
-import { useServerData } from './utils/Head';
+import { useServerData, setServerLang } from './utils/Head';
 
 /**
  * i18n for hadars apps.
@@ -210,6 +210,14 @@ export const LocaleProvider: React.FC<LocaleProviderProps> = ({
     const [locale, setLocaleState] = useState(initialLocale);
     const [messages, setMessages] = useState<Record<string, Record<string, string>>>({});
     const [isSwitching, setIsSwitching] = useState(false);
+
+    // Writes the current locale into the per-request head during SSR so the
+    // server-rendered <html lang> is correct from the first byte — the
+    // useEffect below only fixes it client-side, after hydration, which is
+    // too late for screen readers, crawlers, and no-JS clients. Safe to call
+    // on every render: it's a plain assignment on the server, a no-op on the
+    // client.
+    setServerLang(locale);
 
     // Namespaces currently mounted somewhere in the tree, and a locale:namespace
     // → messages cache so a locale visited before (via SSR or a prior switch)

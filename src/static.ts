@@ -70,7 +70,7 @@ export async function renderStaticSite(opts: {
             // Inject a flag so the client knows it's a static export and should
             // fetch index.json sidecars directly instead of hitting a live server.
             const staticClientProps = { ...clientProps, __hadarsStatic: true };
-            const html = await buildSsrHtml(bodyHtml, staticClientProps, headHtml, getPrecontentHtml);
+            const html = await buildSsrHtml(bodyHtml, staticClientProps, headHtml, getPrecontentHtml, head.lang);
 
             // '/'      → <outputDir>/index.html
             // '/about' → <outputDir>/about/index.html
