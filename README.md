@@ -116,6 +116,10 @@ hadars build
 # Serve the production build
 hadars run
 
+# Stop a running dev/run process reliably (tracks pid(s) via a lock file,
+# instead of relying on `pkill -f` pattern matching)
+hadars stop
+
 # Pre-render every page to static HTML files (output goes to out/ by default)
 hadars export static [outDir]
 
