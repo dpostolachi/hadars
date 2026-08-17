@@ -32,6 +32,13 @@ jobs:
         run: npm install --ignore-scripts
         working-directory: website
 
+      - name: Install HMR fixture dependencies
+        run: npm install --ignore-scripts
+        working-directory: test/fixtures/hmr-app
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Pin website React 18
         if: matrix.react-version == '18'
         run: npm install react@^18.3.0 react-dom@^18.3.0 --legacy-peer-deps
@@ -75,6 +82,9 @@ jobs:
 
       - name: Run SSR tests
         run: bun test --timeout 60000 test/ssr.test.ts test/lambda.test.ts
+
+      - name: Run client HMR e2e test
+        run: bun test --timeout 60000 test/hmr.e2e.test.ts
 
       - name: Stop website server
         if: always()
