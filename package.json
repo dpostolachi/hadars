@@ -43,7 +43,7 @@
     "build:lib": "tsup src/index.tsx src/lambda.ts src/cloudflare.ts src/bunny.ts src/slim-react/index.ts src/slim-react/jsx-runtime.ts --format esm,cjs --dts --out-dir dist --clean --external '@rspack/*' --external '@rspack/binding'",
     "build:cli": "bun build-scripts/build-cli.mjs",
     "build:all": "node build-scripts/build-all.mjs",
-    "test": "bun test test/render-compare.test.tsx && bun test test/ssr.test.ts",
+    "test": "bun test test/render-compare.test.tsx && bun test test/ssr.test.ts && bun test test/hmr.e2e.test.ts",
     "prepare": "npm run build:all",
     "prepublishOnly": "npm run build:all"
   },
@@ -85,6 +85,7 @@
     "@happy-dom/global-registrator": "^15.11.7",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "playwright": "^1.48.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "tsup": "^8.5.1",
