@@ -55,6 +55,16 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     },
                     exclude: [loaderPath],
                     use: [
+                        // Injects the React Refresh runtime setup (the code that
+                        // actually defines $RefreshReg$/$RefreshSig$) around the
+                        // final compiled module. Added explicitly rather than
+                        // relying on ReactRefreshPlugin's automatic rule-scanning
+                        // to attach it — that scan doesn't reliably land on an
+                        // already fully custom rule/loader chain like this one, so
+                        // without this, swc-loader's `refresh: true` below still
+                        // emits $RefreshReg$(...) calls but nothing ever defines
+                        // $RefreshReg$, and every component throws on eval.
+                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         // Transforms loadModule('./path') based on build target.
                         // Runs before swc-loader (loaders execute right-to-left).
                         {
@@ -89,6 +99,8 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     },
                     exclude: [loaderPath],
                     use: [
+                        // See the matching comment in the .jsx rule above.
+                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         {
                             loader: loaderPath,
                             options: { server: isServerBuild },
