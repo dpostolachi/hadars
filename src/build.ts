@@ -532,15 +532,30 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         if (stdoutReader) {
             const reader = stdoutReader as ReadableStreamDefaultReader<Uint8Array>;
             (async () => {
+                // Accumulate into a rolling buffer, same as the initial-marker wait
+                // above — a single reader.read() chunk can split the marker text
+                // in half (e.g. right after a large rspack stats dump flushes), and
+                // checking only the latest chunk in isolation can silently miss it
+                // forever, leaving ssrBuildId stuck and the dev server serving the
+                // first SSR module it ever imported no matter how many times the
+                // bundle is rebuilt afterward.
+                let rebuildBuf = '';
                 try {
                     while (true) {
                         const { done, value } = await reader.read();
                         if (done) break;
                         const chunk = decoder.decode(value, { stream: true });
                         try { process.stdout.write(chunk); } catch (e) { }
-                        if (chunk.includes(rebuildMarker)) {
+                        rebuildBuf += chunk;
+                        if (rebuildBuf.includes(rebuildMarker)) {
                             ssrBuildId = crypto.randomBytes(4).toString('hex');
                             console.log('[hadars] SSR bundle updated, build id:', ssrBuildId);
+                            rebuildBuf = '';
+                        } else if (rebuildBuf.length > rebuildMarker.length * 4) {
+                            // Bound the buffer so it can't grow unbounded over a long
+                            // dev session, while keeping enough tail to still catch a
+                            // marker split across the next chunk boundary.
+                            rebuildBuf = rebuildBuf.slice(-rebuildMarker.length);
                         }
                     }
                 } catch (e) { }
