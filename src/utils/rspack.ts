@@ -79,7 +79,17 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                                         react: {
                                             runtime: "automatic",
                                             development: isDev,
-                                            refresh: isDev && !isServerBuild,
+                                            // Disabled — see the long comment above createClientCompiler
+                                            // for why. Short version: three separate attempts to wire
+                                            // React Refresh's runtime correctly (excluding node_modules,
+                                            // re-adding the loader, fixing double plugin registration)
+                                            // each fixed the specific symptom reported but the underlying
+                                            // "the transform emits $RefreshReg$(...) calls and nothing
+                                            // reliably defines the helper" gap kept resurfacing in a new
+                                            // shape against real-world app structures this couldn't be
+                                            // reproduced against directly. Disabling the transform removes
+                                            // every call site, so there's nothing left to be undefined.
+                                            refresh: false,
                                         },
                                     },
                                 },
@@ -112,7 +122,8 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                                         react: {
                                             runtime: "automatic",
                                             development: isDev,
-                                            refresh: isDev && !isServerBuild,
+                                            // See the matching comment in the .jsx rule above.
+                                            refresh: false,
                                         },
                                     },
                                 },
@@ -284,7 +295,7 @@ const buildCompilerConfig = (
                     entry.options.jsc.transform = entry.options.jsc.transform ?? {};
                     entry.options.jsc.transform.react = entry.options.jsc.transform.react ?? {};
                     entry.options.jsc.transform.react.development = effectiveReactDev;
-                    entry.options.jsc.transform.react.refresh = effectiveReactDev && isDev;
+                    // refresh stays disabled (see comment above createClientCompiler) regardless of reactMode
                 }
             }
         }
@@ -392,7 +403,7 @@ const buildCompilerConfig = (
                     });
                 },
             },
-            isDev && !isServerBuild && new ReactRefreshPlugin({ exclude: /node_modules/ }),
+            false && isDev && !isServerBuild && new ReactRefreshPlugin({ exclude: /node_modules/ }), // disabled — see comment above createClientCompiler
             includeHotPlugin && isDev && !isServerBuild && new rspack.HotModuleReplacementPlugin(),
             ...extraPlugins,
             ...(opts.plugins ?? []),
@@ -427,32 +438,51 @@ const buildCompilerConfig = (
  * HotModuleReplacementPlugin is deliberately NOT applied here. RspackDevServer
  * already applies it itself when `devServer.hot: true` is set — it warns
  * ("hot: true" automatically applies HMR plugin, you don't have to add it
- * manually) if it's also applied here. Registering it twice produces a
- * half-wired HMR runtime: the React Refresh transform still emits calls to
- * $ReactRefreshRuntime$, but nothing coherent ends up defining it, so every
- * component throws on eval and module.hot never gets set up client-side —
- * even though the server is correctly emitting *.hot-update.js chunks the
- * whole time.
+ * manually) if it's also applied here.
  *
- * Separately, node_modules is excluded from the JS/TS rule's React Refresh
- * processing entirely (both the swc `refresh` transform option and
- * ReactRefreshPlugin's own loader injection — see the `exclude` on the rules
- * in getConfigBase and the `exclude` option passed to ReactRefreshPlugin
- * below). This is the actual fix for the client-side "$RefreshReg$" /
- * "$ReactRefreshRuntime$ is not defined" failure: hadars's own compiled
- * dist/index.js is unavoidably pulled into every client entry (it's part of
- * hadars's generated wrapper), and it exports a hook-named function
- * (useServerData) that SWC's react-refresh transform instruments as if it
- * were a component/hook — which, applied to already-bundled output rather
- * than original source, produces genuinely malformed JS. Confirmed with a
- * real rspack build against a real node_modules install: without this
- * exclude, the compile fails with a parse error inside dist/index.js
- * (`function useServerData(()=>undefined, options) {` — the parameter itself
- * gets corrupted); with it, the build is clean and a live edit propagates to
- * the browser via HMR without a reload (verified with Playwright — see
- * test/e2e/hmr.spec.ts). Excluding node_modules from Fast Refresh
- * instrumentation is the standard approach used by every major framework
- * (Next.js, CRA, Vite) — it's never meant to run over vendor code.
+ * REACT REFRESH IS CURRENTLY DISABLED (`refresh: false` on the swc transform,
+ * `ReactRefreshPlugin` short-circuited to never apply). History, for whoever
+ * revisits this:
+ *
+ *   1. React Refresh's transform emits `$RefreshReg$(...)`/`$RefreshSig$()`
+ *      calls into every component. Something has to define those helpers at
+ *      runtime, or every component throws a ReferenceError on eval — killing
+ *      module.hot setup client-side before the HMR client can ever fetch a
+ *      hot-update chunk, even though the server emits them correctly.
+ *   2. First problem found: node_modules content (including hadars's own
+ *      dist/index.js, unavoidably pulled into every client entry) was also
+ *      getting the transform applied, and a hook-named export in it produced
+ *      a genuine parse error. Fixed by excluding node_modules from the rule
+ *      and from ReactRefreshPlugin. Confirmed clean against that specific
+ *      repro (see git history on this file).
+ *   3. Against a real, more complex app, the same class of failure
+ *      resurfaced in a different shape each time it was investigated:
+ *      $RefreshReg$ undefined → $ReactRefreshRuntime$ undefined (import
+ *      binding never generated) → $RefreshReg$ undefined again (footer gone
+ *      entirely, calls still emitted). Each shape was fixed for the specific
+ *      repro it was diagnosed against, but none of those repros reproduced
+ *      the real app's failure directly, so each "fix" just moved the gap.
+ *   4. Rather than keep shipping fixes verified only against a repro that
+ *      isn't actually reproducing the reported failure, the transform is
+ *      disabled outright. HotModuleReplacementPlugin (applied by
+ *      RspackDevServer itself, see above) still handles general module
+ *      hot-swapping — a changed module that isn't accepted by
+ *      module.hot.accept() (which React Refresh would normally have wired up
+ *      per-component) bubbles up to a full page reload instead, which is
+ *      rspack-dev-server's standard fallback behavior. Verified end-to-end
+ *      with Playwright: editing a component produces zero page errors and
+ *      the browser reloads automatically with the new content — no in-place
+ *      Fast Refresh patch, but no frozen/broken page either.
+ *   5. Re-enabling proper Fast Refresh needs to be diagnosed against the
+ *      actual failing app (or an app that reproduces its specific shape),
+ *      not a fresh minimal repro that happens to work — that's the gap that
+ *      broke steps 2 and 3.
+ *
+ * Separately (kept, and still correct regardless of the above):
+ * node_modules is excluded from the JS/TS rule and from RelativePlugin's
+ * exclude option. resolve.symlinks: false ensures that exclude also covers
+ * symlinked (`file:`) dependencies like this repo's own website/, whose
+ * resolved real path wouldn't otherwise contain "node_modules" at all.
  */
 export const createClientCompiler = (entry: string, opts: EntryOptions) => {
     return rspack(buildCompilerConfig(entry, opts, false));
