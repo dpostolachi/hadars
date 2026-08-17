@@ -307,6 +307,15 @@ const buildCompilerConfig = (
 
     const resolveConfig: any = {
         extensions: ['.tsx', '.ts', '.js', '.jsx'],
+        // Resolve symlinked packages (monorepos, `file:` deps like this repo's
+        // own website/ using `hadars: file:..`) against their apparent
+        // node_modules path rather than following the symlink to its real
+        // location — otherwise the /node_modules/ exclude above never matches
+        // for a symlinked dependency, since the resolved real path doesn't
+        // contain "node_modules" at all. Confirmed via a real build: without
+        // this, the fix above only protects a plain (non-symlinked) npm
+        // install, not a symlinked local/workspace one.
+        symlinks: false,
         alias: resolveAliases,
         // for server builds prefer the package "main"/"module" fields and avoid "browser" so we don't pick browser-specific entrypoints
         mainFields: isServerBuild ? ['main', 'module'] : ['browser', 'module', 'main'],
