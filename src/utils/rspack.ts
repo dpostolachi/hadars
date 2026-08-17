@@ -55,16 +55,6 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     },
                     exclude: [loaderPath],
                     use: [
-                        // Injects the React Refresh runtime setup (the code that
-                        // actually defines $RefreshReg$/$RefreshSig$) around the
-                        // final compiled module. Added explicitly rather than
-                        // relying on ReactRefreshPlugin's automatic rule-scanning
-                        // to attach it — that scan doesn't reliably land on an
-                        // already fully custom rule/loader chain like this one, so
-                        // without this, swc-loader's `refresh: true` below still
-                        // emits $RefreshReg$(...) calls but nothing ever defines
-                        // $RefreshReg$, and every component throws on eval.
-                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         // Transforms loadModule('./path') based on build target.
                         // Runs before swc-loader (loaders execute right-to-left).
                         {
@@ -99,8 +89,6 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     },
                     exclude: [loaderPath],
                     use: [
-                        // See the matching comment in the .jsx rule above.
-                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         {
                             loader: loaderPath,
                             options: { server: isServerBuild },
@@ -420,18 +408,22 @@ const buildCompilerConfig = (
  * Creates a configured rspack compiler for the client bundle without running it.
  * Intended for use with RspackDevServer for proper HMR support.
  *
- * HotModuleReplacementPlugin must be applied explicitly here: that's only
- * automatic when compiling and serving through @rspack/cli. Here the compiler
- * is built and handed to RspackDevServer programmatically, so without this
- * Rspack never injects the HMR runtime (module.hot / import.meta.webpackHot)
- * into the bundle at all — React Refresh's setup code (which assigns
- * $RefreshReg$/$RefreshSig$) is itself gated behind `if (module.hot)`, so it
- * silently never runs, while SWC keeps emitting $RefreshReg$(...) calls in
- * every component regardless — hence the "$RefreshReg$ is not defined" error
- * and HMR updates never reaching the browser.
+ * HotModuleReplacementPlugin is deliberately NOT applied here. RspackDevServer
+ * already applies it itself when `devServer.hot: true` is set — it warns
+ * ("hot: true" automatically applies HMR plugin, you don't have to add it
+ * manually) if it's also applied here. Registering it twice produces a
+ * half-wired HMR runtime: the React Refresh transform still emits calls to
+ * $ReactRefreshRuntime$, but nothing coherent ends up defining it, so every
+ * component throws on eval and module.hot never gets set up client-side —
+ * even though the server is correctly emitting *.hot-update.js chunks the
+ * whole time. (A previous attempt applied it explicitly here on the
+ * assumption that this specific usage — building the compiler and handing it
+ * to RspackDevServer programmatically — was the "custom dev server" case that
+ * Rspack's own docs say needs it applied manually. That assumption was wrong
+ * for this dev server specifically, confirmed by the warning above; reverted.)
  */
 export const createClientCompiler = (entry: string, opts: EntryOptions) => {
-    return rspack(buildCompilerConfig(entry, opts, true));
+    return rspack(buildCompilerConfig(entry, opts, false));
 };
 
 export const compileEntry = async (entry: string, opts: EntryOptions & { watch?: boolean, onChange?: (stats:any)=>void }) => {
