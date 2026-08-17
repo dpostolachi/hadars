@@ -236,6 +236,10 @@ const getSuffix = (mode: Mode) => mode === 'development' ? `?v=${Date.now()}` : 
 
 export const HadarsFolder = './.hadars';
 const StaticPath = `${HadarsFolder}/static`;
+// Per-build copies of the compiled SSR bundle, used to force a genuinely
+// fresh dynamic import() on every rebuild — see the comment at the import
+// site for why a `?query` cache-buster on the same path isn't sufficient.
+const SsrImportDir = `${HadarsFolder}/.ssr-modules`;
 // Dedicated temp directory — keeps all hadars temp files out of the root of
 // os.tmpdir() so rspack's file watcher doesn't traverse unrelated system files
 // (e.g. Steam/Chrome shared-memory device files) in that directory.
@@ -325,6 +329,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
     // clean .hadars
     await fs.rm(HadarsFolder, { recursive: true, force: true });
+    await fs.mkdir(SsrImportDir, { recursive: true });
 
     let { port = 9090, baseURL: configuredBaseURL = '' } = options;
     // dev always serves from the root path — a prod baseURL doesn't resolve
@@ -390,6 +395,9 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // Avoids a dynamic import() cache lookup on every request.
     let cachedSsrModule: HadarsEntryModule<any> | null = null;
     let cachedSsrBuildId = '';
+    // Path of the last per-build SSR module copy, so it can be cleaned up once
+    // the next one is imported (see the import site below).
+    let previousSsrImportPath: string | null = null;
 
     // Pre-process the HTML template's <style> blocks through PostCSS (e.g. Tailwind).
     const resolvedHtmlTemplate = options.htmlTemplate
@@ -622,9 +630,23 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
         try {
             if (ssrBuildId !== cachedSsrBuildId) {
-                const importPath = pathToFileURL(ssrComponentPath).href + `?t=${ssrBuildId}`;
-                cachedSsrModule = (await import(importPath)) as HadarsEntryModule<any>;
+                // Import a physically distinct file per build rather than the same
+                // path with a `?query` cache-buster appended: at least on Bun,
+                // dynamic import() of a local file resolves/caches by path alone
+                // and ignores the query string, so re-importing the same path with
+                // a new query silently returns the module already in the cache —
+                // ssrBuildId rotates, the bundle on disk is genuinely new, and the
+                // server keeps serving what it loaded on the very first request.
+                // A new file path can't collide with a stale cache entry in any
+                // runtime's module registry.
+                const uniqueSsrPath = pathMod.join(SsrImportDir, `index.ssr.${ssrBuildId}.js`);
+                await fs.copyFile(ssrComponentPath, uniqueSsrPath);
+                cachedSsrModule = (await import(pathToFileURL(uniqueSsrPath).href)) as HadarsEntryModule<any>;
                 cachedSsrBuildId = ssrBuildId;
+                if (previousSsrImportPath) {
+                    fs.rm(previousSsrImportPath, { force: true }).catch(() => {});
+                }
+                previousSsrImportPath = uniqueSsrPath;
             }
             const {
                 default: Component,
