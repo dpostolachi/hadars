@@ -429,7 +429,14 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const devServer = new RspackDevServer({
         port: hmrPort,
         hot: true,
-        liveReload: false,
+        // Fast Refresh does not reliably apply .tsx component updates in this
+        // rspack/plugin-react-refresh combination (matches web-infra-dev/rspack#8596:
+        // CSS HMR works, JS/TSX component updates silently fail to apply, throwing
+        // "$RefreshReg$ is not defined"). liveReload is the dev server's fallback for
+        // exactly this case — when a hot update can't be applied in place, it falls
+        // back to a full page reload instead of leaving the page frozen on stale
+        // content. Leave it enabled (the default) so edits are still reflected
+        // automatically even when true Fast Refresh can't apply them.
         client: {
             webSocketURL: `ws://localhost:${hmrPort}/ws`,
         },
