@@ -407,10 +407,19 @@ const buildCompilerConfig = (
 /**
  * Creates a configured rspack compiler for the client bundle without running it.
  * Intended for use with RspackDevServer for proper HMR support.
- * HotModuleReplacementPlugin is intentionally omitted — RspackDevServer adds it automatically.
+ *
+ * HotModuleReplacementPlugin must be applied explicitly here: that's only
+ * automatic when compiling and serving through @rspack/cli. Here the compiler
+ * is built and handed to RspackDevServer programmatically, so without this
+ * Rspack never injects the HMR runtime (module.hot / import.meta.webpackHot)
+ * into the bundle at all — React Refresh's setup code (which assigns
+ * $RefreshReg$/$RefreshSig$) is itself gated behind `if (module.hot)`, so it
+ * silently never runs, while SWC keeps emitting $RefreshReg$(...) calls in
+ * every component regardless — hence the "$RefreshReg$ is not defined" error
+ * and HMR updates never reaching the browser.
  */
 export const createClientCompiler = (entry: string, opts: EntryOptions) => {
-    return rspack(buildCompilerConfig(entry, opts, false));
+    return rspack(buildCompilerConfig(entry, opts, true));
 };
 
 export const compileEntry = async (entry: string, opts: EntryOptions & { watch?: boolean, onChange?: (stats:any)=>void }) => {
