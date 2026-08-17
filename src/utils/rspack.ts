@@ -53,22 +53,14 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     resolve: {
                         fullySpecified: false,
                     },
-                    exclude: [loaderPath],
+                    // node_modules is excluded entirely, not just from React
+                    // Refresh: see the long comment above createClientCompiler
+                    // for why running the refresh transform/loader over
+                    // pre-bundled vendor code (which necessarily includes
+                    // hadars's own dist/index.js, pulled into every client
+                    // entry) is actively unsafe, not just wasteful.
+                    exclude: [loaderPath, /node_modules/],
                     use: [
-                        // Injects the React Refresh runtime setup (the code that
-                        // actually defines $RefreshReg$/$RefreshSig$) around the
-                        // final compiled module. Added explicitly rather than
-                        // relying on ReactRefreshPlugin's automatic rule-scanning
-                        // to attach it — that scan doesn't land on this already
-                        // fully custom rule/loader chain, so without this,
-                        // swc-loader's `refresh: true` below still emits
-                        // $RefreshReg$(...) calls but nothing ever defines
-                        // $RefreshReg$, and every component throws on eval.
-                        // (Tested in isolation from the HotModuleReplacementPlugin
-                        // double-registration bug fixed separately — that bug was
-                        // real but was masking whether this injection helps on
-                        // its own; this is that isolated test.)
-                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         // Transforms loadModule('./path') based on build target.
                         // Runs before swc-loader (loaders execute right-to-left).
                         {
@@ -101,10 +93,9 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     resolve: {
                         fullySpecified: false,
                     },
-                    exclude: [loaderPath],
+                    // See the matching comment in the .jsx rule above.
+                    exclude: [loaderPath, /node_modules/],
                     use: [
-                        // See the matching comment in the .jsx rule above.
-                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         {
                             loader: loaderPath,
                             options: { server: isServerBuild },
@@ -316,6 +307,15 @@ const buildCompilerConfig = (
 
     const resolveConfig: any = {
         extensions: ['.tsx', '.ts', '.js', '.jsx'],
+        // Resolve symlinked packages (monorepos, `file:` deps like this repo's
+        // own website/ using `hadars: file:..`) against their apparent
+        // node_modules path rather than following the symlink to its real
+        // location — otherwise the /node_modules/ exclude above never matches
+        // for a symlinked dependency, since the resolved real path doesn't
+        // contain "node_modules" at all. Confirmed via a real build: without
+        // this, the fix above only protects a plain (non-symlinked) npm
+        // install, not a symlinked local/workspace one.
+        symlinks: false,
         alias: resolveAliases,
         // for server builds prefer the package "main"/"module" fields and avoid "browser" so we don't pick browser-specific entrypoints
         mainFields: isServerBuild ? ['main', 'module'] : ['browser', 'module', 'main'],
@@ -392,7 +392,7 @@ const buildCompilerConfig = (
                     });
                 },
             },
-            isDev && !isServerBuild && new ReactRefreshPlugin(),
+            isDev && !isServerBuild && new ReactRefreshPlugin({ exclude: /node_modules/ }),
             includeHotPlugin && isDev && !isServerBuild && new rspack.HotModuleReplacementPlugin(),
             ...extraPlugins,
             ...(opts.plugins ?? []),
@@ -432,11 +432,27 @@ const buildCompilerConfig = (
  * $ReactRefreshRuntime$, but nothing coherent ends up defining it, so every
  * component throws on eval and module.hot never gets set up client-side —
  * even though the server is correctly emitting *.hot-update.js chunks the
- * whole time. (A previous attempt applied it explicitly here on the
- * assumption that this specific usage — building the compiler and handing it
- * to RspackDevServer programmatically — was the "custom dev server" case that
- * Rspack's own docs say needs it applied manually. That assumption was wrong
- * for this dev server specifically, confirmed by the warning above; reverted.)
+ * whole time.
+ *
+ * Separately, node_modules is excluded from the JS/TS rule's React Refresh
+ * processing entirely (both the swc `refresh` transform option and
+ * ReactRefreshPlugin's own loader injection — see the `exclude` on the rules
+ * in getConfigBase and the `exclude` option passed to ReactRefreshPlugin
+ * below). This is the actual fix for the client-side "$RefreshReg$" /
+ * "$ReactRefreshRuntime$ is not defined" failure: hadars's own compiled
+ * dist/index.js is unavoidably pulled into every client entry (it's part of
+ * hadars's generated wrapper), and it exports a hook-named function
+ * (useServerData) that SWC's react-refresh transform instruments as if it
+ * were a component/hook — which, applied to already-bundled output rather
+ * than original source, produces genuinely malformed JS. Confirmed with a
+ * real rspack build against a real node_modules install: without this
+ * exclude, the compile fails with a parse error inside dist/index.js
+ * (`function useServerData(()=>undefined, options) {` — the parameter itself
+ * gets corrupted); with it, the build is clean and a live edit propagates to
+ * the browser via HMR without a reload (verified with Playwright — see
+ * test/e2e/hmr.spec.ts). Excluding node_modules from Fast Refresh
+ * instrumentation is the standard approach used by every major framework
+ * (Next.js, CRA, Vite) — it's never meant to run over vendor code.
  */
 export const createClientCompiler = (entry: string, opts: EntryOptions) => {
     return rspack(buildCompilerConfig(entry, opts, false));
