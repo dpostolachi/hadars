@@ -7,6 +7,7 @@ import type { HadarsOptions, HadarsEntryModule } from './src/types/hadars'
 import { renderStaticSite } from './src/static'
 import { runSources } from './src/source/runner'
 import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './src/source/inference'
+import { checkLiveLock, isPidAlive, removeLock } from './src/utils/lock'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
 
@@ -69,6 +70,44 @@ async function run(config: HadarsOptions) {
       ...config,
       mode: 'production',
     });
+}
+
+// ── hadars stop ──────────────────────────────────────────────────────────────
+
+// Reads the lock file written by dev()/run(), SIGTERMs the tracked pid(s)
+// (the main process and, for dev, its spawned SSR-watcher worker), and
+// escalates to SIGKILL if they haven't exited after a short timeout. This is
+// the reliable alternative to `pkill -f <pattern>`, which can miss part of
+// the process tree and whose non-zero exit code on a miss is easy to misread
+// as "nothing was running".
+async function stopServer(cwd: string): Promise<void> {
+  const hadarsFolder = resolve(cwd, Hadars.HadarsFolder)
+  const lock = await checkLiveLock(hadarsFolder)
+  if (!lock) {
+    console.log('No running hadars dev/run process found.')
+    return
+  }
+
+  const pids = [lock.pid, lock.childPid].filter((p): p is number => typeof p === 'number')
+  console.log(`Stopping hadars (pid ${pids.join(', ')})...`)
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM') } catch {}
+  }
+
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline && pids.some(pid => isPidAlive(pid))) {
+    await new Promise(r => setTimeout(r, 200))
+  }
+
+  for (const pid of pids) {
+    if (isPidAlive(pid)) {
+      console.log(`  pid ${pid} still alive after SIGTERM, sending SIGKILL`)
+      try { process.kill(pid, 'SIGKILL') } catch {}
+    }
+  }
+
+  await removeLock(hadarsFolder)
+  console.log('Stopped.')
 }
 
 async function loadConfig(configPath: string): Promise<HadarsOptions> {
@@ -838,7 +877,7 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | stop | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
@@ -856,6 +895,11 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
       console.error('Failed to create project:', err?.message ?? err)
       process.exit(2)
     }
+    return
+  }
+
+  if (cmd === 'stop') {
+    await stopServer(cwd)
     return
   }
 

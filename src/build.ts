@@ -11,10 +11,11 @@ import pathMod from "node:path";
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import cluster from 'node:cluster';
+import { checkLiveLock, isPidAlive, writeLock, updateLock, lockPath } from './utils/lock';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
 import {
     buildSsrResponse, makePrecontentHtmlGetter,
@@ -233,7 +234,7 @@ type Mode = "development" | "production";
 
 const getSuffix = (mode: Mode) => mode === 'development' ? `?v=${Date.now()}` : '';
 
-const HadarsFolder = './.hadars';
+export const HadarsFolder = './.hadars';
 const StaticPath = `${HadarsFolder}/static`;
 // Dedicated temp directory — keeps all hadars temp files out of the root of
 // os.tmpdir() so rspack's file watcher doesn't traverse unrelated system files
@@ -311,6 +312,17 @@ const resolveWorkerCmd = (packageDir: string): string[] => {
 
 export const dev = async (options: HadarsRuntimeOptions) => {
 
+    validateOptions(options);
+
+    const liveLock = await checkLiveLock(HadarsFolder);
+    if (liveLock) {
+        console.error(
+            `[hadars] Another hadars process (pid ${liveLock.pid}${liveLock.childPid ? `, worker pid ${liveLock.childPid}` : ''}) ` +
+            `is already running against ${HadarsFolder}/. Run \`hadars stop\` first, or verify with \`lsof -i :${liveLock.port}\`.`
+        );
+        process.exit(1);
+    }
+
     // clean .hadars
     await fs.rm(HadarsFolder, { recursive: true, force: true });
 
@@ -318,7 +330,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
     console.log(`Starting Hadars on port ${port}`);
 
-    validateOptions(options);
+    await writeLock(HadarsFolder, { pid: process.pid, port, startedAt: Date.now() });
     const handleProxy = createProxyHandler(options);
     const handleWS = upgradeHandler(options);
     const handler = options.fetch;
@@ -449,12 +461,14 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         ...(options.moduleRules ? [`--moduleRules=${JSON.stringify(options.moduleRules, (_k, v) => v instanceof RegExp ? { __re: v.source, __flags: v.flags } : v)}`] : []),
     ], { stdio: 'pipe' });
     child.stdin?.end();
+    await updateLock(HadarsFolder, { childPid: child.pid });
 
-    // Ensure the SSR watcher child is killed when this process exits.
+    // Ensure the SSR watcher child is killed and the lock released when this process exits.
     const cleanupChild = () => { try { if (!child.killed) child.kill(); } catch {} };
-    process.once('exit', cleanupChild);
-    process.once('SIGINT', () => { cleanupChild(); process.exit(0); });
-    process.once('SIGTERM', () => { cleanupChild(); process.exit(0); });
+    const cleanupLock = () => { try { rmSync(lockPath(HadarsFolder), { force: true }); } catch {} };
+    process.once('exit', () => { cleanupChild(); cleanupLock(); });
+    process.once('SIGINT', () => { cleanupChild(); cleanupLock(); process.exit(0); });
+    process.once('SIGTERM', () => { cleanupChild(); cleanupLock(); process.exit(0); });
 
     // Convert Node.js Readable streams to Web ReadableStream so the rest of
     // the logic works identically across all runtimes.
@@ -639,6 +653,16 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 export const build = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
 
+    const liveLock = await checkLiveLock(HadarsFolder);
+    if (liveLock) {
+        console.error(
+            `[hadars] A dev server (pid ${liveLock.pid}${liveLock.childPid ? `, worker pid ${liveLock.childPid}` : ''}) ` +
+            `is still writing to ${HadarsFolder}/. Building now would race it and can leave a dev bundle in place ` +
+            `of the production build. Stop it first with \`hadars stop\`.`
+        );
+        process.exit(1);
+    }
+
     const entry = pathMod.resolve(__dirname, options.entry);
 
     // prepare client script
@@ -795,12 +819,32 @@ export const run = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
 
     let { port = 9090, workers = 1 } = options;
+    const clustered = isNode && workers > 1;
+
+    // Lock tracking is scoped to the common single-process case. A clustered
+    // run() re-executes this function once per forked worker, which would
+    // stomp on a single lock file — skip it there rather than track N pids.
+    if (!clustered) {
+        const liveLock = await checkLiveLock(HadarsFolder);
+        if (liveLock) {
+            console.error(
+                `[hadars] Another hadars process (pid ${liveLock.pid}${liveLock.childPid ? `, worker pid ${liveLock.childPid}` : ''}) ` +
+                `already holds ${HadarsFolder}/ (and possibly port ${liveLock.port}). Run \`hadars stop\` first, or verify with \`lsof -i :${port}\`.`
+            );
+            process.exit(1);
+        }
+        await writeLock(HadarsFolder, { pid: process.pid, port, startedAt: Date.now() });
+        const cleanupLock = () => { try { rmSync(lockPath(HadarsFolder), { force: true }); } catch {} };
+        process.once('exit', cleanupLock);
+        process.once('SIGINT', () => { cleanupLock(); process.exit(0); });
+        process.once('SIGTERM', () => { cleanupLock(); process.exit(0); });
+    }
 
     // On Node.js, fork worker processes so every CPU core handles requests.
     // The primary process only manages the cluster; workers fall through to
     // the serve() call below. On Bun/Deno this is skipped — Bun has its own
     // multi-threaded I/O model and doesn't need OS-level process forking.
-    if (isNode && workers > 1 && cluster.isPrimary) {
+    if (clustered && cluster.isPrimary) {
         console.log(`[hadars] Starting ${workers} worker processes on port ${port}`);
         for (let i = 0; i < workers; i++) {
             cluster.fork();
