@@ -55,6 +55,20 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     },
                     exclude: [loaderPath],
                     use: [
+                        // Injects the React Refresh runtime setup (the code that
+                        // actually defines $RefreshReg$/$RefreshSig$) around the
+                        // final compiled module. Added explicitly rather than
+                        // relying on ReactRefreshPlugin's automatic rule-scanning
+                        // to attach it — that scan doesn't land on this already
+                        // fully custom rule/loader chain, so without this,
+                        // swc-loader's `refresh: true` below still emits
+                        // $RefreshReg$(...) calls but nothing ever defines
+                        // $RefreshReg$, and every component throws on eval.
+                        // (Tested in isolation from the HotModuleReplacementPlugin
+                        // double-registration bug fixed separately — that bug was
+                        // real but was masking whether this injection helps on
+                        // its own; this is that isolated test.)
+                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         // Transforms loadModule('./path') based on build target.
                         // Runs before swc-loader (loaders execute right-to-left).
                         {
@@ -89,6 +103,8 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                     },
                     exclude: [loaderPath],
                     use: [
+                        // See the matching comment in the .jsx rule above.
+                        ...(isDev && !isServerBuild ? [{ loader: 'builtin:react-refresh-loader' }] : []),
                         {
                             loader: loaderPath,
                             options: { server: isServerBuild },
