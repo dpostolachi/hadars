@@ -4,7 +4,7 @@ import { upgradeHandler } from "./utils/upgradeRequest";
 import { getReactResponse } from "./utils/response";
 import { createClientCompiler, compileEntry } from "./utils/rspack";
 import { serve, nodeReadableToWebStream } from "./utils/serve";
-import { tryServeFileCached } from "./utils/staticFile";
+import { tryServeFile, tryServeFileCached } from "./utils/staticFile";
 import { isBun, isDeno, isNode } from "./utils/runtime";
 import { RspackDevServer } from "@rspack/dev-server";
 import pathMod from "node:path";
@@ -326,7 +326,14 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // clean .hadars
     await fs.rm(HadarsFolder, { recursive: true, force: true });
 
-    let { port = 9090, baseURL = '' } = options;
+    let { port = 9090, baseURL: configuredBaseURL = '' } = options;
+    // dev always serves from the root path — a prod baseURL doesn't resolve
+    // against localhost, and this must hold even when Hadars.dev() is called
+    // directly (not just through the CLI wrapper that used to do this).
+    const baseURL = '';
+    if (configuredBaseURL) {
+        console.log(`[hadars] Ignoring baseURL "${configuredBaseURL}" in dev mode — dev always serves from the root path.`);
+    }
 
     console.log(`Starting Hadars on port ${port}`);
 
@@ -586,12 +593,14 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         const url = new URL(request.url);
         const path = url.pathname;
 
-        // static files in the hadars output folder
-        const staticRes = await tryServeFileCached(pathMod.join(__dirname, StaticPath, path));
+        // static files in the hadars output folder — uncached: dev is a
+        // long-lived session and a file that 404'd once (e.g. requested
+        // before it existed) can legitimately appear later.
+        const staticRes = await tryServeFile(pathMod.join(__dirname, StaticPath, path));
         if (staticRes) return staticRes;
 
         // project-level static/ directory (explicit paths only — never intercept root)
-        const projectRes = await tryServeFileCached(pathMod.join(projectStaticPath, path));
+        const projectRes = await tryServeFile(pathMod.join(projectStaticPath, path));
         if (projectRes) return projectRes;
 
         const ssrComponentPath = pathMod.join(__dirname, HadarsFolder, SSR_FILENAME);
