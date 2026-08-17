@@ -53,7 +53,6 @@ function findConfig(cwd: string): string | null {
 async function dev(config: HadarsOptions) {
     await Hadars.dev({
       ...config,
-      baseURL: '',
       mode: 'development',
     });
 }

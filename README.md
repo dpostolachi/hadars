@@ -193,7 +193,7 @@ const uptime = useServerData(() => process.uptime(), { cache: false });
 | `entry` | `string` | - | Path to your page component **(required)** |
 | `port` | `number` | `9090` | HTTP port |
 | `hmrPort` | `number` | `port + 1` | rspack HMR dev server port |
-| `baseURL` | `string` | `""` | Public base path, e.g. `"/app"` |
+| `baseURL` | `string` | `""` | Public base path, e.g. `"/app"`. Ignored in `hadars dev` — dev always serves from the root path. |
 | `workers` | `number` | `1` | Worker processes / threads in `run()` mode |
 | `proxy` | `Record / fn` | - | Path-prefix proxy rules or a custom async function |
 | `proxyCORS` | `boolean` | - | Inject CORS headers on proxied responses |
