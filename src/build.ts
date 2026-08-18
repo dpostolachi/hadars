@@ -477,14 +477,61 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
     console.log(`Starting HMR dev server on port ${hmrPort}`);
 
+    // --- HMR hash instrumentation (opt-in: HADARS_DEBUG_HMR=1) ------------
+    // Logs, per client compilation, the hash the compiler reports alongside the
+    // hot-update filenames it emitted. An update is named for the hash it
+    // transitions FROM, so a healthy sequence looks like:
+    //   hash=A emitted-updates=[]                      expects-next=main.A...
+    //   hash=B emitted-updates=[main.A.hot-update.js]  expects-next=main.B...
+    // If the browser keeps asking for a hash that is never emitted, this shows
+    // whether the compiler advanced at all.
+    if ((globalThis as any).process?.env?.HADARS_DEBUG_HMR) {
+        (clientCompiler as any).hooks.done.tap('hadars-debug-hmr', (stats: any) => {
+          // Guarded for the same reason as the hook above — a debug aid must never
+          // be able to take down HMR.
+          try {
+            const json = stats.toJson({ all: false, hash: true, assets: true });
+            const updates = (json.assets ?? [])
+                .map((a: any) => a?.name)
+                .filter((n: any) => typeof n === 'string' && n.includes('hot-update'));
+            console.log(
+                `[hadars:hmr] compilation hash=${json.hash} ` +
+                `emitted-updates=[${updates.join(', ')}] ` +
+                `expects-next=main.${json.hash}.hot-update.json`,
+            );
+          } catch (e) {
+            console.log('[hadars:hmr] instrumentation error (ignored):', e);
+          }
+        });
+    }
+
     // Kick off client build — does NOT await here so SSR worker can start in parallel.
     let clientResolved = false;
     const clientBuildDone = new Promise<void>((resolve, reject) => {
         (clientCompiler as any).hooks.done.tap('initial-build', (stats: any) => {
-            if (!clientResolved) {
-                clientResolved = true;
-                console.log(stats.toString({ colors: true }));
-                resolve();
+            // Everything in here is wrapped: an exception thrown from a `done` hook
+            // propagates into webpack-dev-middleware's own done handling and aborts
+            // it, which silently stops the "hash"/"ok" WebSocket frames the HMR
+            // client depends on. The browser then holds its load-time hash forever,
+            // never requests an update, and the page freezes on stale content with
+            // no error shown — the compiler keeps reporting successful rebuilds.
+            //
+            // stats.toString() is the realistic thrower here: it walks the whole
+            // module graph, so it is far likelier to fail on a large real app than
+            // on a small one, which is exactly the shape of failure this had.
+            // Verified by forcing it to throw: unguarded, HMR dies with no hash
+            // frame ever sent; guarded, updates apply normally.
+            try {
+                if (!clientResolved) {
+                    console.log(stats.toString({ colors: true }));
+                }
+            } catch (e) {
+                console.error('[hadars] Failed to print client build stats:', e);
+            } finally {
+                if (!clientResolved) {
+                    clientResolved = true;
+                    resolve();
+                }
             }
         });
         devServer.start().catch(reject);
