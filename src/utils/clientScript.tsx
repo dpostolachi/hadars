@@ -1,5 +1,5 @@
 import React from 'react';
-import { hydrateRoot, createRoot } from 'react-dom/client';
+import { hydrateRoot } from 'react-dom/client';
 import type { HadarsEntryModule } from '../types/hadars';
 import { initServerDataCache } from 'hadars';
 import * as _appMod from '$_MOD_PATH$';
@@ -57,15 +57,43 @@ const main = async () => {
     const Component = appMod.default;
 
     const appEl = document.getElementById("app");
-    if (appEl) {
-        // In HMR mode the client component may have already changed since SSR,
-        // so skip hydration to avoid mismatch warnings and do a fresh render.
-        if ((module as any).hot) {
-            createRoot(appEl).render(<Component {...props} />);
-        } else {
-            hydrateRoot(appEl, <Component {...props} />);
-        }
+    if (!appEl) return;
+
+    const hot = (import.meta as any).webpackHot ?? (typeof module !== 'undefined' ? (module as any).hot : undefined);
+
+    if (!hot) {
+        hydrateRoot(appEl, <Component {...props} />);
+        return;
     }
+
+    // --- Dev (HMR) path ---------------------------------------------------
+    // React Fast Refresh patches component implementations in place and then
+    // re-renders through the EXISTING root. That only works if the root
+    // survives across hot updates, so it is cached on globalThis rather than
+    // recreated here — this module itself is re-evaluated on a hot update, and
+    // calling createRoot() again would tear down the tree and reset all state,
+    // which is precisely the "HMR doesn't work" symptom (updates only appearing
+    // after a manual refresh, component state lost).
+    const store = globalThis as any;
+
+    if (!store.__hadarsRoot) {
+        // First evaluation: adopt the server-rendered markup.
+        store.__hadarsRoot = hydrateRoot(appEl, <Component {...props} />);
+    } else {
+        // Hot update: reuse the existing root so state is preserved.
+        store.__hadarsRoot.render(<Component {...props} />);
+    }
+
+    // Accept updates to this entry and to the user's app module. Without an
+    // accept handler the update propagates past the entry with nowhere to stop,
+    // and the HMR runtime falls back to a full page reload
+    // ("Aborted because ./src/App.tsx is not accepted").
+    hot.accept('$_MOD_PATH$', () => {
+        // The updated module is re-imported by the runtime; re-render through
+        // the cached root with the fresh component.
+        const Next = (_appMod as HadarsEntryModule<{}>).default;
+        store.__hadarsRoot.render(<Next {...props} />);
+    });
 }
 
 main();

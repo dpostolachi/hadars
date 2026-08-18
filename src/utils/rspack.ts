@@ -79,17 +79,11 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                                         react: {
                                             runtime: "automatic",
                                             development: isDev,
-                                            // Disabled — see the long comment above createClientCompiler
-                                            // for why. Short version: three separate attempts to wire
-                                            // React Refresh's runtime correctly (excluding node_modules,
-                                            // re-adding the loader, fixing double plugin registration)
-                                            // each fixed the specific symptom reported but the underlying
-                                            // "the transform emits $RefreshReg$(...) calls and nothing
-                                            // reliably defines the helper" gap kept resurfacing in a new
-                                            // shape against real-world app structures this couldn't be
-                                            // reproduced against directly. Disabling the transform removes
-                                            // every call site, so there's nothing left to be undefined.
-                                            refresh: false,
+                                            // Emit $RefreshReg$/$RefreshSig$ calls on client dev builds
+                                            // only. ReactRefreshPlugin's loader defines those helpers;
+                                            // the two must cover exactly the same set of modules — see
+                                            // the long comment above createClientCompiler.
+                                            refresh: isDev && !isServerBuild,
                                         },
                                     },
                                 },
@@ -123,7 +117,7 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
                                             runtime: "automatic",
                                             development: isDev,
                                             // See the matching comment in the .jsx rule above.
-                                            refresh: false,
+                                            refresh: isDev && !isServerBuild,
                                         },
                                     },
                                 },
@@ -295,7 +289,12 @@ const buildCompilerConfig = (
                     entry.options.jsc.transform = entry.options.jsc.transform ?? {};
                     entry.options.jsc.transform.react = entry.options.jsc.transform.react ?? {};
                     entry.options.jsc.transform.react.development = effectiveReactDev;
-                    // refresh stays disabled (see comment above createClientCompiler) regardless of reactMode
+                    // Fast Refresh only makes sense against React's dev runtime. If the
+                    // caller forces reactMode: 'production' in a dev build, turn the
+                    // transform off so no $RefreshReg$ call sites are emitted — the
+                    // plugin below is gated on the same condition, keeping the transform
+                    // and the helper-defining loader in agreement.
+                    entry.options.jsc.transform.react.refresh = isDev && effectiveReactDev;
                 }
             }
         }
@@ -403,7 +402,17 @@ const buildCompilerConfig = (
                     });
                 },
             },
-            false && isDev && !isServerBuild && new ReactRefreshPlugin({ exclude: /node_modules/ }), // disabled — see comment above createClientCompiler
+            isDev && !isServerBuild && effectiveReactDev && new ReactRefreshPlugin({
+                exclude: /node_modules/,
+                // Match the SWC transform's coverage exactly. The plugin's default
+                // `include` is end-anchored (/\.([cm]js|[jt]sx?|flow)$/i) and is tested
+                // against the full request including any ?query, so a module imported
+                // with a cache-busting suffix would get $RefreshReg$ calls from SWC but
+                // no helper definitions from this loader. hadars no longer appends such a
+                // suffix (see getSuffix in build.ts), and this pattern tolerates one
+                // anyway so the two can never silently drift apart again.
+                include: /\.([cm]js|[jt]sx?|flow)(\?.*)?$/i,
+            }),
             includeHotPlugin && isDev && !isServerBuild && new rspack.HotModuleReplacementPlugin(),
             ...extraPlugins,
             ...(opts.plugins ?? []),
@@ -440,43 +449,42 @@ const buildCompilerConfig = (
  * ("hot: true" automatically applies HMR plugin, you don't have to add it
  * manually) if it's also applied here.
  *
- * REACT REFRESH IS CURRENTLY DISABLED (`refresh: false` on the swc transform,
- * `ReactRefreshPlugin` short-circuited to never apply). History, for whoever
- * revisits this:
+ * REACT FAST REFRESH IS ENABLED for client dev builds. The invariant that makes
+ * it work — and that broke it three times before — is that the SWC `refresh`
+ * transform and ReactRefreshPlugin's helper-injecting loader must cover EXACTLY
+ * the same set of modules. The transform emits `$RefreshReg$(...)`/`$RefreshSig$()`
+ * calls; the loader appends the footer that defines those helpers. Any module
+ * that gets one without the other throws `$RefreshReg$ is not defined` on eval,
+ * which kills the HMR client's bootstrap before it can apply a single update.
  *
- *   1. React Refresh's transform emits `$RefreshReg$(...)`/`$RefreshSig$()`
- *      calls into every component. Something has to define those helpers at
- *      runtime, or every component throws a ReferenceError on eval — killing
- *      module.hot setup client-side before the HMR client can ever fetch a
- *      hot-update chunk, even though the server emits them correctly.
- *   2. First problem found: node_modules content (including hadars's own
- *      dist/index.js, unavoidably pulled into every client entry) was also
- *      getting the transform applied, and a hook-named export in it produced
- *      a genuine parse error. Fixed by excluding node_modules from the rule
- *      and from ReactRefreshPlugin. Confirmed clean against that specific
- *      repro (see git history on this file).
- *   3. Against a real, more complex app, the same class of failure
- *      resurfaced in a different shape each time it was investigated:
- *      $RefreshReg$ undefined → $ReactRefreshRuntime$ undefined (import
- *      binding never generated) → $RefreshReg$ undefined again (footer gone
- *      entirely, calls still emitted). Each shape was fixed for the specific
- *      repro it was diagnosed against, but none of those repros reproduced
- *      the real app's failure directly, so each "fix" just moved the gap.
- *   4. Rather than keep shipping fixes verified only against a repro that
- *      isn't actually reproducing the reported failure, the transform is
- *      disabled outright. HotModuleReplacementPlugin (applied by
- *      RspackDevServer itself, see above) still handles general module
- *      hot-swapping — a changed module that isn't accepted by
- *      module.hot.accept() (which React Refresh would normally have wired up
- *      per-component) bubbles up to a full page reload instead, which is
- *      rspack-dev-server's standard fallback behavior. Verified end-to-end
- *      with Playwright: editing a component produces zero page errors and
- *      the browser reloads automatically with the new content — no in-place
- *      Fast Refresh patch, but no frozen/broken page either.
- *   5. Re-enabling proper Fast Refresh needs to be diagnosed against the
- *      actual failing app (or an app that reproduces its specific shape),
- *      not a fresh minimal repro that happens to work — that's the gap that
- *      broke steps 2 and 3.
+ * Two things maintain that invariant here:
+ *
+ *   1. node_modules is excluded from BOTH (the JS/TS rule's `exclude` and the
+ *      plugin's `exclude`). Pre-bundled vendor code — which necessarily includes
+ *      hadars's own dist/index.js, pulled into every client entry — must not be
+ *      transformed at all.
+ *   2. The plugin's `include` is widened to tolerate a `?query` suffix. The
+ *      default (`/\.([cm]js|[jt]sx?|flow)$/i`) is END-ANCHORED and is tested
+ *      against the full request, while the SWC rule's `test` matches the
+ *      resource path with the query stripped. That asymmetry was the actual root
+ *      cause of the long-standing failure: the dev client entry imported the
+ *      user's app module as `<entry>.tsx?v=<timestamp>`, so the app module — the
+ *      one file the developer actually edits — got refresh calls from SWC but no
+ *      helper definitions from the loader. It never reproduced in a minimal
+ *      single-file repro because the suffix was only ever applied to the user
+ *      entry. The suffix itself has since been removed (see getSuffix in
+ *      build.ts); this pattern keeps the two rules from silently drifting apart
+ *      again.
+ *
+ * Fast Refresh also requires the React root to SURVIVE hot updates — see the
+ * dev path in utils/clientScript.tsx, which caches the root on globalThis and
+ * calls module.hot.accept() on the app entry. Without that accept handler the
+ * update propagates past the entry with nowhere to stop and the dev server
+ * falls back to a full page reload.
+ *
+ * Verified end-to-end in test/hmr.e2e.test.ts: editing a component updates the
+ * DOM with zero page errors, without reloading the document, and with useState
+ * preserved.
  *
  * Separately (kept, and still correct regardless of the above):
  * node_modules is excluded from the JS/TS rule and from RelativePlugin's
