@@ -524,6 +524,39 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         });
     }
 
+    // Warn when the client compiler rebuilds before the first page load.
+    //
+    // Each completed compilation broadcasts a "hash" frame. A browser that
+    // connects after N startup compilations has seen N hashes and holds the
+    // latest, while the update chunk it needs is named for an earlier one — so it
+    // requests a chunk that was never written and the update chain stalls from the
+    // very first edit. A single startup compilation cannot exhibit this; two or
+    // more can, which is why it reproduces in large apps and not in small ones.
+    //
+    // Something is invalidating the build before serving begins: commonly a file
+    // written into a watched directory during startup (a generated file, a copied
+    // asset, an editor artifact) or a `public/` directory that RspackDevServer
+    // watches by default.
+    if ((globalThis as any).process?.env?.HADARS_DEBUG_HMR) {
+        let startupCompilations = 0;
+        let pageServed = false;
+        (clientCompiler as any).hooks.done.tap('hadars-startup-recompile', () => {
+            if (pageServed) return;
+            startupCompilations += 1;
+            if (startupCompilations > 1) {
+                console.warn(
+                    `[hadars:hmr] WARNING: client compiler has completed ` +
+                    `${startupCompilations} compilations before the first page load. ` +
+                    `The browser will connect holding the newest hash while the update ` +
+                    `it needs is named for an older one, so the first edit can 404 and ` +
+                    `stall HMR. Something is retriggering the build during startup — ` +
+                    `check for files written into a watched directory (or a public/ dir).`,
+                );
+            }
+        });
+        (globalThis as any).__hadarsMarkPageServed = () => { pageServed = true; };
+    }
+
     // Kick off client build — does NOT await here so SSR worker can start in parallel.
     let clientResolved = false;
     const clientBuildDone = new Promise<void>((resolve, reject) => {
@@ -699,6 +732,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     await serve(port, async (req, ctx) => {
         // Hold requests until both builds are ready. Once resolved this is a no-op.
         await readyPromise;
+        // Stop counting startup recompiles once we begin serving (debug only).
+        (globalThis as any).__hadarsMarkPageServed?.();
         const request = parseRequest(req);
         if (handler) {
             const res = await handler(request);
