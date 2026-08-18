@@ -477,6 +477,60 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
     console.log(`Starting HMR dev server on port ${hmrPort}`);
 
+    // Latest hash the client compiler reported — what a connecting client is handed.
+    let latestClientHash: string | undefined;
+    (clientCompiler as any).hooks.done.tap('hadars-track-hash', (stats: any) => {
+        try { latestClientHash = stats.hash; } catch { /* ignore */ }
+    });
+
+    // Report, at each WebSocket connect, the hash the client is about to be handed
+    // and whether it can actually act on it.
+    //
+    // RspackDevServer sends every newly-connected client the LATEST stats hash. The
+    // update chunk a client needs is named for the hash it currently holds, and that
+    // chunk is produced by the NEXT compilation. So a client that connects on hash N
+    // can only ever apply an update once some later compilation emits main.N... If
+    // nothing more compiles, its first edit requests a file that does not exist,
+    // 404s, and the update chain stalls with no recovery short of a reload.
+    //
+    // This is not startup-scoped: it happens at any connect whose hash never gets a
+    // chunk emitted for it. `prev-emitted-ok` cannot see this, because it compares
+    // compilation N against N-1's emission — the compiler's own consistency — not
+    // what a connecting client can resolve.
+    if ((globalThis as any).process?.env?.HADARS_DEBUG_HMR) {
+        const staticDir = pathMod.resolve(__dirname, StaticPath);
+        const reportConnect = async () => {
+            const hash = latestClientHash;
+            if (!hash) return;
+            const needed = `main.${hash}.hot-update.json`;
+            let exists = false;
+            try {
+                await fs.access(pathMod.join(staticDir, needed));
+                exists = true;
+            } catch { /* not written */ }
+            console.log(
+                `[hadars:hmr] client connected at hash=${hash} ` +
+                `needs=${needed} exists-now=${exists} ` +
+                (exists
+                    ? '(resolvable)'
+                    : '(NOT yet written — normal only if another compilation follows; ' +
+                      'if the next edit 404s on this filename, this connect is the stall point)'),
+            );
+        };
+        // devServer.webSocketServer only exists once start() has run, so poll briefly
+        // for it rather than tapping before it is constructed.
+        (async () => {
+            for (let i = 0; i < 100; i++) {
+                const impl = (devServer as any).webSocketServer?.implementation;
+                if (impl?.on) {
+                    impl.on('connection', reportConnect);
+                    return;
+                }
+                await new Promise(r => setTimeout(r, 100));
+            }
+        })();
+    }
+
     // --- HMR hash instrumentation (opt-in: HADARS_DEBUG_HMR=1) ------------
     // Logs, per client compilation, the hash the compiler reports alongside the
     // hot-update filenames it emitted. An update is named for the hash it
@@ -546,8 +600,60 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         (clientCompiler as any).hooks.invalid?.tap?.('hadars-startup-invalid', (fileName: string) => {
             if (fileName) lastChangedFiles.push(String(fileName));
         });
+        // A "phantom removal": rspack reports a file as removed while it is still
+        // on disk, which retriggers the client compiler for no real change.
+        //
+        // This happens when a transform emits non-normalised import paths — an
+        // SWC plugin producing `src/components/./__generated__/X.ts` rather than
+        // `src/components/__generated__/X.ts`. rspack records the dependency
+        // under one path shape, re-resolves it under another, and concludes the
+        // file vanished. Observed with @swc/plugin-relay over Relay's generated
+        // artifacts: 27 files reported removed, all present.
+        //
+        // The recompile it causes is what desynchronises HMR — see the NOTE in
+        // the `done` hook below. The `invalid` hook cannot surface this because
+        // it only carries a filename for edits, so inspect the watcher directly.
+        (clientCompiler as any).hooks.watchRun?.tapAsync?.('hadars-phantom-removal', (c: any, cb: any) => {
+            try {
+                const rf = c.removedFiles ? [...c.removedFiles] : [];
+                const phantom = rf.filter((f: string) => { try { return existsSync(f); } catch { return false; } });
+                if (phantom.length) {
+                    console.warn(
+                        `[hadars:hmr] PHANTOM REMOVAL: ${phantom.length} file(s) reported as ` +
+                        `removed by the watcher are still on disk. This retriggers the client ` +
+                        `compiler for no real change, and the extra compilation leaves a ` +
+                        `connecting browser holding a hash whose update chunk does not exist ` +
+                        `yet — the first edit then 404s and HMR stalls.\n` +
+                        `[hadars:hmr]   first: ${phantom[0]}\n` +
+                        `[hadars:hmr]   a '/./' segment in that path means a transform emitted ` +
+                        `a non-normalised import path; suspect an SWC plugin over generated files.`,
+                    );
+                }
+            } catch { /* diagnostics must never break the build */ }
+            cb();
+        });
         (clientCompiler as any).hooks.done.tap('hadars-startup-recompile', () => {
-            if (pageServed) return;
+            if (pageServed) {
+                // A recompile AFTER the page was served is just as damaging as one
+                // before it, and the original guard returned early here — so the
+                // reported failure produced no warning at all. Any client already
+                // connected is holding the previous hash; this compilation emits the
+                // chunk for that hash, which is fine. But a client connecting from
+                // now on is handed THIS hash, whose chunk will not exist until
+                // something compiles again.
+                console.warn(
+                    `[hadars:hmr] NOTE: client compiler recompiled after the page was ` +
+                    `served. Any browser loading from now on is handed this new hash, ` +
+                    `whose update chunk does not exist yet — its first edit will 404 ` +
+                    `unless another compilation follows.` +
+                    (lastChangedFiles.length
+                        ? `\n[hadars:hmr] rspack reported these files changed: ${lastChangedFiles.join(', ')}`
+                        : `\n[hadars:hmr] rspack did not report a changed file — likely a ` +
+                          `directory timestamp or an empty rebuild.`),
+                );
+                lastChangedFiles = [];
+                return;
+            }
             startupCompilations += 1;
             if (startupCompilations > 1) {
                 console.warn(
