@@ -600,6 +600,38 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         (clientCompiler as any).hooks.invalid?.tap?.('hadars-startup-invalid', (fileName: string) => {
             if (fileName) lastChangedFiles.push(String(fileName));
         });
+        // A "phantom removal": rspack reports a file as removed while it is still
+        // on disk, which retriggers the client compiler for no real change.
+        //
+        // This happens when a transform emits non-normalised import paths — an
+        // SWC plugin producing `src/components/./__generated__/X.ts` rather than
+        // `src/components/__generated__/X.ts`. rspack records the dependency
+        // under one path shape, re-resolves it under another, and concludes the
+        // file vanished. Observed with @swc/plugin-relay over Relay's generated
+        // artifacts: 27 files reported removed, all present.
+        //
+        // The recompile it causes is what desynchronises HMR — see the NOTE in
+        // the `done` hook below. The `invalid` hook cannot surface this because
+        // it only carries a filename for edits, so inspect the watcher directly.
+        (clientCompiler as any).hooks.watchRun?.tapAsync?.('hadars-phantom-removal', (c: any, cb: any) => {
+            try {
+                const rf = c.removedFiles ? [...c.removedFiles] : [];
+                const phantom = rf.filter((f: string) => { try { return existsSync(f); } catch { return false; } });
+                if (phantom.length) {
+                    console.warn(
+                        `[hadars:hmr] PHANTOM REMOVAL: ${phantom.length} file(s) reported as ` +
+                        `removed by the watcher are still on disk. This retriggers the client ` +
+                        `compiler for no real change, and the extra compilation leaves a ` +
+                        `connecting browser holding a hash whose update chunk does not exist ` +
+                        `yet — the first edit then 404s and HMR stalls.\n` +
+                        `[hadars:hmr]   first: ${phantom[0]}\n` +
+                        `[hadars:hmr]   a '/./' segment in that path means a transform emitted ` +
+                        `a non-normalised import path; suspect an SWC plugin over generated files.`,
+                    );
+                }
+            } catch { /* diagnostics must never break the build */ }
+            cb();
+        });
         (clientCompiler as any).hooks.done.tap('hadars-startup-recompile', () => {
             if (pageServed) {
                 // A recompile AFTER the page was served is just as damaging as one
