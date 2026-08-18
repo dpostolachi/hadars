@@ -469,6 +469,51 @@ const buildCompilerConfig = (
                 include: /\.([cm]js|[jt]sx?|flow)(\?.*)?$/i,
             }),
             includeHotPlugin && isDev && !isServerBuild && new rspack.HotModuleReplacementPlugin(),
+            // Drop no-op hot updates.
+            //
+            // A compilation that recompiles the client without changing any of its
+            // modules still emits an update whose chunk carries an EMPTY module map
+            // and whose only effect is reassigning __webpack_require__.h to the new
+            // hash. The client applies it, advances its hash, and is then one step
+            // AHEAD of the chunk the next real edit produces — so that edit requests
+            // a filename that only exists one cycle later, 404s, and the update chain
+            // stalls permanently. Observed when a rebuild races the SSR watcher
+            // during startup, which seeds the lead before the first user edit.
+            //
+            // The test is the chunk's module map, NOT the manifest: a healthy update
+            // also has {"c":["main"],"r":[],"m":[]} ("m" lists REMOVED modules), so
+            // keying off the manifest deletes real updates and breaks Fast Refresh.
+            // Verified: a working App.tsx patch and a no-op update have identical
+            // manifests and differ only in the chunk (5460 bytes with the module vs.
+            // ~225 bytes with `{}`).
+            isDev && !isServerBuild && {
+                apply(compiler: any) {
+                    compiler.hooks.compilation.tap('HadarsDropEmptyHotUpdate', (compilation: any) => {
+                        compilation.hooks.processAssets.tap(
+                            { name: 'HadarsDropEmptyHotUpdate', stage: 4000 },
+                            (assets: Record<string, any>) => {
+                                for (const name of Object.keys(assets)) {
+                                    if (!name.endsWith('.hot-update.js')) continue;
+                                    let src: string;
+                                    try {
+                                        src = assets[name].source().toString();
+                                    } catch {
+                                        continue;
+                                    }
+                                    // The chunk calls webpackHotUpdate<name>("main", {<modules>}, ...).
+                                    // An empty `{}` in that position means no module changed.
+                                    if (!/webpackHotUpdate[^(]*\(\s*("[^"]*"|'[^']*')\s*,\s*\{\s*\}/.test(src)) continue;
+                                    const base = name.slice(0, -'.js'.length);
+                                    delete assets[name];
+                                    for (const asset of Object.keys(assets)) {
+                                        if (asset === `${base}.json`) delete assets[asset];
+                                    }
+                                }
+                            },
+                        );
+                    });
+                },
+            },
             ...extraPlugins,
             ...(opts.plugins ?? []),
         ],
