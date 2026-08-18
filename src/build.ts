@@ -485,6 +485,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     //   hash=B emitted-updates=[main.A.hot-update.js]  expects-next=main.B...
     // If the browser keeps asking for a hash that is never emitted, this shows
     // whether the compiler advanced at all.
+    let lastHash: string | undefined;
     if ((globalThis as any).process?.env?.HADARS_DEBUG_HMR) {
         (clientCompiler as any).hooks.done.tap('hadars-debug-hmr', (stats: any) => {
           // Guarded for the same reason as the hook above — a debug aid must never
@@ -494,11 +495,29 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             const updates = (json.assets ?? [])
                 .map((a: any) => a?.name)
                 .filter((n: any) => typeof n === 'string' && n.includes('hot-update'));
+            // An update chunk is named for the hash it transitions FROM, so in a
+            // HEALTHY sequence each compilation emits chunks named for the
+            // PREVIOUS compilation's hash:
+            //   hash=A emitted=[]                    <- first build
+            //   hash=B emitted=[main.A.hot-update.js]
+            //   hash=C emitted=[main.B.hot-update.js]
+            // That one-cycle offset is the protocol working, NOT an error — the
+            // client holds hash A and asks for main.A.hot-update.json to move to B.
+            // Do not "fix" the offset; it would break update application.
+            //
+            // The real failure signal is `prev-emitted-ok=false`: the chunk the
+            // client is about to request was not among the files this compilation
+            // wrote, which is when a request 404s.
+            const prevExpected = lastHash ? `main.${lastHash}.hot-update.json` : null;
+            const prevEmittedOk = prevExpected ? updates.includes(prevExpected) : true;
             console.log(
                 `[hadars:hmr] compilation hash=${json.hash} ` +
                 `emitted-updates=[${updates.join(', ')}] ` +
-                `expects-next=main.${json.hash}.hot-update.json`,
+                `client-will-request=${prevExpected ?? '(none yet)'} ` +
+                `prev-emitted-ok=${prevEmittedOk}` +
+                (prevEmittedOk ? '' : '  <-- MISMATCH: that chunk was not written; the request will 404'),
             );
+            lastHash = json.hash;
           } catch (e) {
             console.log('[hadars:hmr] instrumentation error (ignored):', e);
           }
