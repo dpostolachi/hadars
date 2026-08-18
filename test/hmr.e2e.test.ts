@@ -102,6 +102,30 @@ test('dev server compiles without a React Refresh crash', async () => {
     expect(html).toContain(ORIGINAL_PROBE);
 });
 
+test('client bundle never contains unbacked $RefreshReg$ call sites', async () => {
+    // The failure this guards against: the SWC transform emits $RefreshReg$ call
+    // sites while ReactRefreshPlugin does not run, so nothing defines them and the
+    // first component to evaluate throws "ReferenceError: $RefreshReg$ is not
+    // defined" — the hot-update chunk arrives with the edit in it, then dies on
+    // eval, leaving the DOM stale.
+    //
+    // The two were previously gated on different conditions: ReactRefreshPlugin
+    // bails internally when NODE_ENV=production, while the SWC flag followed only
+    // hadars' own dev flag. `NODE_ENV=production hadars dev` produced calls with
+    // zero definitions. Both are now driven from one flag (useReactRefresh in
+    // utils/rspack.ts).
+    //
+    // Either state is valid — refresh fully wired, or fully absent. Only the
+    // mixture throws.
+    const bundle = await readFile(join(FIXTURE_DIR, '.hadars', 'static', 'index.js'), 'utf-8');
+    const calls = bundle.match(/\$RefreshReg\$\(/g)?.length ?? 0;
+    const defs  = bundle.match(/(?:function|var|let|const)\s+\$RefreshReg\$/g)?.length ?? 0;
+
+    if (calls > 0) {
+        expect(defs).toBeGreaterThan(0);
+    }
+});
+
 test('editing a component hot-updates in place, preserving state, with no page errors', async () => {
     const page = await browser!.newPage();
     const pageErrors: string[] = [];
@@ -134,11 +158,19 @@ test('editing a component hot-updates in place, preserving state, with no page e
 
     expect(current).toBe(UPDATED_PROBE);
 
-    // True Fast Refresh: the document was never reloaded and useState survived.
-    // If HMR regresses to the reload fallback, both of these flip.
-    expect(await page.evaluate(() => (window as any).__NOT_RELOADED__ === true)).toBe(true);
-    expect(await page.textContent('#count')).toBe('2');
+    // Fast Refresh is intentionally disabled when NODE_ENV=production (the plugin
+    // bails, so hadars turns the transform off to match — see useReactRefresh in
+    // utils/rspack.ts). In that mode the reload fallback is the correct behavior,
+    // so only assert in-place patching when refresh is actually wired up.
+    if (process.env.NODE_ENV !== 'production') {
+        // True Fast Refresh: the document was never reloaded and useState survived.
+        // If HMR regresses to the reload fallback, both of these flip.
+        expect(await page.evaluate(() => (window as any).__NOT_RELOADED__ === true)).toBe(true);
+        expect(await page.textContent('#count')).toBe('2');
+    }
 
+    // This holds in BOTH modes and is the real regression guard: an unbacked
+    // $RefreshReg$ throws here regardless of which path the update took.
     expect(pageErrors).toEqual([]);
 
     await page.close();
