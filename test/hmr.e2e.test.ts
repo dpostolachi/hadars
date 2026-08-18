@@ -40,6 +40,8 @@ const FIXTURE_DIR = join(ROOT, 'test', 'fixtures', 'hmr-app');
 const BIN         = join(FIXTURE_DIR, 'node_modules', '.bin', 'hadars');
 const APP_PATH    = join(FIXTURE_DIR, 'src', 'App.tsx');
 const BASE_URL    = 'http://localhost:4173';
+// hadars defaults hmrPort to port + 1.
+const HMR_PORT    = 4174;
 
 const ORIGINAL_PROBE = 'PROBE_INITIAL';
 const UPDATED_PROBE  = 'PROBE_HMR_UPDATED';
@@ -100,6 +102,59 @@ test('dev server compiles without a React Refresh crash', async () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(ORIGINAL_PROBE);
+});
+
+test('hot-update chunks are fetched from the dev server, not the app server', async () => {
+    // Hot-update chunks are owned by RspackDevServer, which serves them from
+    // memory on hmrPort. Without an absolute output.publicPath the HMR runtime
+    // derives their URLs from where index.js was loaded — the app server — which
+    // only serves .hadars/static/ from disk. An update then resolves only if
+    // devMiddleware's writeToDisk already flushed that chunk; lose that race and
+    // the request 404s. Because a failed update leaves the client's hash stale,
+    // every later edit asks for a hash the compiler has moved past, so the chain
+    // never recovers without a manual refresh.
+    //
+    // Asserting the port pins the fix at the point it actually broke: the URL the
+    // runtime computes.
+    const page = await browser!.newPage();
+    const updateRequests: string[] = [];
+    const failed: string[] = [];
+    page.on('request', (r) => {
+        if (r.url().includes('hot-update')) updateRequests.push(r.url());
+    });
+    page.on('response', (r) => {
+        if (r.url().includes('hot-update') && r.status() >= 400) {
+            failed.push(`${r.status()} ${r.url()}`);
+        }
+    });
+
+    await page.goto(BASE_URL + '/', { waitUntil: 'networkidle' });
+
+    const updatedSource = originalAppSource.replace(ORIGINAL_PROBE, UPDATED_PROBE);
+    await writeFile(APP_PATH, updatedSource);
+
+    for (let i = 0; i < 30; i++) {
+        await page.waitForTimeout(500);
+        const text = await page.textContent('#probe').catch(() => null);
+        if (text?.includes(UPDATED_PROBE)) break;
+    }
+
+    expect(updateRequests.length).toBeGreaterThan(0);
+    // Every update must come from the dev server port, never the app port.
+    for (const url of updateRequests) {
+        expect(new URL(url).port).toBe(String(HMR_PORT));
+    }
+    expect(failed).toEqual([]);
+
+    // Restore the fixture so the following tests start from ORIGINAL_PROBE.
+    await writeFile(APP_PATH, originalAppSource);
+    for (let i = 0; i < 30; i++) {
+        await page.waitForTimeout(500);
+        const text = await page.textContent('#probe').catch(() => null);
+        if (text?.includes(ORIGINAL_PROBE)) break;
+    }
+
+    await page.close();
 });
 
 test('client bundle never contains unbacked $RefreshReg$ call sites', async () => {

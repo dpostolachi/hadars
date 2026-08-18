@@ -428,6 +428,21 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         output: {
             filename: "index.js",
             path: pathMod.resolve(__dirname, StaticPath),
+            // Absolute publicPath pointing at the dev server, NOT the app server.
+            //
+            // Without this, output.publicPath is unset and the HMR runtime derives
+            // hot-update URLs from where index.js was loaded — the app server on
+            // `port`. The app server has no knowledge of hot updates; it only serves
+            // .hadars/static/ from disk (see the static fallback in the request
+            // handler), so an update resolves only if devMiddleware's writeToDisk
+            // has already flushed that chunk. When the browser wins that race the
+            // request 404s, and because a failed update leaves the client's hash
+            // stale, every subsequent edit asks for a hash the compiler has moved
+            // past — the update chain never recovers without a manual refresh.
+            //
+            // RspackDevServer serves hot-update chunks from memory on hmrPort, so
+            // pointing at it removes the disk round-trip and the race with it.
+            publicPath: `http://localhost:${hmrPort}/`,
         },
         base: baseURL,
         mode: 'development',
