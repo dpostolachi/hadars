@@ -2,7 +2,7 @@ import { createProxyHandler } from "./utils/proxyHandler";
 import { parseRequest } from "./utils/request";
 import { upgradeHandler } from "./utils/upgradeRequest";
 import { getReactResponse } from "./utils/response";
-import { createClientCompiler, compileEntry } from "./utils/rspack";
+import { createClientCompiler, compileEntry, dropPhantomRemovals } from "./utils/rspack";
 import { serve, nodeReadableToWebStream } from "./utils/serve";
 import { tryServeFile, tryServeFileCached } from "./utils/staticFile";
 import { isBun, isDeno, isNode } from "./utils/runtime";
@@ -455,6 +455,47 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         htmlTemplate: resolvedHtmlTemplate,
     });
 
+    // Drop "phantom removals" — files the watcher reports as removed that are
+    // still on disk — before rspack acts on them.
+    //
+    // Why this is safe: a removal is a past-tense claim about a file's existence,
+    // and it is directly checkable. If the file is there, the claim is false, and
+    // recompiling on it is work done for no change. This is unlike a modification,
+    // where a stale timestamp may still accompany real content change, so the
+    // guard deliberately touches `removedFiles` only. A delete-then-recreate
+    // inside one tick loses nothing either: the recreate raises its own event.
+    //
+    // Why it matters: every spurious compilation advances the client hash. A
+    // browser connecting afterwards holds a hash whose update chunk has not been
+    // emitted, so its first edit 404s and the update chain stalls until a manual
+    // reload. One phantom removal is enough to break HMR for the whole session.
+    //
+    // Seen in the wild with @swc/plugin-relay, which emits non-normalised import
+    // paths (`src/components/./__generated__/X.ts`). rspack records the dependency
+    // under one path shape, re-resolves it under another, and reports 27 present
+    // files as removed.
+    //
+    // KNOWN LIMIT — this does NOT prevent the compilation. `watchRun` fires after
+    // the watcher has already decided to rebuild, so clearing `removedFiles` here
+    // stops the phantoms propagating into the compilation's own bookkeeping but
+    // arrives too late to cancel it. Verified against the reporting project: the
+    // guard fires, and a second compilation still happens. Preventing the rebuild
+    // needs the paths normalised before the watcher records them, which is a
+    // resolution-level change and deliberately out of scope here.
+    //
+    // The predicate lives in utils/rspack.ts so it can be tested directly —
+    // see test/phantom-removal.test.ts.
+    //
+    // Populated here so the HADARS_DEBUG_HMR detector can still report what was
+    // dropped: this hook runs first and would otherwise silence it.
+    let droppedPhantomRemovals: string[] = [];
+    (clientCompiler as any).hooks.watchRun?.tapAsync?.('hadars-drop-phantom-removals', (c: any, cb: any) => {
+        try {
+            droppedPhantomRemovals = dropPhantomRemovals(c?.removedFiles, existsSync);
+        } catch { droppedPhantomRemovals = []; /* never let this break a build */ }
+        cb();
+    });
+
     const devServer = new RspackDevServer({
         port: hmrPort,
         hot: true,
@@ -600,33 +641,31 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         (clientCompiler as any).hooks.invalid?.tap?.('hadars-startup-invalid', (fileName: string) => {
             if (fileName) lastChangedFiles.push(String(fileName));
         });
-        // A "phantom removal": rspack reports a file as removed while it is still
-        // on disk, which retriggers the client compiler for no real change.
+        // Report phantom removals the guard dropped. These are files the watcher
+        // claimed were removed while they were still on disk; left in place they
+        // cost a compilation for no change, and every spurious compilation
+        // advances the client hash past the chunk a connecting browser needs.
         //
-        // This happens when a transform emits non-normalised import paths — an
-        // SWC plugin producing `src/components/./__generated__/X.ts` rather than
-        // `src/components/__generated__/X.ts`. rspack records the dependency
-        // under one path shape, re-resolves it under another, and concludes the
-        // file vanished. Observed with @swc/plugin-relay over Relay's generated
-        // artifacts: 27 files reported removed, all present.
-        //
-        // The recompile it causes is what desynchronises HMR — see the NOTE in
-        // the `done` hook below. The `invalid` hook cannot surface this because
-        // it only carries a filename for edits, so inspect the watcher directly.
-        (clientCompiler as any).hooks.watchRun?.tapAsync?.('hadars-phantom-removal', (c: any, cb: any) => {
+        // The guard above already removed them, so this is now informational:
+        // it tells you the condition is present in your project and points at
+        // the transform responsible. Kept because the underlying cause is worth
+        // fixing at the source even though hadars no longer acts on it.
+        (clientCompiler as any).hooks.watchRun?.tapAsync?.('hadars-phantom-removal', (_c: any, cb: any) => {
             try {
-                const rf = c.removedFiles ? [...c.removedFiles] : [];
-                const phantom = rf.filter((f: string) => { try { return existsSync(f); } catch { return false; } });
+                // Read what the guard recorded rather than re-deriving it: by this
+                // point `removedFiles` no longer contains the phantoms.
+                const phantom = droppedPhantomRemovals;
                 if (phantom.length) {
                     console.warn(
-                        `[hadars:hmr] PHANTOM REMOVAL: ${phantom.length} file(s) reported as ` +
-                        `removed by the watcher are still on disk. This retriggers the client ` +
-                        `compiler for no real change, and the extra compilation leaves a ` +
-                        `connecting browser holding a hash whose update chunk does not exist ` +
-                        `yet — the first edit then 404s and HMR stalls.\n` +
+                        `[hadars:hmr] PHANTOM REMOVAL: ${phantom.length} file(s) were reported ` +
+                        `as removed by the watcher but are still on disk. They were dropped from ` +
+                        `this compilation's records, but the rebuild they triggered still ran — ` +
+                        `each one advances the client hash and can stall HMR on the next edit.\n` +
                         `[hadars:hmr]   first: ${phantom[0]}\n` +
                         `[hadars:hmr]   a '/./' segment in that path means a transform emitted ` +
-                        `a non-normalised import path; suspect an SWC plugin over generated files.`,
+                        `a non-normalised import path; suspect an SWC plugin over generated ` +
+                        `files (seen with @swc/plugin-relay over Relay artifacts). Fixing that ` +
+                        `at the source is what stops the spurious rebuild.`,
                     );
                 }
             } catch { /* diagnostics must never break the build */ }
