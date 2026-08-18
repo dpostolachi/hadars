@@ -289,14 +289,69 @@ const buildCompilerConfig = (
                     entry.options.jsc.transform = entry.options.jsc.transform ?? {};
                     entry.options.jsc.transform.react = entry.options.jsc.transform.react ?? {};
                     entry.options.jsc.transform.react.development = effectiveReactDev;
-                    // Fast Refresh only makes sense against React's dev runtime. If the
-                    // caller forces reactMode: 'production' in a dev build, turn the
-                    // transform off so no $RefreshReg$ call sites are emitted — the
-                    // plugin below is gated on the same condition, keeping the transform
-                    // and the helper-defining loader in agreement.
-                    entry.options.jsc.transform.react.refresh = isDev && effectiveReactDev;
+                    // `refresh` is deliberately NOT set here — the useReactRefresh block
+                    // below is the single writer for it, so the transform can never
+                    // disagree with ReactRefreshPlugin.
                 }
             }
+        }
+    }
+
+    // SINGLE SOURCE OF TRUTH for React Fast Refresh.
+    //
+    // The SWC transform emits $RefreshReg$/$RefreshSig$ call sites;
+    // ReactRefreshPlugin supplies the definitions (a per-module footer, plus an
+    // injected entry that installs global no-op fallbacks for any module the
+    // loader missed). If the transform runs and the plugin does NOT, every call
+    // site is unbacked and the first component to evaluate throws
+    // "ReferenceError: $RefreshReg$ is not defined" — killing the update even
+    // though the hot-update chunk arrived correctly.
+    //
+    // That drift is exactly what happened when the two were gated on different
+    // conditions: ReactRefreshPlugin bails out internally on
+    //     mode !== 'development' || process.env.NODE_ENV === 'production'
+    // (see its apply()), while the SWC flag was derived only from hadars' own
+    // isDev. Running `NODE_ENV=production hadars dev` therefore produced a
+    // bundle with refresh calls and zero definitions. Reproduced directly:
+    // calls 1, defs 0, and no reactRefreshEntry in the bundle.
+    //
+    // So compute the decision once, replicating the plugin's own bail
+    // condition, and drive BOTH the transform and the plugin from it below.
+    // Read NODE_ENV indirectly. A direct `process.env.NODE_ENV === 'production'`
+    // is constant-folded to `false` by the bundler that builds dist/cli.js, which
+    // would silently delete this guard (verified: the compiled output contained
+    // `nodeEnvIsProd = false`). Indexing with a computed key defeats that.
+    const nodeEnvKey = 'NODE' + '_ENV';
+    const nodeEnvIsProd = (globalThis as any).process?.env?.[nodeEnvKey] === 'production';
+    const useReactRefresh = isDev
+        && !isServerBuild
+        && effectiveReactDev
+        && !nodeEnvIsProd;
+
+    if (isDev && !isServerBuild && !useReactRefresh) {
+        // Refresh is off in a dev client build (forced production React runtime,
+        // or NODE_ENV=production). HMR still works — updates that can't be patched
+        // in place fall back to a full page reload — but say so, because silently
+        // losing Fast Refresh is otherwise very hard to diagnose.
+        console.log(
+            `[hadars] React Fast Refresh disabled (${nodeEnvIsProd ? 'NODE_ENV=production' : "reactMode: 'production'"}); ` +
+            `hot updates will fall back to a full page reload.`,
+        );
+    }
+
+    // Force the SWC refresh flag on every js/ts rule to match the decision above.
+    // getConfigBase() sets a provisional value from isDev alone; it cannot see
+    // NODE_ENV or reactMode, so this is what keeps the transform and the plugin
+    // from ever disagreeing.
+    for (const rule of (localConfig.module?.rules ?? [])) {
+        if (!rule?.use || !Array.isArray(rule.use)) continue;
+        for (const useEntry of rule.use) {
+            if (!useEntry?.loader?.includes('swc-loader')) continue;
+            useEntry.options = useEntry.options ?? {};
+            useEntry.options.jsc = useEntry.options.jsc ?? {};
+            useEntry.options.jsc.transform = useEntry.options.jsc.transform ?? {};
+            useEntry.options.jsc.transform.react = useEntry.options.jsc.transform.react ?? {};
+            useEntry.options.jsc.transform.react.refresh = useReactRefresh;
         }
     }
 
@@ -402,7 +457,7 @@ const buildCompilerConfig = (
                     });
                 },
             },
-            isDev && !isServerBuild && effectiveReactDev && new ReactRefreshPlugin({
+            useReactRefresh && new ReactRefreshPlugin({
                 exclude: /node_modules/,
                 // Match the SWC transform's coverage exactly. The plugin's default
                 // `include` is end-anchored (/\.([cm]js|[jt]sx?|flow)$/i) and is tested
