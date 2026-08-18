@@ -232,7 +232,21 @@ const __dirname = process.cwd();
 
 type Mode = "development" | "production";
 
-const getSuffix = (mode: Mode) => mode === 'development' ? `?v=${Date.now()}` : '';
+// The client entry imports the user's app module by absolute path. In dev this
+// used to get a `?v=<timestamp>` cache-buster appended, which silently broke
+// React Fast Refresh: @rspack/plugin-react-refresh matches its runtime-injecting
+// loader with `include: /\.([cm]js|[jt]sx?|flow)$/i` — an END-ANCHORED regex —
+// against the full request. "App.tsx?v=123" does not end in ".tsx", so the
+// refresh loader was skipped for the app module, while the SWC transform (which
+// matches on the resource path, query stripped) still injected $RefreshReg$ /
+// $RefreshSig$ calls into it. Result: the helpers were never defined for exactly
+// the one module the user edits, so every component threw "$RefreshReg$ is not
+// defined". That is why this only ever reproduced against real apps and not a
+// minimal repro — the suffix is applied to the user entry specifically.
+//
+// The suffix is also unnecessary: rspack invalidates changed modules through its
+// own watcher and content hashing, not through import-URL cache busting.
+const getSuffix = (_mode: Mode) => '';
 
 export const HadarsFolder = './.hadars';
 const StaticPath = `${HadarsFolder}/static`;
@@ -429,14 +443,13 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const devServer = new RspackDevServer({
         port: hmrPort,
         hot: true,
-        // Fast Refresh does not reliably apply .tsx component updates in this
-        // rspack/plugin-react-refresh combination (matches web-infra-dev/rspack#8596:
-        // CSS HMR works, JS/TSX component updates silently fail to apply, throwing
-        // "$RefreshReg$ is not defined"). liveReload is the dev server's fallback for
-        // exactly this case — when a hot update can't be applied in place, it falls
-        // back to a full page reload instead of leaving the page frozen on stale
-        // content. Leave it enabled (the default) so edits are still reflected
-        // automatically even when true Fast Refresh can't apply them.
+        // React Fast Refresh applies .tsx component updates in place — see the
+        // comment above createClientCompiler in utils/rspack.ts for the loader/
+        // transform coverage invariant that makes it work. liveReload is left
+        // enabled (the default) as a safety net for changes Fast Refresh legitimately
+        // can't patch in place (e.g. edits to a non-component module with no accept
+        // handler), so those still reach the browser instead of leaving the page on
+        // stale content.
         client: {
             webSocketURL: `ws://localhost:${hmrPort}/ws`,
         },
@@ -728,7 +741,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
     } catch (err) {
         const srcClientPath = pathMod.resolve(packageDir, 'utils', 'clientScript.tsx');
         clientScript = (await fs.readFile(srcClientPath, 'utf-8'))
-            .replace('$_MOD_PATH$', entry + `?v=${Date.now()}`);
+            .replace('$_MOD_PATH$', entry + getSuffix(options.mode));
     }
 
     await ensureHadarsTmpDir();

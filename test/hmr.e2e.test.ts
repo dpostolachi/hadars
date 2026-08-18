@@ -1,20 +1,28 @@
 /**
- * Client-side dev-update end-to-end test — run with `bun test`.
+ * React Fast Refresh end-to-end test — run with `bun test`.
  *
- * Regression test for a bug where `hadars dev`'s client bundle threw
- * `ReferenceError: $RefreshReg$ is not defined` (or `$ReactRefreshRuntime,
- * depending on exactly how it was wired at the time) on every page load,
- * which killed the HMR client's bootstrap before it could ever process an
- * update — the browser sat frozen on stale content indefinitely no matter
- * how many times the source changed.
+ * Guards two regressions that both presented as "HMR doesn't work":
  *
- * React Refresh (in-place component patching) is currently disabled in dev
- * — see the comment above `createClientCompiler` in src/utils/rspack.ts for
- * why. This test reflects that: it asserts the actual outcome a developer
- * sees — zero page errors, and an edit reaching the browser automatically
- * — rather than the specific mechanism (in-place patch vs. full reload).
- * If Fast Refresh is re-enabled in the future, only the reload-detection
- * logic below needs updating; the error-free assertion stays valid either way.
+ *   1. `$RefreshReg$ is not defined` thrown by every component on load, which
+ *      killed the HMR client's bootstrap before it could process an update.
+ *      Root cause: the dev client entry imported the user's app module with a
+ *      `?v=<timestamp>` cache-buster, and @rspack/plugin-react-refresh matches
+ *      its helper-injecting loader with an END-ANCHORED `include` regex against
+ *      the full request. "App.tsx?v=123" didn't match, so the app module got
+ *      $RefreshReg$ call sites from the SWC transform but no helper definitions.
+ *      Only reproduced in real apps, because the suffix was applied to the user
+ *      entry specifically — never to a minimal single-file repro.
+ *
+ *   2. Updates only landing after a manual refresh, with state reset. Root
+ *      cause: the client entry called createRoot().render() on every
+ *      evaluation, so each hot update tore down and remounted the tree, and it
+ *      never called module.hot.accept() — so updates propagated past the entry
+ *      with nowhere to stop and fell back to a full page reload
+ *      ("Aborted because ./src/App.tsx is not accepted").
+ *
+ * The counter assertion is the important one: a full-page reload also makes an
+ * edit "appear" in the DOM, so changed text alone cannot tell true in-place
+ * Fast Refresh from a reload. Surviving component state can.
  *
  * Prerequisites (handled by the CI workflow):
  *   npm run build:all
@@ -94,7 +102,7 @@ test('dev server compiles without a React Refresh crash', async () => {
     expect(html).toContain(ORIGINAL_PROBE);
 });
 
-test('editing a component reaches the browser automatically with no page errors', async () => {
+test('editing a component hot-updates in place, preserving state, with no page errors', async () => {
     const page = await browser!.newPage();
     const pageErrors: string[] = [];
     page.on('pageerror', (err) => pageErrors.push(String(err)));
@@ -102,26 +110,35 @@ test('editing a component reaches the browser automatically with no page errors'
     await page.goto(BASE_URL + '/', { waitUntil: 'networkidle' });
     expect(await page.textContent('#probe')).toBe(ORIGINAL_PROBE);
 
+    // Build up state that only survives an in-place patch, plus a window flag
+    // that a full document reload would wipe.
+    await page.evaluate(() => { (window as any).__NOT_RELOADED__ = true; });
+    await page.click('#inc');
+    await page.click('#inc');
+    expect(await page.textContent('#count')).toBe('2');
+
     // Simulate a live edit.
     const updatedSource = originalAppSource.replace(ORIGINAL_PROBE, UPDATED_PROBE);
     await writeFile(APP_PATH, updatedSource);
 
-    // Poll the DOM — this test never calls page.reload() itself. Whether the
-    // update arrives via an in-place Fast Refresh patch or the dev server's
-    // own full-page reload fallback, the content must change on its own. If
-    // this regresses, the loop exhausts its budget and the assertion fails.
+    // Poll the DOM — this test never calls page.reload() itself.
     let current = ORIGINAL_PROBE;
-    for (let i = 0; i < 20 && current === ORIGINAL_PROBE; i++) {
+    for (let i = 0; i < 30 && current === ORIGINAL_PROBE; i++) {
         await page.waitForTimeout(500);
         try {
             current = (await page.textContent('#probe')) ?? current;
         } catch {
-            // Mid-navigation (full-reload fallback) — the element is briefly
-            // detached; retry on the next iteration.
+            // Element briefly detached mid-update; retry next iteration.
         }
     }
 
     expect(current).toBe(UPDATED_PROBE);
+
+    // True Fast Refresh: the document was never reloaded and useState survived.
+    // If HMR regresses to the reload fallback, both of these flip.
+    expect(await page.evaluate(() => (window as any).__NOT_RELOADED__ === true)).toBe(true);
+    expect(await page.textContent('#count')).toBe('2');
+
     expect(pageErrors).toEqual([]);
 
     await page.close();
