@@ -648,3 +648,33 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
         });
     });
 }
+
+/**
+ * Removes "phantom removals" from a watch compilation: paths the watcher
+ * reported as removed that are still present on disk.
+ *
+ * Returns the paths it dropped, so callers can report them.
+ *
+ * A removal is a past-tense claim about a file's existence and is directly
+ * checkable — if the file is there, the claim is false, and recompiling on it
+ * is work for no change. That is why this touches `removedFiles` only:
+ * a modification can carry real content change behind a stale timestamp, so
+ * the same reasoning does not transfer to `modifiedFiles`.
+ *
+ * A file that is deleted and recreated within one tick loses nothing: the
+ * recreate raises its own event.
+ *
+ * `existsSync` throwing (permissions, a race) is treated as "really removed" —
+ * the guard must never swallow an event it cannot disprove.
+ */
+export const dropPhantomRemovals = (removedFiles: Set<string> | undefined, exists: (p: string) => boolean): string[] => {
+    if (!removedFiles?.size) return [];
+    const phantom: string[] = [];
+    for (const f of removedFiles) {
+        let present = false;
+        try { present = exists(f); } catch { present = false; }
+        if (present) phantom.push(f);
+    }
+    for (const f of phantom) removedFiles.delete(f);
+    return phantom;
+};
