@@ -540,6 +540,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     if ((globalThis as any).process?.env?.HADARS_DEBUG_HMR) {
         let startupCompilations = 0;
         let pageServed = false;
+        // Record which files rspack saw as changed for each rebuild, so the
+        // startup warning can name the culprit instead of describing it.
+        let lastChangedFiles: string[] = [];
+        (clientCompiler as any).hooks.invalid?.tap?.('hadars-startup-invalid', (fileName: string) => {
+            if (fileName) lastChangedFiles.push(String(fileName));
+        });
         (clientCompiler as any).hooks.done.tap('hadars-startup-recompile', () => {
             if (pageServed) return;
             startupCompilations += 1;
@@ -550,8 +556,13 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                     `The browser will connect holding the newest hash while the update ` +
                     `it needs is named for an older one, so the first edit can 404 and ` +
                     `stall HMR. Something is retriggering the build during startup — ` +
-                    `check for files written into a watched directory (or a public/ dir).`,
+                    `check for files written into a watched directory (or a public/ dir).` +
+                    (lastChangedFiles.length
+                        ? `\n[hadars:hmr] rspack reported these files changed: ${lastChangedFiles.join(', ')}`
+                        : `\n[hadars:hmr] rspack did not report a changed file — the rebuild may have been ` +
+                          `triggered by a directory timestamp rather than a specific file.`),
                 );
+                lastChangedFiles = [];
             }
         });
         (globalThis as any).__hadarsMarkPageServed = () => { pageServed = true; };
@@ -729,9 +740,39 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     );
     const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
 
+    // Track whether the client compiler is mid-compilation, so the first page can
+    // be held until it settles.
+    //
+    // readyPromise only covers the FIRST client build. If something invalidates the
+    // compiler right after that (the SSR watcher completing its own initial build
+    // is the observed case), a browser can load in the gap and connect just as the
+    // next compilation finishes. RspackDevServer sends every newly-connected client
+    // the latest stats hash, so that browser starts life holding hash N while the
+    // most recent update chunk on disk is named for N-1 — and the chunk for N will
+    // not exist until another compilation runs. Its first edit then requests a file
+    // that isn't there, 404s, and the update chain stalls with no way to recover
+    // short of a manual reload.
+    //
+    // Holding the initial page until the compiler is idle closes that window: the
+    // browser connects against a settled hash.
+    let clientCompiling = false;
+    (clientCompiler as any).hooks.invalid.tap('hadars-track-compiling', () => { clientCompiling = true; });
+    (clientCompiler as any).hooks.done.tap('hadars-track-compiling', () => { clientCompiling = false; });
+
+    const waitForClientIdle = async () => {
+        // Bounded: never hang a request if something keeps the compiler busy.
+        const deadline = Date.now() + 10_000;
+        while (clientCompiling && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 50));
+        }
+    };
+
     await serve(port, async (req, ctx) => {
         // Hold requests until both builds are ready. Once resolved this is a no-op.
         await readyPromise;
+        // Then hold until the client compiler is idle, so the browser never connects
+        // mid-compilation and inherit a hash whose update chunk does not exist yet.
+        await waitForClientIdle();
         // Stop counting startup recompiles once we begin serving (debug only).
         (globalThis as any).__hadarsMarkPageServed?.();
         const request = parseRequest(req);
