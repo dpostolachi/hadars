@@ -18,6 +18,27 @@ const loaderPath = existsSync(pathMod.resolve(packageDir, 'loader.cjs'))
     ? pathMod.resolve(packageDir, 'loader.cjs')
     : pathMod.resolve(packageDir, 'loader.ts');
 
+
+/**
+ * Watch-ignore patterns shared by the client and SSR compilers.
+ *
+ * `/tmp/**` used to be in this list and had to come out. The dev client entry is
+ * generated into os.tmpdir()/hadars (HADARS_TMP_DIR in build.ts), so ignoring
+ * all of /tmp told the compiler to ignore its OWN entry point — and with it the
+ * whole dependency graph reachable from it. The client compiler then never
+ * rebuilt on a source edit, while the SSR watcher (entry: a real path under
+ * src/) rebuilt normally. SSR reflected every change and the browser never
+ * received a hot update, which reads as "HMR is broken" rather than "the entry
+ * is unwatched".
+ *
+ * Scoping it with a negation (`tmp/!(hadars)/**` plus `!tmp/hadars/**`) was
+ * tried and does not work — the watcher does not honour negated patterns here,
+ * and HMR stayed broken. Dropping the /tmp entry entirely is what restores it.
+ */
+export const watchIgnorePatterns = (): string[] => [
+    '**/node_modules/**',
+    '**/.hadars/**',
+];
 const getConfigBase = (mode: "development" | "production", isServerBuild = false): Omit<Configuration, "entry" | "output" | "plugins"> => {
     const isDev = mode === 'development';
     return {
@@ -535,7 +556,7 @@ const buildCompilerConfig = (
         // SSR watcher writing .hadars/index.ssr.js triggers the client compiler
         // and vice versa, causing an infinite rebuild loop.
         watchOptions: {
-            ignored: ['**/node_modules/**', '**/.hadars/**', '/tmp/**'],
+            ignored: watchIgnorePatterns(),
         },
     };
 };
@@ -607,7 +628,7 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
             let first = true;
             // Pass ignored patterns directly — compiler.watch(watchOptions) replaces
             // the config-level watchOptions, so we must repeat them here.
-            compiler.watch({ ignored: ['**/node_modules/**', '**/.hadars/**', '/tmp/**'] }, (err: any, stats: any) => {
+            compiler.watch({ ignored: watchIgnorePatterns() }, (err: any, stats: any) => {
                 if (err) {
                     if (first) { first = false; reject(err); }
                     else { console.error('rspack watch error', err); }
