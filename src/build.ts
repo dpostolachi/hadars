@@ -465,10 +465,16 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // guard deliberately touches `removedFiles` only. A delete-then-recreate
     // inside one tick loses nothing either: the recreate raises its own event.
     //
-    // Why it matters: every spurious compilation advances the client hash. A
-    // browser connecting afterwards holds a hash whose update chunk has not been
-    // emitted, so its first edit 404s and the update chain stalls until a manual
-    // reload. One phantom removal is enough to break HMR for the whole session.
+    // Why it matters: every spurious compilation advances the client hash, and a
+    // browser connecting between that compilation and the next holds a hash whose
+    // update chunk has not been emitted yet.
+    //
+    // Do NOT read this as "phantom removals break HMR". They were investigated at
+    // length as the suspected cause of a reported stall and were not it — the
+    // actual cause was an app-side window.fetch override (see the note on the
+    // hash instrumentation below). This guard stands on its own much smaller
+    // merit: recompiling because a file that still exists was reported removed is
+    // wasted work, and wasted work here is not free.
     //
     // Seen in the wild with @swc/plugin-relay, which emits non-normalised import
     // paths (`src/components/./__generated__/X.ts`). rspack records the dependency
@@ -518,12 +524,6 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
     console.log(`Starting HMR dev server on port ${hmrPort}`);
 
-    // Latest hash the client compiler reported — what a connecting client is handed.
-    let latestClientHash: string | undefined;
-    (clientCompiler as any).hooks.done.tap('hadars-track-hash', (stats: any) => {
-        try { latestClientHash = stats.hash; } catch { /* ignore */ }
-    });
-
     // Report, at each WebSocket connect, the hash the client is about to be handed
     // and whether it can actually act on it.
     //
@@ -539,6 +539,14 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // compilation N against N-1's emission — the compiler's own consistency — not
     // what a connecting client can resolve.
     if ((globalThis as any).process?.env?.HADARS_DEBUG_HMR) {
+        // Tapped inside the gate: `latestClientHash` is only ever read by the
+        // reporter below, so tapping `done` unconditionally would run a hook on
+        // every compilation to feed code that never executes.
+        let latestClientHash: string | undefined;
+        (clientCompiler as any).hooks.done.tap('hadars-track-hash', (stats: any) => {
+            try { latestClientHash = stats.hash; } catch { /* ignore */ }
+        });
+
         const staticDir = pathMod.resolve(__dirname, StaticPath);
         const reportConnect = async () => {
             const hash = latestClientHash;
@@ -573,6 +581,25 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     }
 
     // --- HMR hash instrumentation (opt-in: HADARS_DEBUG_HMR=1) ------------
+    //
+    // BEFORE READING ANY OF THIS: if hot updates silently stop applying, check
+    // whether the APP has replaced window.fetch. That is the most common cause
+    // and none of the instrumentation below will point at it.
+    //
+    // The HMR runtime fetches its update chunks. An app that wraps window.fetch
+    // — bot detection, request mocking, an analytics interceptor — can make every
+    // update fail while the compiler, the websocket and the chunks on disk are
+    // all perfectly healthy. The tell is that the same URL succeeds over XHR and
+    // fails over fetch:
+    //
+    //   await fetch(url)                          -> rejects
+    //   new XMLHttpRequest().open('GET', url)     -> 200
+    //
+    // That signature cost a long investigation across many releases here, and
+    // every diagnostic below reported "healthy" throughout, because the compiler
+    // side genuinely was. The instrumentation is still useful for real compiler
+    // faults — it just cannot see a client that refuses to make the request.
+    //
     // Logs, per client compilation, the hash the compiler reports alongside the
     // hot-update filenames it emitted. An update is named for the hash it
     // transitions FROM, so a healthy sequence looks like:
