@@ -18,7 +18,7 @@ import cluster from 'node:cluster';
 import { checkLiveLock, isPidAlive, writeLock, updateLock, lockPath } from './utils/lock';
 import type { HadarsEntryModule, HadarsOptions, HadarsProps } from "./types/hadars";
 import {
-    buildSsrResponse, makePrecontentHtmlGetter,
+    buildSsrResponse, streamPrebuiltHtml, makePrecontentHtmlGetter,
     type CacheFetchHandler, createRenderCache,
 } from './utils/ssrHandler';
 import { runSources } from './source/runner';
@@ -1327,10 +1327,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 const serialReq = await serializeRequest(request);
                 const { html, headHtml: wHead, status: wStatus } = await renderPool.renderFull(serialReq);
                 const [precontentHtml, postContent] = await getPrecontentHtml(wHead);
-                return new Response(precontentHtml + html + postContent, {
-                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
-                    status: wStatus,
-                });
+                return streamPrebuiltHtml(precontentHtml, html + postContent, wStatus);
             }
 
             const isDataOnly = request.headers.get('Accept') === 'application/json';

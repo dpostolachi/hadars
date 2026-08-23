@@ -73,6 +73,37 @@ export function buildSsrResponse(
 }
 
 /**
+ * Like {@link buildSsrResponse} but for callers that have already finished
+ * rendering synchronously (e.g. a worker-thread render pool, where head and
+ * body come back fully-formed in a single postMessage) and so have no async
+ * work left to overlap. There's still a transport-level win from splitting
+ * the write: the head chunk reaches the socket — and the browser's preload
+ * scanner — before a potentially large body chunk finishes encoding and
+ * writing, instead of waiting for the whole document to buffer first.
+ */
+export function streamPrebuiltHtml(precontentHtml: string, rest: string, status: number): Response {
+    const stream = new ReadableStream({
+        async start(controller) {
+            try {
+                controller.enqueue(encoder.encode(precontentHtml));
+                // Yield so the runtime's HTTP writer flushes this chunk to the
+                // socket before the (often much larger) body chunk is queued.
+                await Promise.resolve();
+                controller.enqueue(encoder.encode(rest));
+                controller.close();
+            } catch (err) {
+                console.error('[hadars] SSR render error:', err);
+                controller.error(err);
+            }
+        },
+    });
+    return new Response(stream, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        status,
+    });
+}
+
+/**
  * Like {@link buildSsrResponse} but returns the complete HTML string directly
  * instead of wrapping it in a streaming Response. Use this in environments
  * where streaming is not beneficial (e.g. AWS Lambda) to avoid the
