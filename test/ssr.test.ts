@@ -100,15 +100,16 @@ test('SSR renders the correct <title> tag', async () => {
     expect(html).toContain('<title>hadars — SSR for React</title>');
 });
 
-test('useServerData: server_stats is populated on the server', async () => {
+test('useServerData: github_repo_info is populated on the server', async () => {
     const { props } = await getPage();
     // Keys are now auto-generated via useId() — find the entry by shape.
+    // defaultBranch is always a string (falls back to 'main' if the GitHub
+    // API call fails) so this assertion doesn't depend on network access.
     const stats = Object.values(props.__serverData ?? {}).find(
-        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
-    ) as { pid: number; mem: number } | undefined;
+        (v: any) => typeof v?.defaultBranch === 'string' && 'latestCommitSha' in v,
+    ) as { defaultBranch: string } | undefined;
     expect(stats).toBeDefined();
-    expect(stats!.pid).toBeGreaterThan(0);
-    expect(stats!.mem).toBeGreaterThan(0);
+    expect(stats!.defaultBranch.length).toBeGreaterThan(0);
 });
 
 test('getInitProps: serverTime and bunVersion are in the serialised props', async () => {
@@ -216,12 +217,12 @@ test('Accept: application/json returns JSON serverData map for the current route
     const json = await res.json() as { serverData: Record<string, unknown> };
     expect(json.serverData).toBeDefined();
 
-    // server_stats is a useServerData call on the home page — key is auto-generated.
+    // github_repo_info is a useServerData call on the home page — key is auto-generated.
     const stats = Object.values(json.serverData).find(
-        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
-    ) as { pid: number; mem: number } | undefined;
+        (v: any) => typeof v?.defaultBranch === 'string' && 'latestCommitSha' in v,
+    ) as { defaultBranch: string } | undefined;
     expect(stats).toBeDefined();
-    expect(stats!.pid).toBeGreaterThan(0);
+    expect(stats!.defaultBranch.length).toBeGreaterThan(0);
 
     // Should not return a full HTML document
     const raw = JSON.stringify(json);
