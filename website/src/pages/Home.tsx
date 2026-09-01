@@ -15,9 +15,16 @@ interface ProcessStats { pid: number; mem: number }
 const ServerStatsRow: React.FC = () => {
     const stats = useServerData<ProcessStats>(async () => {
         const proc = (globalThis as any).process;
+        // process.memoryUsage() exists but its underlying op is sandboxed away
+        // on some edge runtimes (e.g. bunny.net's Deno isolate), where calling
+        // it throws rather than returning undefined.
+        let rss = 0;
+        try {
+            rss = proc?.memoryUsage?.()?.rss ?? 0;
+        } catch {}
         return {
             pid: proc?.pid ?? 0,
-            mem: Math.round((proc?.memoryUsage?.()?.rss ?? 0) / 1024 / 1024),
+            mem: Math.round(rss / 1024 / 1024),
         };
     }, { cache: false });
     return (
