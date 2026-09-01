@@ -7,6 +7,7 @@
     "dev": "hadars dev",
     "build": "hadars build",
     "start": "hadars run",
+    "export:bunny": "bash scripts/export-bunny.sh",
     "i18n:check": "bun scripts/check-i18n-parity.ts"
   },
   "dependencies": {

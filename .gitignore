@@ -37,6 +37,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 /website/.ninety
 /.hadars
 /website/.hadars
+/website/bunny.mjs
+/website/hadars.config.ts.orig
 /benchmark/hadars/.hadars
 /examples/gatsby-sources/.hadars
 /test/fixtures/hmr-app/.hadars

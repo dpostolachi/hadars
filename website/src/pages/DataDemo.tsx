@@ -4,8 +4,16 @@ import { useServerData } from 'hadars';
 
 const DemoHostnameRow: React.FC = () => {
     const val = useServerData<string>(async () => {
-        const os = await import('node:os');
-        return (os as any).hostname?.() ?? 'unknown';
+        // os.hostname() exists but its underlying op is sandboxed away on some
+        // edge runtimes (e.g. bunny.net's Deno isolate), where calling it
+        // throws rather than returning undefined — same as process.uptime()
+        // below.
+        try {
+            const os = await import('node:os');
+            return (os as any).hostname?.() ?? 'unknown';
+        } catch {
+            return 'unknown';
+        }
     }, { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
@@ -16,9 +24,13 @@ const DemoHostnameRow: React.FC = () => {
 };
 
 const DemoUptimeRow: React.FC = () => {
-    const val = useServerData<number>(async () =>
-        Math.round((globalThis as any).process?.uptime?.() ?? 0)
-    , { cache: false });
+    const val = useServerData<number>(async () => {
+        try {
+            return Math.round((globalThis as any).process?.uptime?.() ?? 0);
+        } catch {
+            return 0;
+        }
+    }, { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">Process uptime (s)</span>
@@ -28,9 +40,13 @@ const DemoUptimeRow: React.FC = () => {
 };
 
 const DemoEnvRow: React.FC = () => {
-    const val = useServerData<string>(async () =>
-        (globalThis as any).process?.env?.NODE_ENV ?? 'unknown'
-    , { cache: false });
+    const val = useServerData<string>(async () => {
+        try {
+            return (globalThis as any).process?.env?.NODE_ENV ?? 'unknown';
+        } catch {
+            return 'unknown';
+        }
+    }, { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">NODE_ENV</span>
@@ -40,9 +56,13 @@ const DemoEnvRow: React.FC = () => {
 };
 
 const DemoPlatformRow: React.FC = () => {
-    const val = useServerData<string>(async () =>
-        (globalThis as any).process?.platform ?? 'unknown'
-    , { cache: false });
+    const val = useServerData<string>(async () => {
+        try {
+            return (globalThis as any).process?.platform ?? 'unknown';
+        } catch {
+            return 'unknown';
+        }
+    }, { cache: false });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">Platform</span>
