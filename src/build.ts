@@ -5,6 +5,7 @@ import { getReactResponse } from "./utils/response";
 import { createClientCompiler, compileEntry, dropPhantomRemovals } from "./utils/rspack";
 import { serve, nodeReadableToWebStream } from "./utils/serve";
 import { tryServeFile, tryServeFileCached } from "./utils/staticFile";
+import { loadPostcssConfig } from "./utils/postcssConfig";
 import { isBun, isDeno, isNode } from "./utils/runtime";
 import { RspackDevServer } from "@rspack/dev-server";
 import pathMod from "node:path";
@@ -44,8 +45,15 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
 
     await ensureHadarsTmpDir();
 
-    // Cache by content hash — same template content → skip Tailwind re-scan on restart.
-    const sourceHash = crypto.createHash('md5').update(html).digest('hex').slice(0, 8);
+    // Load the config before the cache check so a broken one is reported on every
+    // start, not just the first. The expensive part (the Tailwind re-scan in
+    // `process()` below) is still skipped on a cache hit.
+    const { plugins, fingerprint } = await loadPostcssConfig();
+
+    // Cache by content hash — same template content and same PostCSS config →
+    // skip the Tailwind re-scan on restart.
+    const sourceHash = crypto.createHash('md5').update(html).update('\0').update(fingerprint)
+        .digest('hex').slice(0, 8);
     const cachedPath = pathMod.join(HADARS_TMP_DIR, `template-${sourceHash}.html`);
     try {
         await fs.access(cachedPath);
@@ -53,14 +61,6 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
     } catch { /* cache miss — process below */ }
 
     const { default: postcss } = await import('postcss');
-    let plugins: any[] = [];
-    try {
-        const { default: loadConfig } = await import('postcss-load-config' as any);
-        const config = await loadConfig({}, process.cwd());
-        plugins = (config as any).plugins ?? [];
-    } catch {
-        // No postcss config found — process without plugins (passthrough)
-    }
 
     let processedHtml = html;
     for (const { full, attrs, css } of matches) {
