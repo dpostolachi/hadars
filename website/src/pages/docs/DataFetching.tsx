@@ -3,55 +3,47 @@ import { HadarsHead } from 'hadars';
 import { useServerData } from 'hadars';
 import Code from '../../components/Code';
 import { Link } from 'react-router-dom';
+import { getHadarsRepoInfo, timeAgo } from '../../lib/githubRepo';
 
-const DemoHostnameRow: React.FC = () => {
-    const val = useServerData<string>(async () => {
-        // os.hostname() exists but its underlying op is sandboxed away on some
-        // edge runtimes (e.g. bunny.net's Deno isolate), where calling it
-        // throws rather than returning undefined — same as process.uptime()
-        // below.
-        try {
-            const os = await import('node:os');
-            return (os as any).hostname?.() ?? 'unknown';
-        } catch {
-            return 'unknown';
-        }
-    }, { cache: false });
+// Three independent components, each pulling a different field off this
+// repo's own GitHub metadata. getHadarsRepoInfo() caches/dedupes the
+// underlying requests (see lib/githubRepo.ts) so three rows don't mean
+// three GitHub calls.
+
+const DemoCommitRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => `${r.latestCommitSha ?? 'unknown'} · ${timeAgo(r.latestCommitDate)}`),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Hostname</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Latest commit</span>
             <span className="text-sm font-mono">{val ?? '—'}</span>
         </div>
     );
 };
 
-const DemoUptimeRow: React.FC = () => {
-    const val = useServerData<number>(async () => {
-        try {
-            return Math.round((globalThis as any).process?.uptime?.() ?? 0);
-        } catch {
-            return 0;
-        }
-    }, { cache: false });
+const DemoBranchRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => r.defaultBranch),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Process uptime</span>
-            <span className="text-sm font-mono">{val !== undefined ? `${val} s` : '—'}</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Default branch</span>
+            <span className="text-sm font-mono">{val ?? '—'}</span>
         </div>
     );
 };
 
-const DemoEnvRow: React.FC = () => {
-    const val = useServerData<string>(async () => {
-        try {
-            return (globalThis as any).process?.env?.NODE_ENV ?? 'unknown';
-        } catch {
-            return 'unknown';
-        }
-    }, { cache: false });
+const DemoReleaseRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => r.latestRelease ?? 'unreleased'),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">NODE_ENV</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Latest release</span>
             <span className="text-sm font-mono">{val ?? '—'}</span>
         </div>
     );
@@ -108,11 +100,11 @@ const UserCard = ({ userId }: { userId: string }) => {
                 By default, fetched values are kept in the client cache for the lifetime of the page session.
                 Pass <code className="text-sm bg-muted px-1.5 py-0.5 rounded">{'{ cache: false }'}</code> to evict the entry when the component unmounts,
                 so the next time it mounts it fetches fresh data from the server.
-                This is useful for live values like uptime, server stats, or anything that changes between visits.
+                This is useful for live values that change between visits — an upstream API response, a queue depth, anything time-sensitive.
             </p>
             <Code>{`
-const uptime = useServerData(
-    () => Math.round(process.uptime()),
+const latestCommit = useServerData(
+    () => fetchLatestCommit(),
     { cache: false },
 );
             `}</Code>
@@ -195,9 +187,9 @@ const WeatherWidget: React.FC = () => {
                         <span className="text-sm text-muted-foreground">fetching server data</span>
                     </div>
                 }>
-                    <DemoHostnameRow />
-                    <DemoUptimeRow />
-                    <DemoEnvRow />
+                    <DemoCommitRow />
+                    <DemoBranchRow />
+                    <DemoReleaseRow />
                 </React.Suspense>
             </div>
             <p className="text-xs text-muted-foreground mt-3 italic">

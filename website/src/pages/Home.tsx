@@ -5,33 +5,25 @@ import { useSuspenseQuery } from '@tanstack/react-query';
 import { useServerData, loadModule } from 'hadars';
 import Code from '../components/Code';
 import HadarsLogo from '../components/HadarsLogo';
+import { getHadarsRepoInfo, timeAgo } from '../lib/githubRepo';
 
 const LazyPanel = React.lazy(() => loadModule<{ default: React.FC }>('../LazyPanel'));
 
 // ── live demo components ──────────────────────────────────────────────────────
+// Both rows fetch this repo's own GitHub metadata — one live value to prove
+// the fetch really happened on the server, backed by a single shared/cached
+// request (see lib/githubRepo.ts) rather than one GitHub call per row.
 
-interface ProcessStats { pid: number; mem: number }
-
-const ServerStatsRow: React.FC = () => {
-    const stats = useServerData<ProcessStats>(async () => {
-        const proc = (globalThis as any).process;
-        // process.memoryUsage() exists but its underlying op is sandboxed away
-        // on some edge runtimes (e.g. bunny.net's Deno isolate), where calling
-        // it throws rather than returning undefined.
-        let rss = 0;
-        try {
-            rss = proc?.memoryUsage?.()?.rss ?? 0;
-        } catch {}
-        return {
-            pid: proc?.pid ?? 0,
-            mem: Math.round(rss / 1024 / 1024),
-        };
-    }, { cache: false });
+const LatestCommitRow: React.FC = () => {
+    const info = useServerData(
+        () => getHadarsRepoInfo(),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">useServerData</span>
             <span className="text-sm font-mono">
-                {stats ? `pid ${stats.pid} · ${stats.mem} MB RSS` : '—'}
+                {info ? `${info.latestCommitSha ?? 'unknown'} · ${timeAgo(info.latestCommitDate)}` : '—'}
             </span>
         </div>
     );
@@ -39,17 +31,16 @@ const ServerStatsRow: React.FC = () => {
 
 const SuspenseQueryRow: React.FC = () => {
     const { data } = useSuspenseQuery({
-        queryKey: ['weather'],
-        queryFn: async () => {
-            const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=53.5569&longitude=9.9946&current_weather=true');
-            return res.json();
-        },
+        queryKey: ['hadars-repo'],
+        queryFn: () => getHadarsRepoInfo(),
         staleTime: Infinity,
     });
     return (
         <div className="flex items-center gap-4 px-4 py-3">
             <span className="text-sm text-muted-foreground w-48 shrink-0">useSuspenseQuery</span>
-            <span className="text-sm font-mono">{data ? JSON.stringify((data as any).current_weather?.temperature) + ' °C' : '—'}</span>
+            <span className="text-sm font-mono">
+                latest release {data.latestRelease ?? 'unreleased'}
+            </span>
         </div>
     );
 };
@@ -227,7 +218,7 @@ export default App;
                 >
                     <DemoRow label="Server time">{serverTime}</DemoRow>
                     <DemoRow label="Runtime">{bunVersion}</DemoRow>
-                    <ServerStatsRow />
+                    <LatestCommitRow />
                     <React.Suspense fallback={<DemoRow label="useSuspenseQuery"><span className="text-muted-foreground">loading…</span></DemoRow>}>
                         <SuspenseQueryRow />
                     </React.Suspense>

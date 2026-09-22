@@ -115,15 +115,17 @@ test('bunny: GET / contains <div id="app"> with rendered content', async () => {
     expect(html).toContain('<script id="hadars" type="application/json">');
 });
 
-test('bunny: useServerData server_stats is in the serialised props', async () => {
+test('bunny: useServerData github_repo_info is in the serialised props', async () => {
     const res   = await handler(makeRequest('/'));
     const html  = await res.text();
     const props = extractProps(html);
+    // defaultBranch is always a string (falls back to 'main' if the GitHub
+    // API call fails) so this assertion doesn't depend on network access.
     const stats = Object.values(props.__serverData ?? {}).find(
-        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
-    ) as { pid: number; mem: number } | undefined;
+        (v: any) => typeof v?.defaultBranch === 'string' && 'latestCommitSha' in v,
+    ) as { defaultBranch: string } | undefined;
     expect(stats).toBeDefined();
-    expect(stats!.pid).toBeGreaterThan(0);
+    expect(stats!.defaultBranch.length).toBeGreaterThan(0);
 });
 
 test('bunny: getInitProps serverTime and bunVersion are present', async () => {
