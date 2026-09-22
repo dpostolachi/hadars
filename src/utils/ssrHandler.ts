@@ -141,10 +141,37 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     const primed = htmlFilePromise.then(html => {
         const headEnd = html.indexOf(HEAD_MARKER);
         const contentStart = html.indexOf(BODY_MARKER);
+        // Both markers are required.  Without this check `indexOf` returns -1 and
+        // the slices below silently produce a mangled shell — the head injected at
+        // the wrong offset, the last character dropped — which half-works and is
+        // far harder to diagnose than an outright failure.
+        const missing = [
+            headEnd === -1 ? HEAD_MARKER : null,
+            contentStart === -1 ? BODY_MARKER : null,
+        ].filter(Boolean);
+        if (missing.length > 0) {
+            throw new Error(
+                `[hadars] HTML template is missing required marker${missing.length > 1 ? 's' : ''} ` +
+                `${missing.join(' and ')}. The template must contain both: ${HEAD_MARKER} is ` +
+                `replaced with the <title>/<meta>/<link>/<style> tags, and ${BODY_MARKER} with ` +
+                `the SSR-rendered React tree.`,
+            );
+        }
+        if (contentStart < headEnd) {
+            throw new Error(
+                `[hadars] HTML template has ${BODY_MARKER} before ${HEAD_MARKER}. ` +
+                `${HEAD_MARKER} belongs in <head> and ${BODY_MARKER} in <body>.`,
+            );
+        }
         preHead = html.slice(0, headEnd);
         postHead = html.slice(headEnd + HEAD_MARKER.length, contentStart);
         postContent = html.slice(contentStart + BODY_MARKER.length);
     });
+
+    // Mark the rejection handled so a bad template does not surface as an
+    // unhandled rejection before the first request arrives.  `primed` itself
+    // still rejects, so the getter below propagates the error to its caller.
+    primed.catch(() => { });
 
     // Returns synchronously once the template has been loaded and parsed
     // (every request after the first).  Callers can check `instanceof Promise`
