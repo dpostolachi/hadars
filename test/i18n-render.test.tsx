@@ -24,12 +24,8 @@
  */
 
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
-GlobalRegistrator.register();
-// Silences React's "not configured to support act(...)" warning — this is
-// the documented flag for non-testing-library environments (see reactjs.org).
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { test, expect, describe, mock, beforeEach, afterEach } from 'bun:test';
+import { test, expect, describe, mock, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import React, { act, Suspense } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { LocaleProvider, useLocale, useTranslations } from '../src/i18n';
@@ -66,6 +62,26 @@ function installFetchMock(messages: MessageTree) {
 let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 let testCounter = 0;
+let originalFetch: typeof fetch;
+let originalActEnvironment: PropertyDescriptor | undefined;
+
+beforeAll(() => {
+    // Keep browser globals scoped to this suite so SSR tests still run server-side.
+    originalFetch = globalThis.fetch;
+    originalActEnvironment = Object.getOwnPropertyDescriptor(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
+    GlobalRegistrator.register();
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+});
+
+afterAll(async () => {
+    await GlobalRegistrator.unregister();
+    globalThis.fetch = originalFetch;
+    if (originalActEnvironment) {
+        Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', originalActEnvironment);
+    } else {
+        delete (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
+    }
+});
 
 beforeEach(() => {
     // A unique pathname per test avoids cross-test contamination of hadars'
@@ -80,6 +96,7 @@ afterEach(() => {
     if (container) container.remove();
     root = null;
     container = null;
+    globalThis.fetch = originalFetch;
 });
 
 async function mount(ui: React.ReactElement): Promise<void> {
