@@ -12,6 +12,14 @@ on:
           - minor
           - major
           - rc
+      resume_tag:
+        description: Existing tag to publish without bumping (e.g. v1.0.20)
+        required: false
+        type: string
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -26,6 +34,7 @@ jobs:
         with:
           # Default GITHUB_TOKEN has push access when contents: write is set
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ inputs.resume_tag || github.ref }}
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -35,6 +44,11 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Check npm authentication
+        run: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: bun install --ignore-scripts
@@ -49,11 +63,21 @@ jobs:
       # under the "next" dist-tag so it doesn't become the default install.
       - name: Bump version
         id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
+          RESUME_TAG: ${{ inputs.resume_tag }}
         run: |
-          if [ "${{ inputs.bump }}" = "rc" ]; then
+          if [ -n "$RESUME_TAG" ]; then
+            NEW_VERSION="v$(node -p 'require("./package.json").version')"
+            if [ "$RESUME_TAG" != "$NEW_VERSION" ] || \
+               [ "$(git rev-parse "refs/tags/${RESUME_TAG}^{commit}")" != "$(git rev-parse HEAD)" ]; then
+              echo "Resume tag must match the checked-out package version."
+              exit 1
+            fi
+          elif [ "$BUMP" = "rc" ]; then
             NEW_VERSION=$(npm version prerelease --preid=rc --no-git-tag-version)
           else
-            NEW_VERSION=$(npm version ${{ inputs.bump }} --no-git-tag-version)
+            NEW_VERSION=$(npm version "$BUMP" --no-git-tag-version)
           fi
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Bumped to $NEW_VERSION"
@@ -62,34 +86,39 @@ jobs:
         run: bun run build:all
 
       - name: Commit, tag, and push
+        if: inputs.resume_tag == ''
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
         run: |
           git add package.json
-          git commit -m "chore: release ${{ steps.bump.outputs.version }}"
-          git tag -a "${{ steps.bump.outputs.version }}" -m "Release ${{ steps.bump.outputs.version }}"
-          git push
-          git push --tags
+          git commit -m "chore: release $VERSION"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push --atomic origin "HEAD:refs/heads/$RELEASE_BRANCH" "refs/tags/$VERSION"
 
       - name: Publish to npm
         run: |
-          if [ "${{ inputs.bump }}" = "rc" ]; then
+          if [ "$VERSION" != "${VERSION%-*}" ]; then
             npm publish --ignore-scripts --provenance --access public --tag next
           else
             npm publish --ignore-scripts --provenance --access public
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          if [ "${{ inputs.bump }}" = "rc" ]; then
-            gh release create "${{ steps.bump.outputs.version }}" \
-              --title "RC ${{ steps.bump.outputs.version }}" \
+          if [ "$VERSION" != "${VERSION%-*}" ]; then
+            gh release create "$VERSION" --verify-tag \
+              --title "RC $VERSION" \
               --generate-notes \
               --prerelease
           else
-            gh release create "${{ steps.bump.outputs.version }}" \
-              --title "Release ${{ steps.bump.outputs.version }}" \
+            gh release create "$VERSION" --verify-tag \
+              --title "Release $VERSION" \
               --generate-notes
           fi
