@@ -453,31 +453,13 @@ const buildCompilerConfig = (
                 template: opts.htmlTemplate
                     ? pathMod.resolve(process.cwd(), opts.htmlTemplate)
                     : clientScriptPath,
+                // Modules download in parallel and execute after HTML parsing,
+                // when the streamed SSR markup and hydration props are available.
                 scriptLoading: 'module',
                 filename: 'out.html',
                 inject: 'head',
                 minify: opts.mode === 'production',
             }),
-            !isServerBuild && {
-                apply(compiler: any) {
-                    compiler.hooks.emit.tapAsync('HadarsAsyncModuleScript', (compilation: any, cb: () => void) => {
-                        const asset = compilation.assets['out.html'];
-                        if (asset) {
-                            const html: string = asset.source();
-                            const updated = html.replace(
-                                /(<script\b[^>]*\btype="module"[^>]*)(>)/g,
-                                (match, before: string, end: string) =>
-                                    before.includes('async') ? match : `${before} async${end}`,
-                            );
-                            compilation.assets['out.html'] = {
-                                source: () => updated,
-                                size:   () => Buffer.byteLength(updated),
-                            };
-                        }
-                        cb();
-                    });
-                },
-            },
             useReactRefresh && new ReactRefreshPlugin({
                 exclude: /node_modules/,
                 // Match the SWC transform's coverage exactly. The plugin's default

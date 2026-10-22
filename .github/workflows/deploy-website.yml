@@ -3,10 +3,9 @@ name: Deploy Website
 on:
   workflow_dispatch:
 
-# OIDC: allow the job to request a short-lived AWS token.
-permissions:
-  id-token: write
-  contents: read
+env:
+  BUNNY_API: "https://api.bunny.net"
+  BUNNY_STORAGE_HOST: "storage.bunnycdn.com"
 
 jobs:
   deploy:
@@ -31,52 +30,53 @@ jobs:
         run: npm install --ignore-scripts
         working-directory: website
 
-      - name: Bundle Lambda
-        # hadars export lambda internally runs `hadars build` then bundles
-        # into a self-contained ESM bundle with React and the hadars runtime
-        # inlined — no node_modules needed in the Lambda package.
-        run: bun node_modules/.bin/hadars export lambda lambda.mjs
+      - name: Bundle Bunny Edge Script
+        # export:bunny swaps in hadars.bunny.config.ts (baseURL pointing at
+        # static.hadars.xyz, no `port`) for the duration of the export, then
+        # runs `hadars export bunny`, which builds the app and produces a
+        # self-contained bunny.mjs — see scripts/export-bunny.sh.
+        run: bun run export:bunny
         working-directory: website
 
-      - name: Prepare Lambda staging directory
-        # CDK Code.fromAsset requires a directory, so copy the single-file
-        # bundle into a dedicated staging dir with no extra files.
-        run: mkdir -p website/lambda-deploy && cp website/lambda.mjs website/lambda-deploy/lambda.mjs
-
-      # ── AWS credentials (OIDC) ───────────────────────────────────────────────
-      # Prerequisites (one-time setup in your AWS account):
-      #   1. Create an OIDC provider for token.actions.githubusercontent.com
-      #   2. Create an IAM role with the following trust policy condition:
-      #        "token.actions.githubusercontent.com:sub": "repo:<owner>/<repo>:*"
-      #   3. Attach AdministratorAccess (or a scoped policy) to that role.
-      #   4. Add the role ARN as the AWS_ROLE_ARN secret in this repository.
+      # ── Deploy to bunny.net ──────────────────────────────────────────────────
+      # Prerequisites (one-time setup in the bunny.net dashboard):
+      #   1. Create a Storage Zone for static assets and a Pull Zone
+      #      (static.hadars.xyz) in front of it.
+      #   2. Create a Compute Script (Edge Platform → Scripting → Standalone
+      #      script) and note its Script ID and Deployment Key.
+      #   3. Point hadars.xyz's Pull Zone at the Compute Script.
       #
       # Required secrets:
-      #   AWS_ROLE_ARN  — IAM role ARN to assume via OIDC
-      - name: Configure AWS credentials
-        id: aws-creds
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+      #   BUNNY_STORAGE_USER, BUNNY_STORAGE_PASSWORD — Storage Zone SFTP creds
+      #   BUNNY_SCRIPT_ID, BUNNY_DEPLOY_KEY           — Compute Script creds
+      - name: Install deploy tools
+        run: sudo apt-get update && sudo apt-get install -y lftp jq
 
-      # ── CDK deploy ───────────────────────────────────────────────────────────
-      - name: Install CDK dependencies
-        run: bun install
-        working-directory: infra
-
-      - name: CDK Bootstrap
-        # Bootstrapping is idempotent — safe to run on every deploy.
-        # Account ID is resolved from the OIDC-assumed role, not a secret.
-        run: bunx cdk bootstrap aws://${{ steps.aws-creds.outputs.aws-account-id }}/us-east-1
-        working-directory: infra
+      - name: Upload static assets to Bunny Storage
+        run: |
+          lftp -u "$BUNNY_STORAGE_USER,$BUNNY_STORAGE_PASSWORD" sftp://$BUNNY_STORAGE_HOST -e "set sftp:auto-confirm yes; set net:max-retries 3; mirror -R --parallel=8 --no-perms --ignore-time ./.hadars/static /; mirror -R --parallel=8 --no-perms --ignore-time ./static /; bye"
+        working-directory: website
         env:
-          CDK_DEFAULT_ACCOUNT: ${{ steps.aws-creds.outputs.aws-account-id }}
-          CDK_DEFAULT_REGION: us-east-1
+          BUNNY_STORAGE_USER: ${{ secrets.BUNNY_STORAGE_USER }}
+          BUNNY_STORAGE_PASSWORD: ${{ secrets.BUNNY_STORAGE_PASSWORD }}
 
-      - name: CDK Deploy
-        run: bunx cdk deploy --require-approval never
-        working-directory: infra
+      - name: Upload edge script to Bunny
+        run: |
+          jq -n --rawfile code bunny.mjs '{Code: $code}' \
+            | curl -sf -X POST "${BUNNY_API}/compute/script/${BUNNY_SCRIPT_ID}/code" \
+                -H "DeploymentKey: ${BUNNY_DEPLOY_KEY}" \
+                -H "Content-Type: application/json" \
+                -d @-
+        working-directory: website
         env:
-          CDK_DEFAULT_ACCOUNT: ${{ steps.aws-creds.outputs.aws-account-id }}
-          CDK_DEFAULT_REGION: us-east-1
+          BUNNY_SCRIPT_ID: ${{ secrets.BUNNY_SCRIPT_ID }}
+          BUNNY_DEPLOY_KEY: ${{ secrets.BUNNY_DEPLOY_KEY }}
+
+      - name: Publish edge script
+        run: |
+          curl -sf -X POST "${BUNNY_API}/compute/script/${BUNNY_SCRIPT_ID}/publish" \
+            -H "DeploymentKey: ${BUNNY_DEPLOY_KEY}" \
+            -H "Content-Type: application/json"
+        env:
+          BUNNY_SCRIPT_ID: ${{ secrets.BUNNY_SCRIPT_ID }}
+          BUNNY_DEPLOY_KEY: ${{ secrets.BUNNY_DEPLOY_KEY }}

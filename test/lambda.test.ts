@@ -134,15 +134,17 @@ test('lambda: GET / contains <div id="app"> with rendered content', async () => 
     expect(result.body).toContain('<script id="hadars" type="application/json">');
 });
 
-test('lambda: useServerData server_stats is in the serialised props', async () => {
+test('lambda: useServerData github_repo_info is in the serialised props', async () => {
     const result = await handler(makeV2Event('/'));
     const props  = extractProps(result.body);
     // Keys are now auto-generated via useId() — find the entry by shape.
+    // defaultBranch is always a string (falls back to 'main' if the GitHub
+    // API call fails) so this assertion doesn't depend on network access.
     const stats = Object.values(props.__serverData ?? {}).find(
-        (v: any) => typeof v?.pid === 'number' && typeof v?.mem === 'number',
-    ) as { pid: number; mem: number } | undefined;
+        (v: any) => typeof v?.defaultBranch === 'string' && 'latestCommitSha' in v,
+    ) as { defaultBranch: string } | undefined;
     expect(stats).toBeDefined();
-    expect(stats!.pid).toBeGreaterThan(0);
+    expect(stats!.defaultBranch.length).toBeGreaterThan(0);
 });
 
 test('lambda: getInitProps serverTime and bunVersion are present', async () => {

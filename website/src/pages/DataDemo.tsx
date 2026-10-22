@@ -1,51 +1,59 @@
 import React from 'react';
 import { HadarsHead } from 'hadars';
 import { useServerData } from 'hadars';
+import { getHadarsRepoInfo, timeAgo } from '../lib/githubRepo';
 
-const DemoHostnameRow: React.FC = () => {
-    const val = useServerData<string>(async () => {
-        const os = await import('node:os');
-        return (os as any).hostname?.() ?? 'unknown';
-    }, { cache: false });
+// Four independent components, each pulling a different field off this repo's
+// own GitHub metadata. getHadarsRepoInfo() caches/dedupes the underlying
+// requests (see lib/githubRepo.ts) so four rows don't mean four GitHub calls.
+
+const DemoCommitRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => `${r.latestCommitSha ?? 'unknown'} · ${timeAgo(r.latestCommitDate)}`),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Hostname</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Latest commit</span>
             <span className="text-sm font-mono">{val ?? '—'}</span>
         </div>
     );
 };
 
-const DemoUptimeRow: React.FC = () => {
-    const val = useServerData<number>(async () =>
-        Math.round((globalThis as any).process?.uptime?.() ?? 0)
-    , { cache: false });
+const DemoCommitMessageRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => r.latestCommitMessage ?? 'unknown'),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Process uptime (s)</span>
-            <span className="text-sm font-mono">{val !== undefined ? `${val} s` : '—'}</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Commit message</span>
+            <span className="text-sm font-mono truncate">{val ?? '—'}</span>
         </div>
     );
 };
 
-const DemoEnvRow: React.FC = () => {
-    const val = useServerData<string>(async () =>
-        (globalThis as any).process?.env?.NODE_ENV ?? 'unknown'
-    , { cache: false });
+const DemoBranchRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => r.defaultBranch),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">NODE_ENV</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Default branch</span>
             <span className="text-sm font-mono">{val ?? '—'}</span>
         </div>
     );
 };
 
-const DemoPlatformRow: React.FC = () => {
-    const val = useServerData<string>(async () =>
-        (globalThis as any).process?.platform ?? 'unknown'
-    , { cache: false });
+const DemoReleaseRow: React.FC = () => {
+    const val = useServerData(
+        () => getHadarsRepoInfo().then(r => r.latestRelease ?? 'unreleased'),
+        { cache: false },
+    );
     return (
         <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Platform</span>
+            <span className="text-sm text-muted-foreground w-48 shrink-0">Latest release</span>
             <span className="text-sm font-mono">{val ?? '—'}</span>
         </div>
     );
@@ -138,10 +146,10 @@ const DataDemo: React.FC = () => {
                         </div>
                     }>
                         <ServerOnlySecretRow />
-                        <DemoHostnameRow />
-                        <DemoUptimeRow />
-                        <DemoEnvRow />
-                        <DemoPlatformRow />
+                        <DemoCommitRow />
+                        <DemoCommitMessageRow />
+                        <DemoBranchRow />
+                        <DemoReleaseRow />
                     </React.Suspense>
                 </div>
 

@@ -73,6 +73,37 @@ export function buildSsrResponse(
 }
 
 /**
+ * Like {@link buildSsrResponse} but for callers that have already finished
+ * rendering synchronously (e.g. a worker-thread render pool, where head and
+ * body come back fully-formed in a single postMessage) and so have no async
+ * work left to overlap. There's still a transport-level win from splitting
+ * the write: the head chunk reaches the socket — and the browser's preload
+ * scanner — before a potentially large body chunk finishes encoding and
+ * writing, instead of waiting for the whole document to buffer first.
+ */
+export function streamPrebuiltHtml(precontentHtml: string, rest: string, status: number): Response {
+    const stream = new ReadableStream({
+        async start(controller) {
+            try {
+                controller.enqueue(encoder.encode(precontentHtml));
+                // Yield so the runtime's HTTP writer flushes this chunk to the
+                // socket before the (often much larger) body chunk is queued.
+                await Promise.resolve();
+                controller.enqueue(encoder.encode(rest));
+                controller.close();
+            } catch (err) {
+                console.error('[hadars] SSR render error:', err);
+                controller.error(err);
+            }
+        },
+    });
+    return new Response(stream, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        status,
+    });
+}
+
+/**
  * Like {@link buildSsrResponse} but returns the complete HTML string directly
  * instead of wrapping it in a streaming Response. Use this in environments
  * where streaming is not beneficial (e.g. AWS Lambda) to avoid the
@@ -110,10 +141,37 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     const primed = htmlFilePromise.then(html => {
         const headEnd = html.indexOf(HEAD_MARKER);
         const contentStart = html.indexOf(BODY_MARKER);
+        // Both markers are required.  Without this check `indexOf` returns -1 and
+        // the slices below silently produce a mangled shell — the head injected at
+        // the wrong offset, the last character dropped — which half-works and is
+        // far harder to diagnose than an outright failure.
+        const missing = [
+            headEnd === -1 ? HEAD_MARKER : null,
+            contentStart === -1 ? BODY_MARKER : null,
+        ].filter(Boolean);
+        if (missing.length > 0) {
+            throw new Error(
+                `[hadars] HTML template is missing required marker${missing.length > 1 ? 's' : ''} ` +
+                `${missing.join(' and ')}. The template must contain both: ${HEAD_MARKER} is ` +
+                `replaced with the <title>/<meta>/<link>/<style> tags, and ${BODY_MARKER} with ` +
+                `the SSR-rendered React tree.`,
+            );
+        }
+        if (contentStart < headEnd) {
+            throw new Error(
+                `[hadars] HTML template has ${BODY_MARKER} before ${HEAD_MARKER}. ` +
+                `${HEAD_MARKER} belongs in <head> and ${BODY_MARKER} in <body>.`,
+            );
+        }
         preHead = html.slice(0, headEnd);
         postHead = html.slice(headEnd + HEAD_MARKER.length, contentStart);
         postContent = html.slice(contentStart + BODY_MARKER.length);
     });
+
+    // Mark the rejection handled so a bad template does not surface as an
+    // unhandled rejection before the first request arrives.  `primed` itself
+    // still rejects, so the getter below propagates the error to its caller.
+    primed.catch(() => { });
 
     // Returns synchronously once the template has been loaded and parsed
     // (every request after the first).  Callers can check `instanceof Promise`

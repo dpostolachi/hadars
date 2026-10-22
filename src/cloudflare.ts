@@ -23,8 +23,8 @@
 import React from 'react';
 import { parseRequest } from './utils/request';
 import { createProxyHandler } from './utils/proxyHandler';
-import { getReactResponse, buildHeadHtml } from './utils/response';
-import { buildSsrHtml, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
+import { getReactResponse } from './utils/response';
+import { buildSsrResponse, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
 import type { HadarsOptions, HadarsEntryModule, HadarsProps } from './types/hadars';
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -115,15 +115,11 @@ export function createCloudflareHandler(
                 });
             }
 
-            const bodyHtml = await getAppBody();
-            const { clientProps } = await finalize();
-            const headHtml = buildHeadHtml(head);
-            const html = await buildSsrHtml(bodyHtml, clientProps, headHtml, getPrecontentHtml, head.lang);
-
-            return new Response(html, {
-                status,
-                headers: { 'Content-Type': 'text/html; charset=utf-8' },
-            });
+            // Streams the head chunk ahead of the body — Cloudflare Workers
+            // support ReadableStream responses natively, so the browser can
+            // start requesting CSS/fonts/preloads referenced in <head> before
+            // a large body chunk finishes transferring.
+            return buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             options.onError?.(err, request)?.catch?.(() => {});
