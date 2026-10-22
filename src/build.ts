@@ -260,18 +260,29 @@ const SsrImportDir = `${HadarsFolder}/.ssr-modules`;
 const HADARS_TMP_DIR = pathMod.join(os.tmpdir(), 'hadars');
 const ensureHadarsTmpDir = () => fs.mkdir(HADARS_TMP_DIR, { recursive: true });
 
-const readReactMajor = async (): Promise<number> => {
+const readReactVersion = async (): Promise<string> => {
     let dir = process.cwd();
     while (true) {
         try {
             const pkgPath = pathMod.join(dir, 'node_modules', 'react', 'package.json');
             const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
-            return parseInt((pkg.version as string).split('.')[0]!, 10);
+            return pkg.version as string;
         } catch {}
         const parent = pathMod.dirname(dir);
-        if (parent === dir) return 19; // reached filesystem root without finding React
+        if (parent === dir) return '19.2.0'; // reached filesystem root without finding React
         dir = parent;
     }
+};
+
+// Compile-time constants that tell slim-react which React it must mirror.
+// The major alone is not enough: `useId` output changed format in 19.1 and
+// again in 19.2, so the SSR bundle needs the minor too.
+const reactDefines = async (): Promise<Record<string, string>> => {
+    const version = await readReactVersion();
+    return {
+        __HADARS_REACT_MAJOR__: String(parseInt(version.split('.')[0]!, 10)),
+        __HADARS_REACT_VERSION__: JSON.stringify(version),
+    };
 };
 
 const validateOptions = (options: HadarsRuntimeOptions) => {
@@ -779,8 +790,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     const workerCmd = resolveWorkerCmd(packageDir);
     console.log('Spawning SSR worker:', workerCmd.join(' '), 'entry:', entry);
 
-    const reactMajor = await readReactMajor();
-    const ssrDefine = { __HADARS_REACT_MAJOR__: String(reactMajor), ...options.define };
+    const ssrDefine = { ...(await reactDefines()), ...options.define };
 
     const child = spawn(workerCmd[0]!, [
         ...workerCmd.slice(1),
@@ -1085,7 +1095,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
     // Compile client and SSR bundles in parallel — they write to different
     // output directories and use different entry files, so they are fully
     // independent and safe to run concurrently.
-    const reactMajor = await readReactMajor();
+    const reactDefs = await reactDefines();
 
     console.log("Building client and server bundles in parallel...");
     await Promise.all([
@@ -1119,7 +1129,7 @@ export const build = async (options: HadarsRuntimeOptions) => {
             target: 'node',
             mode: 'production',
             swcPlugins: options.swcPlugins,
-            define: { __HADARS_REACT_MAJOR__: String(reactMajor), ...options.define },
+            define: { ...reactDefs, ...options.define },
             moduleRules: options.moduleRules,
             plugins: options.plugins,
             postcssPlugins: options.postcssPlugins,

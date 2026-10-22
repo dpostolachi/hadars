@@ -41,12 +41,22 @@ import { REACT_MAJOR, setReactVersion } from "../src/slim-react/renderContext";
 // Sync slim-react's version tracking to whichever React is installed.
 setReactVersion(parseInt(React.version.split('.')[0]!, 10), React.version);
 
-// Build version-aware ID pattern helpers so tests pass on both React 18 and 19.
-// React 18: :<prefix>R<treeId>:   React 19: _R_<prefix><treeId>_
+// Build version-aware ID pattern helpers so tests pass on every supported React.
+// React 18 / 19.0: :<prefix>R<treeId>:    React 19.1: «<prefix>R<treeId>»
+// React 19.2+:     _<prefix>R_<treeId>_
+const [reactMajor, reactMinor] = React.version.split('.').map(Number) as [number, number];
+const idStyle: 'colon' | 'guillemet' | 'underscore' =
+  reactMajor < 19 || (reactMajor === 19 && reactMinor === 0) ? 'colon'
+  : reactMajor === 19 && reactMinor === 1 ? 'guillemet'
+  : 'underscore';
 const idPrefix = (prefix: string) =>
-  REACT_MAJOR < 19 ? new RegExp(`^:${prefix}R`) : new RegExp(`^_R_${prefix}`);
+  idStyle === 'colon' ? new RegExp(`^:${prefix}R`)
+  : idStyle === 'guillemet' ? new RegExp(`^\u00ab${prefix}R`)
+  : new RegExp(`^_${prefix}R_`);
 const idPattern = () =>
-  REACT_MAJOR < 19 ? /for=":[^"]*".*:[^"]*:/s : /for="_R_[^"]*_".*_R_[^"]*_/s;
+  idStyle === 'colon' ? /for=":[^"]*".*:[^"]*:/s
+  : idStyle === 'guillemet' ? /for="\u00ab[^"]*\u00bb".*\u00ab[^"]*\u00bb/s
+  : /for="_R_[^"]*_".*_R_[^"]*_/s;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1115,7 +1125,7 @@ describe("compare: identifierPrefix", () => {
     const html2 = await slimRenderToString(<Comp /> as any);
     const ids2 = [...html2.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
     expect(ids2[0]).not.toMatch(idPrefix("pfx"));
-    expect(ids2[0]).toMatch(REACT_MAJOR < 19 ? /^:[^p]/ : /^_R_[^p]/);
+    expect(ids2[0]).toMatch(idStyle === 'colon' ? /^:[^p]/ : idStyle === 'guillemet' ? /^\u00ab[^p]/ : /^_R_[^p]/);
   });
 
   test("renderToStream identifierPrefix is embedded in generated IDs", async () => {

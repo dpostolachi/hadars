@@ -288,44 +288,68 @@ export function restoreContext(snap: ContextSnapshot): void {
  */
 function getTreeId(): string {
   const { id, overflow } = s().currentTreeContext;
-  if (id === 1) return overflow; // sentinel only → no local path segment
+  // Even when only the sentinel bit is set (a component with no siblings) React
+  // emits "0" — it strips the sentinel and always base-32 encodes the rest.
   const stripped = (id & ~(1 << (31 - Math.clz32(id)))).toString(32);
   return stripped + overflow;
 }
 
 declare const __HADARS_REACT_MAJOR__: string | number | undefined;
+declare const __HADARS_REACT_VERSION__: string | undefined;
 
-// Initialised from the compile-time rspack define when present (SSR bundles),
-// otherwise defaults to 19. Call setReactVersion() to override at runtime —
-// useful in tests and in environments where the define is not injected.
-export let REACT_MAJOR: number =
-  typeof __HADARS_REACT_MAJOR__ !== 'undefined'
-    ? parseInt(String(__HADARS_REACT_MAJOR__), 10)
-    : 19;
+// The `useId` format depends on the React minor, not just the major:
+//   React 18, 19.0 : `:<prefix>R<tree>[H<n>]:`
+//   React 19.1     : `«<prefix>R<tree>[H<n>]»`
+//   React 19.2+    : `_<prefix>R_<tree>[H<n>]_`
+// REACT_* are initialised from the compile-time rspack defines when present
+// (SSR bundles), otherwise default to the latest known format. Call
+// setReactVersion() to override at runtime — useful in tests and in
+// environments where the defines are not injected.
+const DEFAULT_REACT_VERSION = '19.2.0';
 
-export let REACT_VERSION: string = REACT_MAJOR < 19 ? '18.3.1' : '19.1.1';
+function parseVersion(version: string): [number, number] {
+  const [major, minor] = version.split('.');
+  return [parseInt(major!, 10) || 19, parseInt(minor ?? '0', 10) || 0];
+}
+
+function initialVersion(): string {
+  if (typeof __HADARS_REACT_VERSION__ !== 'undefined') return __HADARS_REACT_VERSION__;
+  if (typeof __HADARS_REACT_MAJOR__ !== 'undefined') {
+    // Older builds only defined the major; 18 and 19 each map to a known version.
+    return parseInt(String(__HADARS_REACT_MAJOR__), 10) < 19 ? '18.3.1' : DEFAULT_REACT_VERSION;
+  }
+  return DEFAULT_REACT_VERSION;
+}
+
+export let REACT_VERSION: string = initialVersion();
+export let REACT_MAJOR: number = parseVersion(REACT_VERSION)[0];
+export let REACT_MINOR: number = parseVersion(REACT_VERSION)[1];
 
 export function setReactVersion(major: number, version?: string): void {
-  REACT_MAJOR = major;
-  REACT_VERSION = version ?? (major < 19 ? '18.3.1' : '19.1.1');
+  REACT_VERSION = version ?? (major < 19 ? '18.3.1' : DEFAULT_REACT_VERSION);
+  [REACT_MAJOR, REACT_MINOR] = parseVersion(REACT_VERSION);
+  // An explicit major wins over a version string that disagrees with it.
+  if (REACT_MAJOR !== major) { REACT_MAJOR = major; REACT_MINOR = 0; }
 }
 
 /**
  * Generate a `useId`-compatible ID for the current call site.
  *
- * React 18 format : `:<idPrefix>R<treeId>:`  (colon-delimited)
- * React 19 format : `_R_<idPrefix><treeId>_` (underscore-delimited)
- *
  * The format must match what `hydrateRoot` produces on the client side so that
- * SSR-generated IDs agree with client React during hydration.
+ * SSR-generated IDs agree with client React during hydration (see the format
+ * table above). Note the 19.2+ format puts the identifier prefix *before*
+ * `R_`, unlike the earlier formats.
  */
 export function makeId(): string {
   const st = s();
   const treeId = getTreeId();
   const n = st.localIdCounter++;
-  const suffix = n > 0 ? "H" + n.toString(32) : "";
-  if (REACT_MAJOR < 19) {
-    return ":" + st.idPrefix + "R" + treeId + suffix + ":";
+  const body = treeId + (n > 0 ? "H" + n.toString(32) : "");
+  if (REACT_MAJOR < 19 || (REACT_MAJOR === 19 && REACT_MINOR === 0)) {
+    return ":" + st.idPrefix + "R" + body + ":";
   }
-  return "_R_" + st.idPrefix + treeId + suffix + "_";
+  if (REACT_MAJOR === 19 && REACT_MINOR === 1) {
+    return "\u00ab" + st.idPrefix + "R" + body + "\u00bb";
+  }
+  return "_" + st.idPrefix + "R_" + body + "_";
 }
