@@ -1,4 +1,4 @@
-import { SHARED_GLOBAL } from './moduleBuild';
+import { SHARED_GLOBAL } from './constants';
 
 /**
  * Called by the host before loading any module. Keys are package names

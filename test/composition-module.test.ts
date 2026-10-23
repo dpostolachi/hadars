@@ -6,7 +6,8 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import * as slimReact from '../src/slim-react/index';
 import * as slimJsx from '../src/slim-react/jsx-runtime';
-import { buildModule, provideShared, loadServerModule, loadClientModule, SHARED_GLOBAL, MODULES_GLOBAL } from '../src/composition';
+import { provideShared, loadServerModule, loadClientModule, registerModule, useModule, SHARED_GLOBAL, MODULES_GLOBAL } from '../src/composition';
+import { buildModule } from '../src/composition/build';
 
 const cwd = join(import.meta.dir, 'fixtures/composition-module');
 const out = mkdtempSync(join(tmpdir(), 'hadars-composition-'));
@@ -82,18 +83,18 @@ const fakeDoc = (onScript: (src: string) => void) => {
 test('loadClientModule loads stylesheets before scripts and returns the registered module', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
     const doc = fakeDoc((src) => { (globalThis as any)[MODULES_GLOBAL] = { m1: { src } }; });
-    const mod = await loadClientModule('m1', { js: ['m1.js'], css: ['m1.css'] }, '/w/m1', doc);
+    const mod = await loadClientModule('m1', '/w/m1', { js: ['m1.js'], css: ['m1.css'] }, doc);
     expect(doc.appended.map((e: any) => e.tag)).toEqual(['link', 'script']);
     expect(doc.appended[0].href).toBe('/w/m1/m1.css');
     expect(mod).toEqual({ src: '/w/m1/m1.js' });
     // second call reuses the registry
-    await loadClientModule('m1', { js: ['m1.js'], css: ['m1.css'] }, '/w/m1', doc);
+    await loadClientModule('m1', '/w/m1', { js: ['m1.js'], css: ['m1.css'] }, doc);
     expect(doc.appended.length).toBe(2);
 });
 
 test('loadClientModule rejects when the script does not register the module', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
-    await expect(loadClientModule('ghost', { js: ['g.js'], css: [] }, '/g', fakeDoc(() => {}))).rejects.toThrow('did not register');
+    await expect(loadClientModule('ghost', '/g', { js: ['g.js'], css: [] }, fakeDoc(() => {}))).rejects.toThrow('did not register');
 });
 
 test('the client bundle registers itself and uses the host React when executed', () => {
@@ -103,4 +104,10 @@ test('the client bundle registers itself and uses the host React when executed',
     const mod = sandbox[MODULES_GLOBAL].greeter;
     expect(mod.page.title).toBe('page');
     expect(typeof mod.greeting.Greeting).toBe('function');
+});
+
+test('useModule returns what was registered and explains when it was not', () => {
+    registerModule('x', { a: 1 });
+    expect(useModule<{ a: number }>('x')).toEqual({ a: 1 });
+    expect(() => useModule('missing')).toThrow('getInitProps');
 });

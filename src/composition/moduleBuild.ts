@@ -3,19 +3,9 @@ import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { CompositionOptions } from '../types/hadars';
 
+import { SHARED_GLOBAL, MODULES_GLOBAL, DEFAULT_SHARED, type TargetManifest } from './constants';
+
 type ModuleComposition = Extract<CompositionOptions, { role: 'module' }>;
-
-/** Where a host publishes the packages modules import instead of bundling. */
-export const SHARED_GLOBAL = '__HADARS_SHARED__';
-/** Where a client bundle registers its exports. */
-export const MODULES_GLOBAL = '__HADARS_MODULES__';
-
-export const DEFAULT_SHARED = ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime'];
-
-export interface TargetManifest {
-    js: string[];
-    css: string[];
-}
 
 export interface BuildModuleOptions {
     composition: ModuleComposition;
