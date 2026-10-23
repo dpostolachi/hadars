@@ -98,6 +98,12 @@ t('an edit no component boundary accepts falls back to a reload', async () => {
     await page.close();
 }, 60_000);
 
+t('the module dev server answers odd requests without going down', async () => {
+    expect((await fetch(dev!.url)).status).toBe(404);
+    expect((await fetch(`${dev!.url}..%2f..%2fetc/passwd`)).status).toBe(404);
+    expect((await fetch(`${dev!.url}manifest.json`)).status).toBe(200);
+});
+
 t('the server render serves the edited module on the next request', async () => {
     // The server bundle is rebuilt in the background, so give it a moment.
     let html = '';

@@ -8,6 +8,9 @@ import { SHARED_GLOBAL } from './constants';
  * resolves it, so both are the same module in the bundle.
  */
 export function shellDevSnippet(): string {
+    // ReactRefreshPlugin does not run under NODE_ENV=production, and the refresh runtime throws if
+    // loaded there. Read the variable indirectly so a bundler cannot constant-fold the check.
+    if (process.env['NODE' + '_ENV'] === 'production') return '';
     const fromPlugin = createRequire(createRequire(import.meta.url).resolve('@rspack/plugin-react-refresh'));
     const runtime = fromPlugin.resolve('react-refresh/runtime');
     return `

@@ -16,7 +16,7 @@ export const getInitProps = async () => {
 
 export const getClientProps = async (props: { moduleBase: string }) => {
     // Must finish before hydration so the first client render matches the server HTML.
-    registerModule('greeter', await loadClientModule('greeter', props.moduleBase));
+    registerModule('greeter', await loadClientModule('greeter', props.moduleBase, { crossOrigin: 'anonymous' }));
     return props;
 };
 

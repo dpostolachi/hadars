@@ -2,7 +2,7 @@ import { rspack } from '@rspack/core';
 import ReactRefreshPlugin from '@rspack/plugin-react-refresh';
 import http from 'node:http';
 import path from 'node:path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { MODULES_GLOBAL, type TargetManifest } from './constants';
 import { moduleConfig, writeBarrel, type BuildModuleOptions } from './moduleBuild';
@@ -64,7 +64,9 @@ export async function startModuleDev(opts: ModuleDevOptions): Promise<ModuleDev>
             return;
         }
         const file = path.join(clientDir, pathname);
-        if (pathname.includes('..') || !existsSync(file)) {
+        let isFile = false;
+        try { isFile = !pathname.includes('..') && statSync(file).isFile(); } catch {}
+        if (!isFile) {
             res.writeHead(404, cors).end('not found');
             return;
         }
@@ -72,7 +74,7 @@ export async function startModuleDev(opts: ModuleDevOptions): Promise<ModuleDev>
         res.end(readFileSync(file));
     });
     await new Promise<void>((r) => server.listen(opts.port ?? 0, '127.0.0.1', r));
-    const url = `http://localhost:${(server.address() as AddressInfo).port}/`;
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
 
     const barrel = writeBarrel({ ...opts, mode: 'development' });
     const hmrClient = path.join(outDir, `${name}.hmr-client.js`);

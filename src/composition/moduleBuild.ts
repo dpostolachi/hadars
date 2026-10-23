@@ -44,8 +44,23 @@ export interface ModuleConfigOptions extends BuildModuleOptions {
     refresh?: boolean;
 }
 
+const IDENT = /^[A-Za-z_$][\w$]*$/;
+const MODULE_NAME = /^[A-Za-z0-9][\w-]*$/;
+
+/** Rejects names that would produce broken file names, globals or generated exports. */
+export function validateModule({ name, exposes }: ModuleComposition): void {
+    if (!MODULE_NAME.test(name)) {
+        throw new Error(`Invalid module name "${name}": use letters, digits, "_" and "-" (it names files and a browser global).`);
+    }
+    if (Object.keys(exposes).length === 0) throw new Error(`Module "${name}" exposes nothing.`);
+    for (const key of Object.keys(exposes)) {
+        if (!IDENT.test(key)) throw new Error(`Invalid exposes key "${key}" in module "${name}": it must be a valid JavaScript identifier.`);
+    }
+}
+
 /** Writes the entry that exposes each file as a namespace and returns its path. */
 export function writeBarrel({ composition, cwd, outDir }: BuildModuleOptions): string {
+    validateModule(composition);
     // Each exposed file becomes a namespace export, so a host reads module[key].Export.
     mkdirSync(outDir, { recursive: true });
     const barrel = path.join(outDir, `${composition.name}.entry.js`);
@@ -99,6 +114,8 @@ export async function buildModule(opts: BuildModuleOptions): Promise<ModuleBuild
         output: {
             path: path.join(opts.outDir, 'client'),
             filename: '[name].js',
+            // Keeps the bundle's chunk-loading globals apart from other modules on the page.
+            uniqueName: `hadars-module-${name}`,
             library: { type: 'assign-properties', name: [MODULES_GLOBAL, name] },
         },
     } as any, name);

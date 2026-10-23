@@ -150,7 +150,10 @@ export type CompositionOptions =
     };
 
 export interface HadarsOptions {
-    /** @experimental Build as a composable module. */
+    /**
+     * @experimental Declares this project's role in a composition. Read by `hadars/composition`
+     * tooling and by `hadars dev` for a shell; the CLI does not build modules yet.
+     */
     composition?: CompositionOptions;
     port?: number;
     entry: string;
