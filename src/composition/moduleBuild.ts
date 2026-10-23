@@ -3,6 +3,8 @@ import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { CompositionOptions } from '../types/hadars';
 
+type ModuleComposition = Extract<CompositionOptions, { role: 'module' }>;
+
 /** Where a host publishes the packages modules import instead of bundling. */
 export const SHARED_GLOBAL = '__HADARS_SHARED__';
 /** Where a client bundle registers its exports. */
@@ -16,7 +18,7 @@ export interface TargetManifest {
 }
 
 export interface BuildModuleOptions {
-    composition: CompositionOptions;
+    composition: ModuleComposition;
     /** Project root; `exposes` paths resolve against it. */
     cwd: string;
     outDir: string;

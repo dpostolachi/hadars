@@ -120,25 +120,34 @@ export type StyleProps = StyleHTMLAttributes<HTMLStyleElement>;
 export type ScriptProps = ScriptHTMLAttributes<HTMLScriptElement>;
 
 /**
- * Builds this project as a module that is loaded into a host application
- * instead of as a standalone app. See `hadars/composition`.
+ * Composition role of this project. A `module` is built to be loaded into a
+ * host (see `buildModule` in `hadars/composition`); a `shell` is a normal
+ * hadars app that provides React and shared packages to modules and loads them.
  *
  * The host provides React and the packages listed in `shared` on
- * `globalThis.__HADARS_SHARED__`; the module never bundles its own copy.
+ * `globalThis.__HADARS_SHARED__` (see `provideShared`); a module never bundles
+ * its own copy.
  * @experimental
  */
-export interface CompositionOptions {
-    role: 'module';
-    /** Unique module name; also the key the client bundle registers under. */
-    name: string;
-    /** Namespace name -> source file, relative to the project root. A host reads `module[name].Export`. */
-    exposes: Record<string, string>;
-    /**
-     * Extra packages the host provides (React and its JSX runtimes are always
-     * shared). Importing one that the host does not provide fails at load time.
-     */
-    shared?: string[];
-}
+export type CompositionOptions =
+    | {
+        role: 'module';
+        /** Unique module name; also the key the client bundle registers under. */
+        name: string;
+        /** Namespace name -> source file, relative to the project root. A host reads `module[name].Export`. */
+        exposes: Record<string, string>;
+        /**
+         * Extra packages the host provides (React and its JSX runtimes are always
+         * shared). Importing one that the host does not provide fails at load time.
+         */
+        shared?: string[];
+    }
+    | {
+        role: 'shell';
+        name: string;
+        /** Packages this shell provides to modules, beyond React and its JSX runtimes. */
+        shared?: string[];
+    };
 
 export interface HadarsOptions {
     /** @experimental Build as a composable module. */
