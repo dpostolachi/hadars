@@ -5,6 +5,26 @@ on:
   pull_request:
 
 jobs:
+  # useId output must match react-dom byte for byte, and its format changed with
+  # the React minor (18/19.0, 19.1, 19.2+). Cheap, so it covers every format.
+  useid-parity:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react-version: ["18.3.1", "19.0.0", "19.1.1", "19.2.4"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --ignore-scripts
+      - name: Pin React ${{ matrix.react-version }}
+        run: bun add -d --exact react@${{ matrix.react-version }} react-dom@${{ matrix.react-version }}
+      - name: useId parity and slim-react render comparison
+        run: bun test test/useid-parity.test.tsx test/render-compare.test.tsx
+
   test:
     runs-on: ubuntu-latest
     strategy:
