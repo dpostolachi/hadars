@@ -119,7 +119,30 @@ export type LinkProps = LinkHTMLAttributes<HTMLLinkElement>;
 export type StyleProps = StyleHTMLAttributes<HTMLStyleElement>;
 export type ScriptProps = ScriptHTMLAttributes<HTMLScriptElement>;
 
+/**
+ * Builds this project as a module that is loaded into a host application
+ * instead of as a standalone app. See `hadars/composition`.
+ *
+ * The host provides React and the packages listed in `shared` on
+ * `globalThis.__HADARS_SHARED__`; the module never bundles its own copy.
+ * @experimental
+ */
+export interface CompositionOptions {
+    role: 'module';
+    /** Unique module name; also the key the client bundle registers under. */
+    name: string;
+    /** Namespace name -> source file, relative to the project root. A host reads `module[name].Export`. */
+    exposes: Record<string, string>;
+    /**
+     * Extra packages the host provides (React and its JSX runtimes are always
+     * shared). Importing one that the host does not provide fails at load time.
+     */
+    shared?: string[];
+}
+
 export interface HadarsOptions {
+    /** @experimental Build as a composable module. */
+    composition?: CompositionOptions;
     port?: number;
     entry: string;
     baseURL?: string;
