@@ -7,6 +7,7 @@ const moduleDir = process.env.MODULE_DIR ?? '';
 
 const config: HadarsOptions = {
     entry: 'src/App.tsx',
+    composition: { role: 'shell', name: 'shell' },
     port: Number(process.env.PORT ?? 4180),
     // Serves the module's client files; a real setup would point at a CDN.
     fetch: async (req) => {

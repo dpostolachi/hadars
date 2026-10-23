@@ -4,24 +4,35 @@ import { MODULES_GLOBAL, type TargetManifest } from './constants';
 // well as the server, so node builtins are imported lazily with webpackIgnore:
 // the web build leaves them alone and they only run on the server.
 
+const loadedAt = new Map<string, number>();
+
 /**
  * Server side: loads a built module's server bundle. The host must have called
  * `provideShared` first. `dir` is the target directory written by `buildModule`
  * (`<outDir>/server`).
+ *
+ * A bundle whose file changed since it was last loaded is evaluated again, so
+ * a dev rebuild shows up on the next request; an unchanged one stays cached.
  */
 export async function loadServerModule(dir: string): Promise<any> {
-    const [{ readFile }, { pathToFileURL }, path] = await Promise.all([
+    const [{ readFile, stat }, { createRequire }, path] = await Promise.all([
         import(/* webpackIgnore: true */ 'node:fs/promises'),
-        import(/* webpackIgnore: true */ 'node:url'),
+        import(/* webpackIgnore: true */ 'node:module'),
         import(/* webpackIgnore: true */ 'node:path'),
     ]);
     const manifestPath = path.join(dir, 'manifest.json');
     const manifest: TargetManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     const file = manifest.js[0];
     if (!file) throw new Error(`No server bundle listed in ${manifestPath}`);
-    const ns = await import(/* webpackIgnore: true */ pathToFileURL(path.join(dir, file)).href);
-    // CommonJS bundles surface as the default export under ESM interop.
-    return ns.default && typeof ns.default === 'object' ? ns.default : ns;
+    const full = path.join(dir, file);
+    const { mtimeMs } = await stat(full);
+    const req = createRequire(full);
+    // ESM import() would share CommonJS's cache, so evict it explicitly.
+    if (loadedAt.get(full) !== mtimeMs) {
+        delete req.cache[full];
+        loadedAt.set(full, mtimeMs);
+    }
+    return req(full);
 }
 
 /**
@@ -57,6 +68,8 @@ export async function loadClientModule(
     for (const f of manifest!.js) {
         const script = doc.createElement('script');
         script.src = url(f);
+        // Without this a cross-origin script's errors reach the page as an opaque "Script error."
+        script.crossOrigin = 'anonymous';
         await wait(script);
     }
     if (!registered()) throw new Error(`Module "${name}" did not register itself after loading`);

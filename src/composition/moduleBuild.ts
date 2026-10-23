@@ -38,27 +38,32 @@ const run = (config: Parameters<typeof rspack>[0], name: string): Promise<Target
         });
     });
 
-/**
- * Builds a module for both targets. Shared packages are externals resolved from
- * the host at load time, so one React instance serves the whole composition.
- * Writes `<outDir>/{client,server}/manifest.json` listing the files to load.
- */
-export async function buildModule({ composition, cwd, outDir, mode = 'production' }: BuildModuleOptions): Promise<ModuleBuildResult> {
-    const { name, exposes } = composition;
-    const externals = sharedExternals([...new Set([...DEFAULT_SHARED, ...(composition.shared ?? [])])]);
+export interface ModuleConfigOptions extends BuildModuleOptions {
+    target: 'web' | 'node';
+    /** Dev client only: emit Fast Refresh call sites and take the refresh runtime from the host. */
+    refresh?: boolean;
+}
+
+/** Writes the entry that exposes each file as a namespace and returns its path. */
+export function writeBarrel({ composition, cwd, outDir }: BuildModuleOptions): string {
     // Each exposed file becomes a namespace export, so a host reads module[key].Export.
     mkdirSync(outDir, { recursive: true });
-    const barrel = path.join(outDir, `${name}.entry.js`);
-    writeFileSync(barrel, Object.entries(exposes)
+    const barrel = path.join(outDir, `${composition.name}.entry.js`);
+    writeFileSync(barrel, Object.entries(composition.exposes)
         .map(([key, file]) => `export * as ${key} from ${JSON.stringify(path.resolve(cwd, file))};`).join('\n'));
+    return barrel;
+}
 
-    const base = (target: 'web' | 'node') => ({
+/** The rspack config shared by `buildModule` and the dev server; callers add output and entry. */
+export function moduleConfig(opts: ModuleConfigOptions) {
+    const { composition, cwd, mode = 'production', target, refresh = false } = opts;
+    const shared = [...DEFAULT_SHARED, ...(composition.shared ?? []), ...(refresh ? ['react-refresh/runtime'] : [])];
+    return {
         mode,
         devtool: false as const,
         context: cwd,
         target,
-        entry: { [name]: barrel },
-        externals,
+        externals: sharedExternals([...new Set(shared)]),
         resolve: { extensions: ['.tsx', '.ts', '.jsx', '.js'] },
         experiments: { css: true },
         module: {
@@ -71,30 +76,41 @@ export async function buildModule({ composition, cwd, outDir, mode = 'production
                     options: {
                         jsc: {
                             parser: { syntax: 'typescript', tsx: true },
-                            transform: { react: { runtime: 'automatic', development: mode === 'development' } },
+                            transform: { react: { runtime: 'automatic', development: refresh, refresh } },
                         },
                     },
                 },
             ],
         },
-    });
+    };
+}
 
+/**
+ * Builds a module for both targets. Shared packages are externals resolved from
+ * the host at load time, so one React instance serves the whole composition.
+ * Writes `<outDir>/{client,server}/manifest.json` listing the files to load.
+ */
+export async function buildModule(opts: BuildModuleOptions): Promise<ModuleBuildResult> {
+    const { name } = opts.composition;
+    const barrel = writeBarrel(opts);
     const client = await run({
-        ...base('web'),
+        ...moduleConfig({ ...opts, target: 'web' }),
+        entry: { [name]: barrel },
         output: {
-            path: path.join(outDir, 'client'),
+            path: path.join(opts.outDir, 'client'),
             filename: '[name].js',
             library: { type: 'assign-properties', name: [MODULES_GLOBAL, name] },
         },
     } as any, name);
     const server = await run({
-        ...base('node'),
-        output: { path: path.join(outDir, 'server'), filename: '[name].cjs', library: { type: 'commonjs2' } },
+        ...moduleConfig({ ...opts, target: 'node' }),
+        entry: { [name]: barrel },
+        output: { path: path.join(opts.outDir, 'server'), filename: '[name].cjs', library: { type: 'commonjs2' } },
     } as any, name);
 
     for (const [dir, manifest] of [['client', client], ['server', server]] as const) {
-        mkdirSync(path.join(outDir, dir), { recursive: true });
-        writeFileSync(path.join(outDir, dir, 'manifest.json'), JSON.stringify(manifest));
+        mkdirSync(path.join(opts.outDir, dir), { recursive: true });
+        writeFileSync(path.join(opts.outDir, dir, 'manifest.json'), JSON.stringify(manifest));
     }
     return { client, server };
 }

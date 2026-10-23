@@ -22,6 +22,7 @@ import {
     buildSsrResponse, streamPrebuiltHtml, makePrecontentHtmlGetter,
     type CacheFetchHandler, createRenderCache,
 } from './utils/ssrHandler';
+import { shellDevSnippet } from './composition/shellDev';
 import { runSources } from './source/runner';
 import { buildSchemaExecutor } from './source/inference';
 import { createGraphiqlHandler, GRAPHQL_PATH } from './source/graphiql';
@@ -408,6 +409,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         console.error("Failed to read client script from package dist, falling back to src", err);
         throw err;
     }
+    // A shell lets locally run modules hot-update through its refresh runtime.
+    if (options.composition?.role === 'shell') clientScript += shellDevSnippet();
 
     await ensureHadarsTmpDir();
     const tmpFilePath = pathMod.join(HADARS_TMP_DIR, `client-${Date.now()}.tsx`);

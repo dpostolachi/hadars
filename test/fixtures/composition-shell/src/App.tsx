@@ -1,20 +1,22 @@
 import * as React from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
+import * as jsxDevRuntime from 'react/jsx-dev-runtime';
 import { useState } from 'react';
 import { provideShared, registerModule, useModule, loadServerModule, loadClientModule } from 'hadars/composition';
 
 // What every module in the composition renders against. On the server `react`
 // resolves to the SSR renderer's React, in the browser to the real one.
-provideShared({ react: React, 'react/jsx-runtime': jsxRuntime });
+provideShared({ react: React, 'react/jsx-runtime': jsxRuntime, 'react/jsx-dev-runtime': jsxDevRuntime });
 
 export const getInitProps = async () => {
-    registerModule('greeter', await loadServerModule(`${process.env.MODULE_DIR}/server`));
-    return {};
+    registerModule('greeter', await loadServerModule(process.env.MODULE_SERVER_DIR ?? `${process.env.MODULE_DIR}/server`));
+    // A module run locally is loaded from its own dev server instead of the shell's origin.
+    return { moduleBase: process.env.MODULE_URL ?? '/w/greeter' };
 };
 
-export const getClientProps = async (props: object) => {
+export const getClientProps = async (props: { moduleBase: string }) => {
     // Must finish before hydration so the first client render matches the server HTML.
-    registerModule('greeter', await loadClientModule('greeter', '/w/greeter'));
+    registerModule('greeter', await loadClientModule('greeter', props.moduleBase));
     return props;
 };
 
