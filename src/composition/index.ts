@@ -3,5 +3,6 @@
 export { SHARED_GLOBAL, MODULES_GLOBAL, DEFAULT_SHARED } from './constants';
 export type { TargetManifest } from './constants';
 export { provideShared } from './provideShared';
-export { registerModule, useModule } from './registry';
+export { registerModule, getModule } from './registry';
 export { loadServerModule, loadClientModule } from './loadModule';
+export type { LoadClientModuleOptions } from './loadModule';

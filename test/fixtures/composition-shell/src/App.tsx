@@ -2,7 +2,7 @@ import * as React from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import * as jsxDevRuntime from 'react/jsx-dev-runtime';
 import { useState } from 'react';
-import { provideShared, registerModule, useModule, loadServerModule, loadClientModule } from 'hadars/composition';
+import { provideShared, registerModule, getModule, loadServerModule, loadClientModule } from 'hadars/composition';
 
 // What every module in the composition renders against. On the server `react`
 // resolves to the SSR renderer's React, in the browser to the real one.
@@ -21,7 +21,7 @@ export const getClientProps = async (props: { moduleBase: string }) => {
 };
 
 export default function App() {
-    const { greeting } = useModule('greeter');
+    const { greeting } = getModule('greeter');
     const [count, setCount] = useState(0);
     return (
         <div>

@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import * as slimReact from '../src/slim-react/index';
 import * as slimJsx from '../src/slim-react/jsx-runtime';
-import { provideShared, loadServerModule, loadClientModule, registerModule, useModule, SHARED_GLOBAL, MODULES_GLOBAL } from '../src/composition';
+import { provideShared, loadServerModule, loadClientModule, registerModule, getModule, SHARED_GLOBAL, MODULES_GLOBAL } from '../src/composition';
 import { buildModule } from '../src/composition/build';
 
 const cwd = join(import.meta.dir, 'fixtures/composition-module');
@@ -109,10 +109,10 @@ test('the client bundle registers itself and uses the host React when executed',
     expect(typeof mod.greeting.Greeting).toBe('function');
 });
 
-test('useModule returns what was registered and explains when it was not', () => {
+test('getModule returns what was registered and explains when it was not', () => {
     registerModule('x', { a: 1 });
-    expect(useModule<{ a: number }>('x')).toEqual({ a: 1 });
-    expect(() => useModule('missing')).toThrow('getInitProps');
+    expect(getModule<{ a: number }>('x')).toEqual({ a: 1 });
+    expect(() => getModule('missing')).toThrow('getInitProps');
 });
 
 test('buildModule rejects names and exposes keys that would generate broken output', async () => {
@@ -153,4 +153,21 @@ test('crossOrigin is only set when asked for', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
     await loadClientModule('co', '/co', { manifest: { js: ['c.js'], css: [] }, doc, crossOrigin: 'anonymous' });
     expect(seen).toEqual([undefined, 'anonymous']);
+});
+
+test('loadServerModule rides out a bundle caught half written', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hadars-composition-partial-'));
+    extraDirs.push(dir);
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ js: ['p.cjs'], css: [] }));
+    writeFileSync(join(dir, 'p.cjs'), 'module.exports = {');
+    setTimeout(() => writeFileSync(join(dir, 'p.cjs'), 'module.exports = { ok: true };'), 80);
+    expect(await loadServerModule(dir)).toEqual({ ok: true });
+});
+
+test('loadServerModule does not hide a real syntax error', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hadars-composition-broken-'));
+    extraDirs.push(dir);
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ js: ['b.cjs'], css: [] }));
+    writeFileSync(join(dir, 'b.cjs'), 'module.exports = {');
+    await expect(loadServerModule(dir)).rejects.toThrow();
 });

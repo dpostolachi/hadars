@@ -32,7 +32,23 @@ export async function loadServerModule(dir: string): Promise<any> {
         delete req.cache[full];
         loadedAt.set(full, mtimeMs);
     }
-    return req(full);
+    // A dev rebuild writes the file in place, so a request can catch it half written. That fails
+    // to parse (the error type differs by runtime) or the file changes under us; both clear on re-read.
+    let seen = mtimeMs;
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return req(full);
+        } catch (err: any) {
+            const now = (await stat(full)).mtimeMs;
+            const moved = now !== seen;
+            const parseError = ['SyntaxError', 'BuildMessage'].includes(err?.name) || /unexpected end|found end of file/i.test(String(err?.message));
+            if (attempt >= 4 || !(moved || parseError)) throw err;
+            seen = now;
+            delete req.cache[full];
+            loadedAt.set(full, now);
+            await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+        }
+    }
 }
 
 export interface LoadClientModuleOptions {

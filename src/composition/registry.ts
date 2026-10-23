@@ -9,8 +9,8 @@ export function registerModule(name: string, mod: unknown): void {
     modules.set(name, mod);
 }
 
-/** Returns a registered module; throws if it was not loaded before rendering. */
-export function useModule<T = any>(name: string): T {
+/** Returns a registered module; throws if it was not loaded before rendering. Not a hook: it may be called anywhere. */
+export function getModule<T = any>(name: string): T {
     if (!modules.has(name)) {
         throw new Error(`Module "${name}" is not loaded. Load and register it in getInitProps (server) and getClientProps (browser) before rendering.`);
     }
