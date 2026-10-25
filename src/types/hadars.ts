@@ -136,6 +136,8 @@ export type CompositionOptions =
         name: string;
         /** Namespace name -> source file, relative to the project root. A host reads `module[name].Export`. */
         exposes: Record<string, string>;
+        /** Shared package version ranges required from the pinned shell. */
+        requires?: Record<string, string>;
         /**
          * Extra packages the host provides (React and its JSX runtimes are always
          * shared). Importing one that the host does not provide fails at load time.
@@ -428,6 +430,8 @@ export type SwcPluginItem =
 export type SwcPluginList = SwcPluginItem[];
 
 export interface HadarsRequest extends Request {
+    /** Public pinned client metadata, available in local and bundled shells. */
+    pinnedClients?: Record<string, import('../composition/pinnedTypes').PinnedBuild['client']>;
     /** Resolved pinned builds, available in shell getInitProps during dev/run. */
     pinnedBuilds?: Record<string, import('../composition/pinnedTypes').PinnedBuild>;
     pathname: string;

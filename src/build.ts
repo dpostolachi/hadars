@@ -223,6 +223,7 @@ async function serializeRequest(req: any): Promise<SerializableRequest> {
         location: req.location,
         cookies: req.cookies,
         pinnedBuilds: req.pinnedBuilds,
+        pinnedClients: req.pinnedClients,
     };
 }
 
@@ -974,6 +975,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         (globalThis as any).__hadarsMarkPageServed?.();
         const request = parseRequest(req);
         request.pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, true) : undefined;
+        request.pinnedClients = request.pinnedBuilds ? Object.fromEntries(Object.values(request.pinnedBuilds).filter((b) => b.kind === 'module').map((b) => [b.name, b.client])) : undefined;
         if (request.pinnedBuilds) {
             const asset = await servePinnedAsset(req, request.pinnedBuilds);
             if (asset) return asset;
@@ -1319,6 +1321,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
     const runHandler: CacheFetchHandler = async (req, ctx) => {
         const request = parseRequest(req);
         request.pinnedBuilds = pinnedBuilds;
+        request.pinnedClients = request.pinnedBuilds ? Object.fromEntries(Object.values(request.pinnedBuilds).filter((b) => b.kind === 'module').map((b) => [b.name, b.client])) : undefined;
         if (request.pinnedBuilds) {
             const asset = await servePinnedAsset(req, request.pinnedBuilds);
             if (asset) return asset;

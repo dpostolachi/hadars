@@ -1,7 +1,9 @@
 import { rspack } from '@rspack/core';
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import type { CompositionOptions } from '../types/hadars';
+import type { CompositionOptions, HadarsOptions } from '../types/hadars';
+
+import { resolveModuleRequires } from './versions';
 
 import { SHARED_GLOBAL, MODULES_GLOBAL, DEFAULT_SHARED, type TargetManifest } from './constants';
 
@@ -13,6 +15,10 @@ export interface BuildModuleOptions {
     cwd: string;
     outDir: string;
     mode?: 'development' | 'production';
+    resolve?: { alias?: Record<string, string | false | string[]>; tsConfig?: string };
+    swcPlugins?: HadarsOptions['swcPlugins'];
+    /** Fill shared requirements with installed exact versions, or select explicit specifiers. */
+    inferRequires?: boolean | string[];
 }
 
 export interface ModuleBuildResult {
@@ -59,10 +65,12 @@ export function validateModule({ name, exposes }: ModuleComposition): void {
 }
 
 /** Writes the entry that exposes each file as a namespace and returns its path. */
-export function writeBarrel({ composition, cwd, outDir }: BuildModuleOptions): string {
+export function writeBarrel(opts: BuildModuleOptions): string {
+    const { composition, cwd, outDir } = opts;
     validateModule(composition);
     // Each exposed file becomes a namespace export, so a host reads module[key].Export.
     mkdirSync(outDir, { recursive: true });
+    writeFileSync(path.join(outDir, 'composition.json'), JSON.stringify({ requires: resolveModuleRequires(opts) }));
     const barrel = path.join(outDir, `${composition.name}.entry.js`);
     writeFileSync(barrel, Object.entries(composition.exposes)
         .map(([key, file]) => `export * as ${key} from ${JSON.stringify(path.resolve(cwd, file))};`).join('\n'));
@@ -79,7 +87,9 @@ export function moduleConfig(opts: ModuleConfigOptions) {
         context: cwd,
         target,
         externals: sharedExternals([...new Set(shared)]),
-        resolve: { extensions: ['.tsx', '.ts', '.jsx', '.js'] },
+        resolve: { extensions: ['.tsx', '.ts', '.jsx', '.js'],
+            alias: opts.resolve?.alias,
+            tsConfig: opts.resolve?.tsConfig ? path.resolve(cwd, opts.resolve.tsConfig) : undefined },
         experiments: { css: true },
         module: {
             rules: [
@@ -90,6 +100,14 @@ export function moduleConfig(opts: ModuleConfigOptions) {
                     loader: 'builtin:swc-loader',
                     options: {
                         jsc: {
+                            ...(opts.swcPlugins?.length ? { experimental: {
+                                runPluginFirst: true,
+                                cacheRoot: path.join(opts.outDir, '.swc'),
+                                plugins: opts.swcPlugins.map((plugin) => {
+                                    if (typeof plugin === 'function') throw new Error('Module SWC plugins must be WASM plugin paths or tuples; use a precompiled entry for function transforms.');
+                                    return typeof plugin === 'string' ? [plugin, {}] : Array.isArray(plugin) ? plugin : [plugin.path, plugin.options ?? {}];
+                                }),
+                            } } : {}),
                             parser: { syntax: 'typescript', tsx: true },
                             transform: { react: { runtime: 'automatic', development: refresh, refresh } },
                         },

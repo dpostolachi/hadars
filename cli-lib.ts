@@ -422,6 +422,13 @@ async function bundleBunny(
         process.exit(1)
     }
 
+    const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
+    const { assemblePinnedExport } = await import('./src/composition/build');
+    const pinnedClients = pinned ? await assemblePinnedExport({ ...pinned,
+        lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
+        integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined,
+    }, resolve(cwd, '.hadars/static')) : undefined;
+
     // 3. Write a temporary entry shim.
     //    The shim imports the SSR module + HTML template statically so esbuild
     //    can inline both, then calls BunnySDK.net.http.serve with the handler.
@@ -435,7 +442,7 @@ async function bundleBunny(
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createBunnyHandler } from ${JSON.stringify(bunnyModule)};`,
         `import config from ${JSON.stringify(configPath)};`,
-        `BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml }));`,
+        `BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml, pinnedClients: ${JSON.stringify(pinnedClients)} }));`,
     ].join('\n') + '\n'
     await writeFile(shimPath, shim, 'utf-8')
 
@@ -881,6 +888,30 @@ function usage(): void {
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
   const cmd = argv[2]
+
+  if (cmd === 'composition') {
+    const { createBuild, assembleLockfile, verifyLockfile } = await import('./src/composition/build');
+    const action = argv[3];
+    const input = argv[4];
+    const output = argv[5];
+    if (!input || !output) throw new Error('Usage: hadars composition <build spec.json manifest.json | lock spec.json lock.json | verify lock.json buildsDir>');
+    if (action === 'verify') {
+      await verifyLockfile({ lockFile: resolve(cwd, input), buildsDir: resolve(cwd, output) });
+      console.log('Composition verified');
+    } else if (action === 'build') {
+      const spec = JSON.parse(await readFile(resolve(cwd, input), 'utf8'));
+      const result = createBuild({ ...spec, sourceDir: resolve(cwd, spec.sourceDir), buildsDir: resolve(cwd, spec.buildsDir) });
+      await writeFile(resolve(cwd, output), JSON.stringify(result.manifest, null, 4) + '\n');
+    } else if (action === 'lock') {
+      const spec = JSON.parse(await readFile(resolve(cwd, input), 'utf8'));
+      const manifest = async (file: string) => JSON.parse(await readFile(resolve(cwd, file), 'utf8'));
+      const shell = await manifest(spec.shell);
+      const modules = await Promise.all((spec.modules ?? []).map(manifest));
+      const libraries = await Promise.all((spec.libraries ?? []).map(manifest));
+      await writeFile(resolve(cwd, output), JSON.stringify(assembleLockfile({ shell, modules, libraries }), null, 4) + '\n');
+    } else throw new Error(`Unknown composition command: ${action}`);
+    return;
+  }
 
   if (cmd === 'new') {
     const name = argv[3]

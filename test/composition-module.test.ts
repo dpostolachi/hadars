@@ -191,3 +191,35 @@ test('client loader encodes artifact paths without changing integrity map keys',
     expect(document.appended[0].src).toBe('/build/client/file%20%23.js');
     expect(document.appended[0].integrity).toBe('sha256-script');
 });
+
+test('runtime entry bundles for a non-Node target without filesystem references', async () => {
+    const { build } = await import('esbuild');
+    const result = await build({ entryPoints: [join(import.meta.dir, '../src/composition/runtime.ts')],
+        bundle: true, platform: 'browser', format: 'esm', write: false });
+    const code = result.outputFiles![0]!.text;
+    expect(code).not.toMatch(/node:|fs\/promises|require\(["'](?:fs|path)["']\)/);
+    expect(code).toContain('loadClientModule');
+});
+
+test('module builds resolve aliases, tsconfig paths and run an SWC plugin on both targets', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hadars-module-hooks-'));
+    extraDirs.push(dir);
+    writeFileSync(join(dir, 'value.ts'), 'export const value = 42;');
+    writeFileSync(join(dir, 'Query.graphql.ts'), 'export default { transformed: true };');
+    writeFileSync(join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@values/*': ['./*'] } } }));
+    writeFileSync(join(dir, 'entry.ts'), `import { value } from '@values/value';
+        import query from '@query'; export { value }; export const result = query;`);
+    writeFileSync(join(dir, 'query.ts'), 'export default graphql`query Query { viewer { id } }`;');
+    const output = join(dir, 'output');
+    await buildModule({ cwd: dir, outDir: output,
+        composition: { role: 'module', name: 'hooks', exposes: { main: 'entry.ts' } },
+        resolve: { alias: { '@query': join(dir, 'query.ts') }, tsConfig: 'tsconfig.json' },
+        swcPlugins: [[req.resolve('@swc/plugin-relay'), { language: 'typescript', eagerEsModules: true, rootDir: dir, artifactDirectory: dir }]],
+    });
+    const server = await loadServerModule(join(output, 'server'));
+    expect(server.main.value).toBe(42);
+    expect(server.main.result).toEqual({ transformed: true });
+    const sandbox: any = {}; sandbox.globalThis = sandbox;
+    vm.runInNewContext(readFileSync(join(output, 'client/hooks.js'), 'utf8'), sandbox);
+    expect(sandbox[MODULES_GLOBAL].hooks.main.result.transformed).toBe(true);
+});

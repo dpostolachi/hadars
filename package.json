@@ -52,13 +52,18 @@
       "types": "./dist/composition/dev.d.ts",
       "import": "./dist/composition/dev.js",
       "require": "./dist/composition/dev.cjs"
+    },
+    "./composition/runtime": {
+      "types": "./dist/composition/runtime.d.ts",
+      "import": "./dist/composition/runtime.js",
+      "require": "./dist/composition/runtime.cjs"
     }
   },
   "scripts": {
-    "build:lib": "tsup src/index.tsx src/lambda.ts src/cloudflare.ts src/bunny.ts src/composition/index.ts src/composition/build.ts src/composition/dev.ts src/slim-react/index.ts src/slim-react/jsx-runtime.ts --format esm,cjs --dts --out-dir dist --clean --external '@rspack/*' --external '@rspack/binding' --external '@rspack/core' --external '@rspack/plugin-react-refresh'",
+    "build:lib": "tsup src/index.tsx src/lambda.ts src/cloudflare.ts src/bunny.ts src/composition/runtime.ts src/composition/index.ts src/composition/build.ts src/composition/dev.ts src/slim-react/index.ts src/slim-react/jsx-runtime.ts --format esm,cjs --dts --out-dir dist --clean --external '@rspack/*' --external '@rspack/binding' --external '@rspack/core' --external '@rspack/plugin-react-refresh'",
     "build:cli": "bun build-scripts/build-cli.mjs",
     "build:all": "node build-scripts/build-all.mjs",
-    "test": "bun test --timeout 60000 test/bunny-response.test.ts && bun test --timeout 60000 test/bunny.test.ts && bun test --timeout 60000 test/composition-dev.e2e.test.ts && bun test --timeout 60000 test/composition-module.test.ts && bun test --timeout 60000 test/composition-pinned.e2e.test.ts && bun test --timeout 60000 test/composition-pinned.test.ts && bun test --timeout 60000 test/composition-shell.e2e.test.ts && bun test --timeout 60000 test/hmr.e2e.test.ts && bun test --timeout 60000 test/hot-update-noop.test.ts && bun test --timeout 60000 test/html-template-markers.test.ts && bun test --timeout 60000 test/i18n-parity.test.ts && bun test --timeout 60000 test/i18n-runtime.test.ts && bun test --timeout 60000 test/i18n.test.ts && bun test --timeout 60000 test/lambda.test.ts && bun test --timeout 60000 test/phantom-removal.test.ts && bun test --timeout 60000 test/postcss-config-load.test.ts && bun test --timeout 60000 test/source-context.test.ts && bun test --timeout 60000 test/source-graphiql.test.ts && bun test --timeout 60000 test/source-inference.test.ts && bun test --timeout 60000 test/source-runner.test.ts && bun test --timeout 60000 test/source-store.test.ts && bun test --timeout 60000 test/ssr.test.ts && bun test --timeout 60000 test/static.test.ts && bun test --timeout 60000 test/composition-integrity.test.tsx && bun test --timeout 60000 test/i18n-lang-attribute.test.tsx && bun test --timeout 60000 test/i18n-render.test.tsx && bun test --timeout 60000 test/render-compare.test.tsx && bun test --timeout 60000 test/useid-parity.test.tsx",
+    "test": "bun test --timeout 60000 test/bunny-response.test.ts && bun test --timeout 60000 test/bunny.test.ts && bun test --timeout 60000 test/composition-dev.e2e.test.ts && bun test --timeout 60000 test/composition-module.test.ts && bun test --timeout 60000 test/composition-tooling.test.ts && bun test --timeout 60000 test/composition-pinned.e2e.test.ts && bun test --timeout 60000 test/composition-pinned.test.ts && bun test --timeout 60000 test/composition-shell.e2e.test.ts && bun test --timeout 60000 test/hmr.e2e.test.ts && bun test --timeout 60000 test/hot-update-noop.test.ts && bun test --timeout 60000 test/html-template-markers.test.ts && bun test --timeout 60000 test/i18n-parity.test.ts && bun test --timeout 60000 test/i18n-runtime.test.ts && bun test --timeout 60000 test/i18n.test.ts && bun test --timeout 60000 test/lambda.test.ts && bun test --timeout 60000 test/phantom-removal.test.ts && bun test --timeout 60000 test/postcss-config-load.test.ts && bun test --timeout 60000 test/source-context.test.ts && bun test --timeout 60000 test/source-graphiql.test.ts && bun test --timeout 60000 test/source-inference.test.ts && bun test --timeout 60000 test/source-runner.test.ts && bun test --timeout 60000 test/source-store.test.ts && bun test --timeout 60000 test/ssr.test.ts && bun test --timeout 60000 test/static.test.ts && bun test --timeout 60000 test/composition-integrity.test.tsx && bun test --timeout 60000 test/i18n-lang-attribute.test.tsx && bun test --timeout 60000 test/i18n-render.test.tsx && bun test --timeout 60000 test/render-compare.test.tsx && bun test --timeout 60000 test/useid-parity.test.tsx",
     "prepare": "npm run build:all",
     "prepublishOnly": "npm run build:all"
   },
@@ -98,8 +103,10 @@
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^15.11.7",
+    "@swc/plugin-relay": "10.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/semver": "^7",
     "graphql": "^16.0.0",
     "playwright": "^1.48.0",
     "react": "^19.2.4",
@@ -111,7 +118,8 @@
     "esbuild": "^0.27.4",
     "postcss": "^8.5.8",
     "postcss-load-config": "^6.0.1",
-    "postcss-loader": "^8.2.1"
+    "postcss-loader": "^8.2.1",
+    "semver": "^7.7.2"
   },
   "overrides": {
     "js-yaml": "^4.1.1"

@@ -1,12 +1,11 @@
-import { createHash } from 'node:crypto';
+import { valid } from 'semver';
+import { assertVersionContracts } from './versions';
+import { hash, canonical, computeBuildId } from './identity';
 import { readFile, stat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { PinnedBuild, PinnedBuildsOptions } from './pinnedTypes';
 import { DEFAULT_SHARED, type TargetManifest } from './constants';
 
-const hash = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-const canonical = (value: unknown): string => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v)
-    ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v);
 const safe = (p: unknown): p is string => typeof p === 'string' && !!p && !/[\\\0]/.test(p) && !/^[A-Za-z]:/.test(p)
     && !p.split('/').some((s) => !s || s === '.' || s === '..');
 const record = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -54,29 +53,21 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             if (!m || m.kind !== kind || (pinName && m.name !== pinName) || !/^[A-Za-z0-9][\w-]*$/.test(m.name)
                 || m.buildId !== id || b.sha256 !== hash(canonical(m))) fail(name, 'manifest identity/checksum mismatch');
             if (result[m.name]) fail(name, 'duplicate build name');
-            if (m.runtimeContract !== '1' || !['production', 'dev'].includes(m.flavour) || (!dev && m.flavour !== 'production')) fail(name, 'incompatible runtime contract or flavour');
-            if (!strings(m.exposes) || !strings(m.shared) || !strings(m.provides) || !record(m.requires) || !Object.values(m.requires).every((v) => typeof v === 'string') || !Array.isArray(m.files)) fail(name, 'invalid manifest');
+            if (!['1', '2'].includes(m.runtimeContract) || !['production', 'dev'].includes(m.flavour) || (!dev && m.flavour !== 'production')) fail(name, 'incompatible runtime contract or flavour');
+            if (!strings(m.exposes) || !strings(m.shared) || !(m.runtimeContract === '1' ? strings(m.provides) : record(m.provides) && Object.values(m.provides).every((v) => typeof v === 'string' && valid(v))) || !record(m.requires) || !Object.values(m.requires).every((v) => typeof v === 'string') || !Array.isArray(m.files)) fail(name, 'invalid manifest');
             if (kind === 'module') {
                 if (!m.exposes.length || m.exposes.some((key: string) => !/^[A-Za-z_$][\w$]*$/.test(key))) fail(name, 'invalid exposed namespace');
+                assertVersionContracts(name, m.requires, shell?.provides ?? []);
                 if (m.flavour !== shell?.flavour) fail(name, 'flavour differs from the pinned shell');
-                const provided = new Set([...DEFAULT_SHARED, ...(shell?.provides ?? [])]);
+                const provided = new Set([...DEFAULT_SHARED, ...(Array.isArray(shell?.provides) ? shell.provides : Object.keys(shell?.provides ?? {}))]);
                 for (const pkg of m.shared) if (!provided.has(pkg)) fail(name, `shared package "${pkg}" is not provided by the pinned shell`);
             }
-            if (kind !== 'shell' && m.provides.length) fail(name, 'only a shell can provide shared packages');
+            if (kind !== 'shell' && Object.keys(m.provides).length) fail(name, 'only a shell can provide shared packages');
             if (m.types !== undefined && !strings(m.types)) fail(name, 'invalid declaration list');
             if (m.typeApi !== undefined && (!record(m.typeApi) || typeof m.typeApi.declarationsSha256 !== 'string' || !record(m.typeApi.exports)
                 || !Object.values(m.typeApi.exports).every((v) => record(v) && Object.values(v).every((s) => typeof s === 'string')))) fail(name, 'invalid declaration API metadata');
             // Match the content-derived build identity; optional declaration metadata participates when present.
-            const identity = {
-                ...(m.types?.length ? { types: [...m.types].sort() } : {}),
-                ...(m.typeApi ? { typeApi: { declarationsSha256: m.typeApi.declarationsSha256,
-                    exports: Object.fromEntries(Object.entries(m.typeApi.exports).sort().map(([ns, exports]) => [ns, Object.fromEntries(Object.entries(exports as object).sort())])) } } : {}),
-                kind: m.kind, name: m.name, runtimeContract: m.runtimeContract, flavour: m.flavour,
-                targets: { client: { js: m.targets.client.js, css: m.targets.client.css }, server: { js: m.targets.server.js, css: m.targets.server.css } },
-                exposes: [...m.exposes].sort(), shared: [...m.shared].sort(), provides: [...m.provides].sort(), requires: sorted(m.requires),
-                files: [...m.files].sort((a, b) => a.path.localeCompare(b.path)).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
-            };
-            if (hash(JSON.stringify(identity)).slice(0, 16) !== id) fail(name, 'content-derived build ID mismatch');
+            if (computeBuildId(m) !== id) fail(name, 'content-derived build ID mismatch');
             const dir = path.resolve(options.buildsDir, id);
             const files = new Set<string>();
             for (const f of m.files) {
@@ -122,6 +113,13 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
                 return target;
             } catch (e: any) { return fail(name, `cannot read local manifest in ${dir}: ${e.message}`); }
         };
+        let requires = lock.builds[s.modules[name]].manifest.requires;
+        try {
+            const metadata = JSON.parse(await readFile(path.join(override.serverDir, '..', 'composition.json'), 'utf8'));
+            if (!record(metadata.requires) || !Object.values(metadata.requires).every((v) => typeof v === 'string')) throw new Error('invalid requirements');
+            requires = metadata.requires;
+        } catch (err: any) { if (err.code !== 'ENOENT') fail(name, `cannot read local version contract: ${err.message}`); }
+        assertVersionContracts(name, requires, shell.provides);
         result[name] = { name, kind: 'module', server: { dir: path.resolve(override.serverDir), manifest: await readTarget(override.serverDir) },
             client: { baseUrl: override.clientUrl, manifest: await readTarget(path.join(override.serverDir, '..', 'client')) } };
     }

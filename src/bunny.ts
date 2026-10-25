@@ -27,6 +27,7 @@
  */
 
 import React from 'react';
+import type { PinnedBuild } from './composition/runtime';
 import { parseRequest } from './utils/request';
 import { createProxyHandler } from './utils/proxyHandler';
 import { getReactResponse } from './utils/response';
@@ -48,6 +49,8 @@ export interface BunnyBundled {
      * string when `hadars export bunny` runs.
      */
     outHtml: string;
+    /** Validated public client descriptors embedded at export time. */
+    pinnedClients?: Record<string, PinnedBuild['client']>;
 }
 
 // ── Handler factory ───────────────────────────────────────────────────────────
@@ -81,6 +84,7 @@ export function createBunnyHandler(
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
+        request.pinnedClients = bundled.pinnedClients;
 
         if (fetchHandler) {
             const res = await fetchHandler(request);

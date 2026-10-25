@@ -109,7 +109,7 @@ test('rejects nonexact pins, corrupted metadata, wrong kinds, unsupported contra
         if (mode === 'pin') f.lock.snapshot.modules.greeter = 'latest';
         if (mode === 'checksum') f.lock.builds[f.module.buildId].sha256 = '0'.repeat(64);
         if (mode === 'kind') f.module.kind = 'library';
-        if (mode === 'contract') f.module.runtimeContract = '2';
+        if (mode === 'contract') f.module.runtimeContract = '999';
         if (mode === 'integrity') writeFileSync(join(f.dir, 'integrity.json'), JSON.stringify({ [`${f.module.buildId}/client/main.js`]: 'sha256-wrong' }));
         f.save();
         await expect(resolvePinnedBuilds(f.options)).rejects.toThrow('Pinned build');
