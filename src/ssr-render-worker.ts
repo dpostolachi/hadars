@@ -33,13 +33,14 @@ export type SerializableRequest = {
     search: string;
     location: string;
     cookies: Record<string, string>;
+    pinnedBuilds?: import('./types/hadars').HadarsRequest['pinnedBuilds'];
 };
 
 function deserializeRequest(s: SerializableRequest): any {
     const init: RequestInit = { method: s.method, headers: new Headers(s.headers) };
     if (s.body) init.body = s.body.buffer as ArrayBuffer;
     const req = new Request(s.url, init);
-    Object.assign(req, { pathname: s.pathname, search: s.search, location: s.location, cookies: s.cookies });
+    Object.assign(req, { pathname: s.pathname, search: s.search, location: s.location, cookies: s.cookies, pinnedBuilds: s.pinnedBuilds });
     return req;
 }
 

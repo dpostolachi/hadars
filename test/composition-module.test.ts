@@ -85,19 +85,19 @@ const fakeDoc = (onScript: (src: string) => void) => {
 
 test('loadClientModule loads stylesheets before scripts and returns the registered module', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
-    const doc = fakeDoc((src) => { (globalThis as any)[MODULES_GLOBAL] = { m1: { src } }; });
-    const mod = await loadClientModule('m1', '/w/m1', { manifest: { js: ['m1.js'], css: ['m1.css'] }, doc });
-    expect(doc.appended.map((e: any) => e.tag)).toEqual(['link', 'script']);
-    expect(doc.appended[0].href).toBe('/w/m1/m1.css');
+    const document = fakeDoc((src) => { (globalThis as any)[MODULES_GLOBAL] = { m1: { src } }; });
+    const mod = await loadClientModule('m1', '/w/m1', { manifest: { js: ['m1.js'], css: ['m1.css'] }, document });
+    expect(document.appended.map((e: any) => e.tag)).toEqual(['link', 'script']);
+    expect(document.appended[0].href).toBe('/w/m1/m1.css');
     expect(mod).toEqual({ src: '/w/m1/m1.js' });
     // second call reuses the registry
-    await loadClientModule('m1', '/w/m1', { manifest: { js: ['m1.js'], css: ['m1.css'] }, doc });
-    expect(doc.appended.length).toBe(2);
+    await loadClientModule('m1', '/w/m1', { manifest: { js: ['m1.js'], css: ['m1.css'] }, document });
+    expect(document.appended.length).toBe(2);
 });
 
 test('loadClientModule rejects when the script does not register the module', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
-    await expect(loadClientModule('ghost', '/g', { manifest: { js: ['g.js'], css: [] }, doc: fakeDoc(() => {}) })).rejects.toThrow('did not register');
+    await expect(loadClientModule('ghost', '/g', { manifest: { js: ['g.js'], css: [] }, document: fakeDoc(() => {}) })).rejects.toThrow('did not register');
 });
 
 test('the client bundle registers itself and uses the host React when executed', () => {
@@ -125,8 +125,8 @@ test('buildModule rejects names and exposes keys that would generate broken outp
 test('loadClientModule runs a module once when called concurrently', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
     let scripts = 0;
-    const doc = fakeDoc((src) => { scripts++; (globalThis as any)[MODULES_GLOBAL] = { dup: { src } }; });
-    const opts = { manifest: { js: ['d.js'], css: [] }, doc };
+    const document = fakeDoc((src) => { scripts++; (globalThis as any)[MODULES_GLOBAL] = { dup: { src } }; });
+    const opts = { manifest: { js: ['d.js'], css: [] }, document };
     const [a, b] = await Promise.all([loadClientModule('dup', '/d', opts), loadClientModule('dup', '/d', opts)]);
     expect(scripts).toBe(1);
     expect(a).toBe(b);
@@ -137,7 +137,7 @@ test('loadClientModule explains a missing manifest', async () => {
     const original = globalThis.fetch;
     (globalThis as any).fetch = async () => new Response('nope', { status: 404 });
     try {
-        await expect(loadClientModule('gone', '/gone', { doc: fakeDoc(() => {}) })).rejects.toThrow('Could not load the manifest for module "gone" (404');
+        await expect(loadClientModule('gone', '/gone', { document: fakeDoc(() => {}) })).rejects.toThrow('Could not load the manifest for module "gone" (404');
     } finally {
         globalThis.fetch = original;
     }
@@ -146,12 +146,12 @@ test('loadClientModule explains a missing manifest', async () => {
 test('crossOrigin is only set when asked for', async () => {
     delete (globalThis as any)[MODULES_GLOBAL];
     const seen: any[] = [];
-    const doc = fakeDoc((src) => { (globalThis as any)[MODULES_GLOBAL] = { co: {} }; });
-    const append = doc.head.appendChild;
-    doc.head.appendChild = (el: any) => { seen.push(el.crossOrigin); return append(el); };
-    await loadClientModule('co', '/co', { manifest: { js: ['c.js'], css: [] }, doc });
+    const document = fakeDoc((src) => { (globalThis as any)[MODULES_GLOBAL] = { co: {} }; });
+    const append = document.head.appendChild;
+    document.head.appendChild = (el: any) => { seen.push(el.crossOrigin); return append(el); };
+    await loadClientModule('co', '/co', { manifest: { js: ['c.js'], css: [] }, document });
     delete (globalThis as any)[MODULES_GLOBAL];
-    await loadClientModule('co', '/co', { manifest: { js: ['c.js'], css: [] }, doc, crossOrigin: 'anonymous' });
+    await loadClientModule('co', '/co', { manifest: { js: ['c.js'], css: [] }, document, crossOrigin: 'anonymous' });
     expect(seen).toEqual([undefined, 'anonymous']);
 });
 
@@ -170,4 +170,24 @@ test('loadServerModule does not hide a real syntax error', async () => {
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ js: ['b.cjs'], css: [] }));
     writeFileSync(join(dir, 'b.cjs'), 'module.exports = {');
     await expect(loadServerModule(dir)).rejects.toThrow();
+});
+
+test('client loader applies SRI to scripts and styles only for mapped files', async () => {
+    delete (globalThis as any)[MODULES_GLOBAL];
+    const document = fakeDoc(() => { (globalThis as any)[MODULES_GLOBAL] = { sri: {} }; });
+    await loadClientModule('sri', '/build', { manifest: { js: ['signed.js', 'plain.js'], css: ['signed.css', 'plain.css'] },
+        integrity: { 'signed.js': 'sha256-script', 'signed.css': 'sha256-style' }, document });
+    expect(document.appended.map((el: any) => [el.integrity, el.crossOrigin])).toEqual([
+        ['sha256-style', 'anonymous'], [undefined, undefined], ['sha256-script', 'anonymous'], [undefined, undefined],
+    ]);
+});
+
+
+test('client loader encodes artifact paths without changing integrity map keys', async () => {
+    delete (globalThis as any)[MODULES_GLOBAL];
+    const document = fakeDoc(() => { (globalThis as any)[MODULES_GLOBAL] = { encoded: {} }; });
+    await loadClientModule('encoded', '/build', { manifest: { js: ['client/file #.js'], css: [] },
+        integrity: { 'client/file #.js': 'sha256-script' }, document });
+    expect(document.appended[0].src).toBe('/build/client/file%20%23.js');
+    expect(document.appended[0].integrity).toBe('sha256-script');
 });

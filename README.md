@@ -758,6 +758,25 @@ BunnySDK.net.http.serve(createBunnyHandler(config, { ssrModule, outHtml }));
 
 The returned handler is a plain `(request: Request) => Promise<Response>` function — compatible with any Web API environment, not just bunny.net. Static assets must be served separately (bunny.net Storage + pull zone).
 
+### Response hook
+
+Set `onResponse` in `hadars.config.ts` to adjust every response returned by the Bunny handler, including cached responses and SSR error responses. The generated export passes this option through without rewriting the output file:
+
+```ts
+onResponse: (response, request, startedAt) => {
+    const headers = new Headers(response.headers);
+    headers.set('cache-control', 'private, no-store');
+    headers.set('server-timing', `app;dur=${(performance.now() - startedAt).toFixed(2)}`);
+    return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+    });
+},
+```
+
+The hook is awaited. It may return a replacement response, or mutate a response with writable headers and return nothing. `startedAt` is measured with `performance.now()` before the handler runs. The hook runs after the render cache, so each request can get its own headers. A thrown hook error rejects the handler; errors thrown by custom fetch/proxy handlers also propagate as before. Other adapters do not currently call this hook.
+
 ### Local development with Deno
 
 ```bash
@@ -767,6 +786,10 @@ hadars dev
 # Test the bundled edge script locally
 hadars export bunny && deno run -A bunny.mjs
 ```
+
+## Experimental composition
+
+Modules can be built independently and loaded by a shell using the shell's React and shared packages. A shell can also consume exact builds from a local lock file, without module source trees. See [composition and pinned builds](docs/composition.md) for configuration, SSR, browser loading, integrity, and local overrides.
 
 ## slim-react
 

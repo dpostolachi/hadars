@@ -14,14 +14,15 @@ const loadedAt = new Map<string, number>();
  * A bundle whose file changed since it was last loaded is evaluated again, so
  * a dev rebuild shows up on the next request; an unchanged one stays cached.
  */
-export async function loadServerModule(dir: string): Promise<any> {
+export async function loadServerModule(source: string | { dir: string; manifest: TargetManifest }): Promise<any> {
     const [{ readFile, stat }, { createRequire }, path] = await Promise.all([
         import(/* webpackIgnore: true */ 'node:fs/promises'),
         import(/* webpackIgnore: true */ 'node:module'),
         import(/* webpackIgnore: true */ 'node:path'),
     ]);
+    const dir = typeof source === 'string' ? source : source.dir;
     const manifestPath = path.join(dir, 'manifest.json');
-    const manifest: TargetManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const manifest: TargetManifest = typeof source === 'string' ? JSON.parse(await readFile(manifestPath, 'utf8')) : source.manifest;
     const file = manifest.js[0];
     if (!file) throw new Error(`No server bundle listed in ${manifestPath}`);
     const full = path.join(dir, file);
@@ -54,13 +55,15 @@ export async function loadServerModule(dir: string): Promise<any> {
 export interface LoadClientModuleOptions {
     /** The module's file lists; read from `<baseUrl>/manifest.json` when omitted (one extra round trip). */
     manifest?: TargetManifest;
+    /** File paths relative to baseUrl mapped to SRI values. */
+    integrity?: Record<string, string>;
     /**
      * Sets `crossorigin` on the module's scripts so their errors are readable instead of an opaque
      * "Script error.". The origin must then send CORS headers, so it is off by default.
      */
     crossOrigin?: 'anonymous' | 'use-credentials';
     /** Defaults to the global `document`. */
-    doc?: Document;
+    document?: Document;
 }
 
 const inFlight = new Map<string, Promise<any>>();
@@ -87,8 +90,8 @@ export function loadClientModule(name: string, baseUrl: string, options: LoadCli
     return pending;
 }
 
-async function load(name: string, baseUrl: string, { manifest, crossOrigin, doc = (globalThis as any).document }: LoadClientModuleOptions) {
-    const url = (f: string) => baseUrl.replace(/\/?$/, '/') + f;
+async function load(name: string, baseUrl: string, { manifest, integrity, crossOrigin, document = (globalThis as any).document }: LoadClientModuleOptions) {
+    const url = (f: string) => baseUrl.replace(/\/?$/, '/') + f.split('/').map(encodeURIComponent).join('/');
     if (!manifest) {
         const res = await fetch(url('manifest.json'));
         if (!res.ok) throw new Error(`Could not load the manifest for module "${name}" (${res.status} ${url('manifest.json')})`);
@@ -97,20 +100,22 @@ async function load(name: string, baseUrl: string, { manifest, crossOrigin, doc 
     const wait = (el: HTMLElement) => new Promise<void>((resolve, reject) => {
         el.addEventListener('load', () => resolve());
         el.addEventListener('error', () => reject(new Error(`Failed to load ${(el as any).href ?? (el as any).src}`)));
-        doc.head.appendChild(el);
+        document.head.appendChild(el);
     });
     const { css, js } = manifest;
     await Promise.all(css.map((f) => {
-        if (doc.querySelector(`link[href="${url(f)}"]`)) return;
-        const link = doc.createElement('link');
+        if (document.querySelector(`link[href="${url(f)}"]`)) return;
+        const link = document.createElement('link');
         link.rel = 'stylesheet';
         link.href = url(f);
+        if (integrity?.[f]) { link.integrity = integrity[f]; link.crossOrigin = crossOrigin ?? 'anonymous'; }
         return wait(link);
     }));
     for (const f of js) {
-        const script = doc.createElement('script');
+        const script = document.createElement('script');
         script.src = url(f);
-        if (crossOrigin) script.crossOrigin = crossOrigin;
+        if (integrity?.[f]) script.integrity = integrity[f];
+        if (crossOrigin || integrity?.[f]) script.crossOrigin = crossOrigin ?? 'anonymous';
         await wait(script);
     }
 }

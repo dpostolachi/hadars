@@ -6,3 +6,5 @@ export { provideShared } from './provideShared';
 export { registerModule, getModule } from './registry';
 export { loadServerModule, loadClientModule } from './loadModule';
 export type { LoadClientModuleOptions } from './loadModule';
+export { ModuleHead } from './ModuleHead';
+export type { PinnedBuildsOptions, PinnedBuild } from './pinnedTypes';

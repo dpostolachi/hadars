@@ -7,14 +7,14 @@ import type { AddressInfo } from 'node:net';
 import { MODULES_GLOBAL, type TargetManifest } from './constants';
 import { moduleConfig, writeBarrel, type BuildModuleOptions } from './moduleBuild';
 
-export interface ModuleDevOptions extends Omit<BuildModuleOptions, 'mode'> {
+export interface ModuleDevServerOptions extends Omit<BuildModuleOptions, 'mode'> {
     /** Port for the module's dev server; 0 picks a free one. */
     port?: number;
 }
 
-export interface ModuleDev {
+export interface ModuleDevServer {
     /** Origin the shell loads the client bundle from (also the `publicPath`). */
-    url: string;
+    clientUrl: string;
     /** Directory for `loadServerModule`; rebuilt on every change. */
     serverDir: string;
     /** Number of completed client rebuilds. */
@@ -42,10 +42,10 @@ const MIME: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/c
  * Runs a module the way a developer works on it locally: rebuilds on every
  * change, hot-updates the client bundle (including React Fast Refresh) and
  * keeps the server bundle current. The shell (a dev build, which publishes the
- * refresh runtime) loads the client bundle from `url` and the server bundle
+ * refresh runtime) loads the client bundle from `clientUrl` and the server bundle
  * from `serverDir`.
  */
-export async function startModuleDev(opts: ModuleDevOptions): Promise<ModuleDev> {
+export async function startModuleDevServer(opts: ModuleDevServerOptions): Promise<ModuleDevServer> {
     const { composition, outDir } = opts;
     const { name } = composition;
     const clientDir = path.join(outDir, 'client');
@@ -74,7 +74,7 @@ export async function startModuleDev(opts: ModuleDevOptions): Promise<ModuleDev>
         res.end(readFileSync(file));
     });
     await new Promise<void>((r) => server.listen(opts.port ?? 0, '127.0.0.1', r));
-    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const clientUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
 
     const barrel = writeBarrel({ ...opts, mode: 'development' });
     const hmrClient = path.join(outDir, `${name}.hmr-client.js`);
@@ -85,7 +85,7 @@ export async function startModuleDev(opts: ModuleDevOptions): Promise<ModuleDev>
         entry: { [name]: [hmrClient, barrel] },
         output: {
             path: clientDir,
-            publicPath: url,
+            publicPath: clientUrl,
             filename: '[name].js',
             uniqueName: `hadars-module-${name}`,
             library: { type: 'assign-properties', name: [MODULES_GLOBAL, name] },
@@ -136,7 +136,7 @@ export async function startModuleDev(opts: ModuleDevOptions): Promise<ModuleDev>
     ]);
 
     return {
-        url,
+        clientUrl,
         serverDir,
         get builds() { return builds; },
         async close() {

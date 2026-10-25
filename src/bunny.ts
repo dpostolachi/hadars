@@ -132,6 +132,8 @@ export function createBunnyHandler(
         : (req: Request) => runHandler(req);
 
     return async (request: Request): Promise<Response> => {
-        return (await finalHandler(request, undefined)) ?? new Response('Not Found', { status: 404 });
+        const startedAt = performance.now();
+        const response = (await finalHandler(request, undefined)) ?? new Response('Not Found', { status: 404 });
+        return (await options.onResponse?.(response, request, startedAt)) ?? response;
     };
 }

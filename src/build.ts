@@ -1,3 +1,4 @@
+import { resolvePinnedBuilds, servePinnedAsset } from './composition/pinnedBuilds';
 import { createProxyHandler } from "./utils/proxyHandler";
 import { parseRequest } from "./utils/request";
 import { upgradeHandler } from "./utils/upgradeRequest";
@@ -221,6 +222,7 @@ async function serializeRequest(req: any): Promise<SerializableRequest> {
         search: req.search,
         location: req.location,
         cookies: req.cookies,
+        pinnedBuilds: req.pinnedBuilds,
     };
 }
 
@@ -343,6 +345,8 @@ const resolveWorkerCmd = (packageDir: string): string[] => {
 export const dev = async (options: HadarsRuntimeOptions) => {
 
     validateOptions(options);
+    const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
+    const pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, true) : undefined;
 
     const liveLock = await checkLiveLock(HadarsFolder);
     if (liveLock) {
@@ -353,8 +357,16 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         process.exit(1);
     }
 
-    // clean .hadars
-    await fs.rm(HadarsFolder, { recursive: true, force: true });
+    // Keep immutable inputs and generated declarations across dev restarts.
+    const inputs = new Set(['builds', 'integrity.json', 'types', 'tsconfig.json']);
+    for (const input of pinned ? [pinned.lockFile, pinned.buildsDir, pinned.integrityFile, ...Object.values(pinnedBuilds ?? {}).map((b) => b.server.dir)] : []) {
+        if (!input) continue;
+        const relative = pathMod.relative(pathMod.resolve(HadarsFolder), pathMod.resolve(input));
+        if (relative && relative !== '..' && !relative.startsWith(`..${pathMod.sep}`) && !pathMod.isAbsolute(relative)) inputs.add(relative.split(pathMod.sep)[0]!);
+    }
+    for (const file of await fs.readdir(HadarsFolder).catch(() => [])) {
+        if (!inputs.has(file)) await fs.rm(pathMod.join(HadarsFolder, file), { recursive: true, force: true });
+    }
     await fs.mkdir(SsrImportDir, { recursive: true });
 
     let { port = 9090, baseURL: configuredBaseURL = '' } = options;
@@ -961,6 +973,11 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         // Stop counting startup recompiles once we begin serving (debug only).
         (globalThis as any).__hadarsMarkPageServed?.();
         const request = parseRequest(req);
+        request.pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, true) : undefined;
+        if (request.pinnedBuilds) {
+            const asset = await servePinnedAsset(req, request.pinnedBuilds);
+            if (asset) return asset;
+        }
         if (handler) {
             const res = await handler(request);
             if (res) return res;
@@ -1225,6 +1242,8 @@ async function warnLocaleParity(i18n: { defaultLocale: string; localesDir?: stri
 
 export const run = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
+    const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
+    const pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, false) : undefined;
 
     let { port = 9090, workers = 1 } = options;
     const clustered = isNode && workers > 1;
@@ -1299,6 +1318,11 @@ export const run = async (options: HadarsRuntimeOptions) => {
 
     const runHandler: CacheFetchHandler = async (req, ctx) => {
         const request = parseRequest(req);
+        request.pinnedBuilds = pinnedBuilds;
+        if (request.pinnedBuilds) {
+            const asset = await servePinnedAsset(req, request.pinnedBuilds);
+            if (asset) return asset;
+        }
         if (handler) {
             const res = await handler(request);
             if (res) return res;

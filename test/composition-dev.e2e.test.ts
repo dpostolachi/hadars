@@ -7,10 +7,12 @@
  */
 import { test, expect, beforeAll, afterAll } from 'bun:test';
 import { chromium, type Browser } from 'playwright';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startModuleDev, type ModuleDev } from '../src/composition/dev';
+import { buildModule } from '../src/composition/build';
+import { writePinnedBuilds } from './helpers/pinnedBuilds';
+import { startModuleDevServer, type ModuleDevServer } from '../src/composition/dev';
 
 const ROOT = join(import.meta.dir, '..');
 const SHELL = join(ROOT, 'test', 'fixtures', 'composition-shell');
@@ -22,7 +24,7 @@ const t = ready ? test : test.skip;
 
 let server: ReturnType<typeof Bun.spawn> | undefined;
 let browser: Browser | undefined;
-let dev: ModuleDev | undefined;
+let dev: ModuleDevServer | undefined;
 let work = '';
 let source = '';
 
@@ -33,14 +35,21 @@ beforeAll(async () => {
     work = mkdtempSync(join(tmpdir(), 'hadars-composition-dev-'));
     cpSync(join(ROOT, 'test', 'fixtures', 'composition-module'), join(work, 'module'), { recursive: true });
     source = join(work, 'module', 'src', 'index.tsx');
-    dev = await startModuleDev({
+    const pinnedDir = join(SHELL, '.hadars', 'pinned-inputs');
+    mkdirSync(join(SHELL, '.hadars', 'types'), { recursive: true });
+    writeFileSync(join(SHELL, '.hadars', 'types', 'greeter.d.ts'), 'export {};');
+    writeFileSync(join(SHELL, '.hadars', 'tsconfig.json'), '{}');
+    const pinnedOut = join(work, 'immutable');
+    const targets = await buildModule({ composition: { role: 'module', name: 'greeter', exposes: { greeting: 'src/index.tsx', page: 'src/page.tsx' } }, cwd: join(work, 'module'), outDir: pinnedOut });
+    writePinnedBuilds(pinnedDir, pinnedOut, targets);
+    dev = await startModuleDevServer({
         composition: { role: 'module', name: 'greeter', exposes: { greeting: 'src/index.tsx', page: 'src/page.tsx' } },
         cwd: join(work, 'module'),
         outDir: join(work, 'out'),
     });
     server = Bun.spawn([BIN, 'dev'], {
         cwd: SHELL,
-        env: { ...process.env, PORT: String(PORT), MODULE_SERVER_DIR: dev.serverDir, MODULE_URL: dev.url.replace(/\/$/, '') },
+        env: { ...process.env, PORT: String(PORT), PINNED_DIR: pinnedDir, MODULE_SERVER_DIR: dev.serverDir, MODULE_URL: dev.clientUrl.replace(/\/$/, '') },
         stdout: 'pipe',
         stderr: 'pipe',
     });
@@ -99,9 +108,9 @@ t('an edit no component boundary accepts falls back to a reload', async () => {
 }, 60_000);
 
 t('the module dev server answers odd requests without going down', async () => {
-    expect((await fetch(dev!.url)).status).toBe(404);
-    expect((await fetch(`${dev!.url}..%2f..%2fetc/passwd`)).status).toBe(404);
-    expect((await fetch(`${dev!.url}manifest.json`)).status).toBe(200);
+    expect((await fetch(dev!.clientUrl)).status).toBe(404);
+    expect((await fetch(`${dev!.clientUrl}..%2f..%2fetc/passwd`)).status).toBe(404);
+    expect((await fetch(`${dev!.clientUrl}manifest.json`)).status).toBe(200);
 });
 
 t('the server render serves the edited module on the next request', async () => {
@@ -114,3 +123,10 @@ t('the server render serves the edited module on the next request', async () => 
     expect(html).toContain('howdy host n=2');
     expect(html).toContain('tag-b');
 }, 30_000);
+
+
+t('dev startup preserves pinned inputs and generated declarations', () => {
+    expect(existsSync(join(SHELL, '.hadars', 'pinned-inputs', 'hadars.lock'))).toBe(true);
+    expect(readFileSync(join(SHELL, '.hadars', 'types', 'greeter.d.ts'), 'utf8')).toBe('export {};');
+    expect(readFileSync(join(SHELL, '.hadars', 'tsconfig.json'), 'utf8')).toBe('{}');
+});
