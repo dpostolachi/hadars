@@ -12,3 +12,6 @@ export { CompositionCompatibilityError } from './errors';
 export type { CompositionCompatibilityDetails } from './errors';
 
 export { CompositionLinkError } from './errors';
+
+export { finalizeExport, verifyExport } from './exportIntegrity';
+export type { ExportFile, ExportOutput } from './exportIntegrity';

@@ -253,12 +253,13 @@ async function prepareLinkedExport(config: HadarsOptions, cwd: string) {
     const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
     const file = join(cwd, `.hadars-linked-${Date.now()}.js`);
     const runtime = resolve(dirname(fileURLToPath(import.meta.url)), 'composition/runtime.js');
-    const { assemblePinnedExport } = await import('./src/composition/build');
+    const { assemblePinnedExport, finalizeExport } = await import('./src/composition/build');
     const clients = pinned ? await assemblePinnedExport({ ...pinned,
         lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
         integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined,
     }, resolve(cwd, '.hadars/static'), { file, runtime }) : undefined;
-    return { clients, file, import: pinned ? `import ${JSON.stringify(file)};` : '' };
+    return { clients, file, import: pinned ? `import ${JSON.stringify(file)};` : '',
+        finalize: (entry: string) => { if (pinned) finalizeExport(cwd, entry, resolve(cwd, '.hadars/static')); } };
 }
 
 // ── hadars export cloudflare ─────────────────────────────────────────────────
@@ -322,6 +323,7 @@ async function bundleCloudflare(
             // externals — resolved at runtime by Cloudflare's `nodejs_compat` flag.
             plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
+        linked.finalize(outputFile);
         console.log(`Cloudflare Worker bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
         console.log(`  1. Ensure wrangler.toml points to the output file:`)
@@ -365,6 +367,8 @@ async function bundleLambda(
         process.exit(1)
     }
 
+    const linked = await prepareLinkedExport(config, cwd);
+
     // 3. Write a temporary entry shim that statically imports the SSR module
     //    and the HTML template so esbuild can inline both.
     // Write the shim inside cwd so esbuild's module resolution finds local
@@ -374,6 +378,7 @@ async function bundleLambda(
     const lambdaModule = resolve(dirname(fileURLToPath(import.meta.url)), 'lambda.js')
     const shimPath = join(cwd, `.hadars-lambda-shim-${Date.now()}.ts`)
     const shim = [
+        linked.import,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createLambdaHandler } from ${JSON.stringify(lambdaModule)};`,
@@ -402,6 +407,7 @@ async function bundleLambda(
             external: ['@rspack/*'],
             plugins: [runtimeConfigPlugin(configPath)],
         })
+        linked.finalize(outputFile);
         console.log(`Lambda bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
         console.log(`  1. Create a staging directory with just this file:`)
@@ -411,6 +417,7 @@ async function bundleLambda(
         console.log(`  4. Upload .hadars/static/ assets to S3 and serve via CloudFront`)
         console.log(`     (the Lambda handler does not serve static JS/CSS — route those to S3)`)
     } finally {
+        await unlink(linked.file).catch(() => {})
         await unlink(shimPath).catch(() => {})
     }
 }
@@ -487,6 +494,7 @@ async function bundleBunny(
             // externals — Deno's Node compat layer resolves these at runtime.
             plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
+        linked.finalize(outputFile);
         console.log(`Bunny Edge Script bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
         console.log(`  1. In the bunny.net dashboard, go to Edge Platform > Scripting`)
@@ -910,6 +918,13 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
     const action = argv[3];
     const input = argv[4];
     const output = argv[5];
+    if (action === 'verify-export') {
+      if (!input || !output) throw new Error('Usage: composition verify-export directory metadata.json [expected-checksum]');
+      const { verifyExport } = await import('./src/composition/build');
+      verifyExport(resolve(cwd, input), output, argv[6]);
+      console.log('Export verified');
+      return;
+    }
     if (!input || !output) throw new Error('Usage: hadars composition <build spec.json manifest.json | lock spec.json lock.json | verify lock.json buildsDir>');
     if (action === 'verify') {
       await verifyLockfile({ lockFile: resolve(cwd, input), buildsDir: resolve(cwd, output) });

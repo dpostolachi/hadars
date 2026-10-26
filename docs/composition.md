@@ -399,3 +399,33 @@ The module-reference regression scan covers both bare and `node:`-prefixed
 with a compiler plugin that uses both modules, then executes the exported
 handler with its pinned directories unavailable. Earlier checks that covered
 only filesystem imports could miss path-only compilation dependencies.
+
+## Verify completed output
+
+Composed single-script exports seal the existing `composition-provenance.json`
+after bundling. Existing provenance fields remain available to older readers.
+The additive `output` object has format `version: 1`, an `entry` record containing
+the script's relative path, SHA-256 and byte size, and a `static` record containing
+the static directory, its complete sorted file inventory, and its SHA-256 digest.
+The inventory digest hashes UTF-8 JSON of `[relativePath, sha256, size]` tuples,
+sorted by relative path using code-unit order and forward slashes. It includes
+nested files and the HTML template. The provenance file itself is excluded to
+avoid a circular digest. Symbolic links and special files are rejected.
+
+Use the public build helper `verifyExport(directory, metadataPath,
+expectedMetadataSha256?)` or the CLI subcommand
+`composition verify-export directory metadataPath [expected-checksum]`.
+Paths in metadata are relative to the export working directory; keep the script,
+static directory and metadata in that layout when moving them. The verifier
+reports missing/extra static files, hash and size differences, and changed or
+missing entry scripts. Metadata without output records requires a fresh export.
+
+`output.metadataSha256` hashes canonical metadata with that checksum and the
+reserved `output.signature` field omitted. Canonical JSON recursively sorts object
+keys and preserves array order. This detects accidental metadata edits, including
+provenance edits; whitespace and object-key order are immaterial. A deployment
+tool should retain this checksum through a trusted channel and supply it when
+verifying: anyone able to replace both output and metadata can recompute an
+untrusted checksum. A detached signature in `output.signature` is a future
+extension; signing and signature verification are not implemented. All other
+metadata fields are covered by the checksum.

@@ -162,6 +162,8 @@ test('edge export runs a composed shell without pinned directories or a resolver
     expect(code).not.toContain('__compilerPluginLoaded');
     expect(code).not.toContain('build-only-option-marker');
     expect(code.split('shell-copy-unique-marker')).toHaveLength(2);
+    const { verifyExport } = await import('../src/composition/build');
+    verifyExport(f.dir, '.hadars/static/composition-provenance.json');
     const provenance = readFileSync(join(f.dir, '.hadars/static/composition-provenance.json'), 'utf8');
     expect(provenance).not.toContain(f.dir);
     expect(JSON.parse(provenance).modules.second).toMatchObject({ buildId: second.manifest.buildId, server: expect.arrayContaining([expect.objectContaining({ path: 'server/second.cjs', sha256: expect.any(String) })]) });
@@ -179,6 +181,7 @@ test('edge export runs a composed shell without pinned directories or a resolver
         const [exitCode, errors, logs] = await Promise.all([exportProcess.exited,
             new Response(exportProcess.stderr).text(), new Response(exportProcess.stdout).text()]);
         if (exitCode !== 0) throw new Error(logs + errors);
+        verifyExport(f.dir, '.hadars/static/composition-provenance.json');
         const exported = readFileSync(file, 'utf8');
         if (target === 'lambda') {
             expect(/import\(["'](?:node:)?zlib["']\)/.test(exported)).toBe(true);
