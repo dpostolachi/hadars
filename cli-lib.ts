@@ -317,7 +317,7 @@ async function bundleCloudflare(
             external: ['@rspack/*'],
             // Cloudflare Workers supports the Web Crypto API natively; suppress
             // esbuild's attempt to polyfill node:crypto.
-            define: { 'global': 'globalThis' },
+            define: { 'global': 'globalThis', '__EDGE_RUNTIME__': 'true' },
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — resolved at runtime by Cloudflare's `nodejs_compat` flag.
             plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
@@ -482,7 +482,7 @@ async function bundleBunny(
             sourcemap: false,
             loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
             external: ['@rspack/*', '@bunny.net/edgescript-sdk'],
-            define: { 'global': 'globalThis' },
+            define: { 'global': 'globalThis', '__EDGE_RUNTIME__': 'true' },
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — Deno's Node compat layer resolves these at runtime.
             plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],

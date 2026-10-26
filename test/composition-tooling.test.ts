@@ -155,7 +155,9 @@ test('edge export runs a composed shell without pinned directories or a resolver
     expect(stdout).toContain('Linked module \"greeter\"');
     expect(stdout).toContain('Linked module \"second\"');
     const code = readFileSync(output, 'utf8');
-    // Same module-reference scan as the offline export check, including bare names.
+    // Catch every prefixed specifier, including static imports and dynamic imports.
+    expect(code).not.toMatch(/["'`]node:[^"'`]+["'`]/);
+    // Also retain the bare filesystem module check.
     expect([...code.matchAll(/(?:from\s*|import\s*\(|require\s*\()\s*["'](?:node:)?(?:fs|path)(?:\/[^"']*)?["']/g)]).toEqual([]);
     expect(code).not.toContain('__compilerPluginLoaded');
     expect(code).not.toContain('build-only-option-marker');
@@ -169,6 +171,22 @@ test('edge export runs a composed shell without pinned directories or a resolver
     expect(sdk).not.toBeNull();
     writeFileSync(join(f.dir, 'sdk.mjs'), 'export const net = { http: { serve(handler) { globalThis.__hadarsPinnedExportHandler = handler; } } };');
     writeFileSync(output, code.replaceAll(sdk![1]!, './sdk.mjs'));
+    for (const target of ['cloudflare', 'lambda']) {
+        const file = join(f.dir, `${target}.mjs`);
+        const exportProcess = Bun.spawn([process.execPath, join(root, 'dist/cli.js'), 'export', target, file], {
+            cwd: f.dir, stdout: 'pipe', stderr: 'pipe',
+        });
+        const [exitCode, errors, logs] = await Promise.all([exportProcess.exited,
+            new Response(exportProcess.stderr).text(), new Response(exportProcess.stdout).text()]);
+        if (exitCode !== 0) throw new Error(logs + errors);
+        const exported = readFileSync(file, 'utf8');
+        if (target === 'lambda') {
+            expect(/import\(["'](?:node:)?zlib["']\)/.test(exported)).toBe(true);
+            expect(/import\(["'](?:node:)?util["']\)/.test(exported)).toBe(true);
+        } else {
+            expect(exported).not.toMatch(/["'`]node:[^"'`]+["'`]/);
+        }
+    }
     rmSync(f.options.buildsDir, { recursive: true });
     try {
         await import(output);

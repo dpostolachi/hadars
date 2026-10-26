@@ -237,25 +237,35 @@ async function transformStream(
 }
 
 // Use the Web Streams CompressionStream when available (Bun, Deno, Node ≥ 18).
-// Fall back to node:zlib on older Node versions.
+// Edge exports replace this flag at build time, removing the native fallback.
+// An undefined flag preserves the fallback for ordinary server/library builds.
+declare const __EDGE_RUNTIME__: boolean;
 let _zlibGzip: ((d: Uint8Array) => Promise<Uint8Array>) | null = null;
 let _zlibGunzip: ((d: Uint8Array) => Promise<Uint8Array>) | null = null;
 
 async function zlibGzip(d: Uint8Array): Promise<Uint8Array> {
-    if (!_zlibGzip) {
-        const zlib = await import('node:zlib');
-        const { promisify } = await import('node:util');
-        _zlibGzip = promisify(zlib.gzip) as (d: Uint8Array) => Promise<Uint8Array>;
+    if (typeof __EDGE_RUNTIME__ !== 'undefined' && __EDGE_RUNTIME__) {
+        throw new Error('Gzip compression requires CompressionStream in this edge runtime');
+    } else {
+        if (!_zlibGzip) {
+            const zlib = await import('node:zlib');
+            const { promisify } = await import('node:util');
+            _zlibGzip = promisify(zlib.gzip) as (d: Uint8Array) => Promise<Uint8Array>;
+        }
+        return _zlibGzip(d);
     }
-    return _zlibGzip(d);
 }
 async function zlibGunzip(d: Uint8Array): Promise<Uint8Array> {
-    if (!_zlibGunzip) {
-        const zlib = await import('node:zlib');
-        const { promisify } = await import('node:util');
-        _zlibGunzip = promisify(zlib.gunzip) as (d: Uint8Array) => Promise<Uint8Array>;
+    if (typeof __EDGE_RUNTIME__ !== 'undefined' && __EDGE_RUNTIME__) {
+        throw new Error('Gzip decompression requires DecompressionStream in this edge runtime');
+    } else {
+        if (!_zlibGunzip) {
+            const zlib = await import('node:zlib');
+            const { promisify } = await import('node:util');
+            _zlibGunzip = promisify(zlib.gunzip) as (d: Uint8Array) => Promise<Uint8Array>;
+        }
+        return _zlibGunzip(d);
     }
-    return _zlibGunzip(d);
 }
 
 export const gzipCompress = (d: Uint8Array): Promise<Uint8Array> =>

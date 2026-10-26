@@ -74,7 +74,8 @@ test('a bundled edge export reads deployment bindings after bundling', async () 
                     getInitProps: request => ({ client: request.pinnedClients.module }) }, outHtml: ${JSON.stringify(html)},
                 pinnedClients: { module: { baseUrl: '/_builds/id/', manifest: { js: ['module.js'], css: [] }, integrity: { 'module.js': 'sha256-test' } } }
             });`, resolveDir: import.meta.dir, loader: 'ts' }, outfile: file,
-            bundle: true, platform: 'browser', format: 'esm', target: 'es2022', define: { global: 'globalThis' }, external: ['node:*'] });
+            bundle: true, platform: 'browser', format: 'esm', target: 'es2022', define: { global: 'globalThis', __EDGE_RUNTIME__: 'true' } });
+        expect(await readFile(file, 'utf8')).not.toMatch(/["'`]node:[^"'`]+["'`]/);
         const { default: handler } = await import(file);
         const response = await handler.fetch(new Request('https://shell.example/'), { HADARS_ASSET_BASE_URL: 'https://deployed.example/assets/' }, {});
         expect(response.status).toBe(200);
