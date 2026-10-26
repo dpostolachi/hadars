@@ -102,6 +102,8 @@ export interface AppUnsuspend {
 }
 
 export interface AppContext {
+    /** @internal Public deployment values for the current render. */
+    publicEnv?: Record<string, string>;
     path?: string;
     head: AppHead;
     /** @internal Framework use only — use the useServerData() hook instead. */

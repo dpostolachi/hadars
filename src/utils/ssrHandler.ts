@@ -1,3 +1,4 @@
+import { readPublicEnv, publicEnvJson, type PublicEnv } from './publicEnv';
 import { ASSET_BASE_MARKER, builtAssetMetadata, runtimeAssetBase, validateAssetBase, relocateAssetUrl } from './assetBase';
 import { parseRequest } from './request';
 import { buildHeadHtml, escAttr } from './response';
@@ -131,7 +132,7 @@ export async function buildSsrHtml(
  * post-content segments and caches the result. Call the returned function with
  * the per-request headHtml to produce the full HTML prefix and suffix.
  */
-export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>, getAssetBase: () => unknown = runtimeAssetBase) => {
+export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>, getAssetBase: () => unknown = runtimeAssetBase, getPublicValues: () => PublicEnv = readPublicEnv) => {
     let preHead: string | null = null;
     let postHead: string | null = null;
     let postContent: string | null = null;
@@ -193,12 +194,18 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>, getAs
     // Returns synchronously once the template has been loaded and parsed
     // (every request after the first).  Callers can check `instanceof Promise`
     // to take a zero-await hot path.
+    const assemble = (headHtml: string): [string, string] => {
+        const values = getPublicValues();
+        const script = `<script>globalThis.__HADARS_PUBLIC_ENV__=${publicEnvJson(values)}</script>`;
+        const prefix = (preHead! + headHtml + postHead!).replace(/<head\b[^>]*>/i, match => match + script);
+        return [prefix, postContent!];
+    };
     return (headHtml: string): [string, string] | Promise<[string, string]> => {
         if (preHead !== null) {
             // Hot path — sync return, no Promise allocation.
-            return [preHead + headHtml + postHead!, postContent!];
+            return assemble(headHtml);
         }
-        return primed.then(() => [preHead! + headHtml + postHead!, postContent!]);
+        return primed.then(() => assemble(headHtml));
     };
 };
 

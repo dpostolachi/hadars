@@ -1,3 +1,4 @@
+import { readPublicEnv, publicEnvJson, type PublicEnv } from './utils/publicEnv';
 /**
  * Cloudflare Workers adapter for hadars.
  *
@@ -75,14 +76,21 @@ export interface CloudflareHandler {
  */
 export function createCloudflareHandler(options: HadarsOptions, bundled: CloudflareBundled): CloudflareHandler {
     // Isolate template and response caches by deployment binding, without mutating process globals.
-    const handlers = new Map<unknown, CloudflareHandler>();
+    const handlers = new Map<unknown, Map<string, CloudflareHandler>>();
     return { fetch(request, env, ctx) {
         const bindings = (env ?? {}) as Record<string, unknown>;
         const value = runtimeAssetBase(bindings);
-        let handler = handlers.get(value);
+        const publicValues = readPublicEnv(bindings);
+        const key = publicEnvJson(publicValues);
+        let environments = handlers.get(value);
+        if (!environments) {
+            environments = new Map();
+            handlers.set(value, environments);
+        }
+        let handler = environments.get(key);
         if (!handler) {
-            handler = createEnvironmentHandler(options, bundled, value);
-            handlers.set(value, handler);
+            handler = createEnvironmentHandler(options, bundled, value, publicValues);
+            environments.set(key, handler);
         }
         return handler.fetch(request, env, ctx);
     } };
@@ -92,10 +100,11 @@ function createEnvironmentHandler(
     options: HadarsOptions,
     bundled: CloudflareBundled,
     assetBase: unknown,
+    publicValues: PublicEnv,
 ): CloudflareHandler {
     const fetchHandler     = options.fetch;
     const handleProxy      = createProxyHandler(options);
-    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml), () => assetBase);
+    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml), () => assetBase, () => publicValues);
     const pinnedClients = deploymentPinnedClients(bundled.pinnedClients, bundled.outHtml, assetBase);
     const { ssrModule }    = bundled;
 
@@ -116,6 +125,7 @@ function createEnvironmentHandler(
 
             const isDataOnly = request.headers.get('Accept') === 'application/json';
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
+                publicEnv: publicValues,
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',

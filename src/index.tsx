@@ -1,3 +1,4 @@
+export { getPublicEnv } from './utils/publicEnv';
 export type {
     HadarsOptions,
     CompositionOptions,

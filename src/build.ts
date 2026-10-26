@@ -1,3 +1,4 @@
+import { readPublicEnv } from './utils/publicEnv';
 import { builtAssetMetadata, relocatePinnedBuilds, runtimeAssetBase, validateAssetBase } from './utils/assetBase';
 import { registerServerModules } from './composition/registerServerModules';
 import { cleanOutput } from './utils/cleanOutput';
@@ -227,6 +228,7 @@ async function serializeRequest(req: any): Promise<SerializableRequest> {
         cookies: req.cookies,
         pinnedBuilds: req.pinnedBuilds,
         pinnedClients: req.pinnedClients,
+        publicEnv: readPublicEnv(),
     };
 }
 
