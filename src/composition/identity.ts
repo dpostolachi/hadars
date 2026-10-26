@@ -9,6 +9,7 @@ const sorted = (v: Record<string, string>) => Object.fromEntries(Object.entries(
 /** v1 identity: property order and optional metadata are part of the contract. */
 export function computeBuildId(m: Omit<BuildManifest, 'buildId'>): string {
     const identity = {
+        ...(m.clientOnly ? { clientOnly: true } : {}),
         ...(m.types?.length ? { types: [...m.types].sort() } : {}),
         ...(m.typeApi ? { typeApi: { declarationsSha256: m.typeApi.declarationsSha256,
             exports: Object.fromEntries(Object.entries(m.typeApi.exports).sort().map(([ns, exports]) => [ns, Object.fromEntries(Object.entries(exports as object).sort())])) } } : {}),

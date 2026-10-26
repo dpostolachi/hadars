@@ -1,3 +1,4 @@
+import { registerServerModules } from './composition/registerServerModules';
 import { cleanOutput } from './utils/cleanOutput';
 import { resolvePinnedBuilds, servePinnedAsset } from './composition/pinnedBuilds';
 import { createProxyHandler } from "./utils/proxyHandler";
@@ -1036,6 +1037,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 getInitProps,
                 getFinalProps,
             } = cachedSsrModule!;
+            registerServerModules(request.pinnedBuilds);
 
             // Expose the executor globally so useGraphQL() in components can reach it.
             (globalThis as any).__hadarsGraphQL = devStaticCtx?.graphql;
@@ -1365,6 +1367,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 getInitProps,
                 getFinalProps,
             } = await ssrModulePromise;
+            registerServerModules(request.pinnedBuilds);
 
             if (renderPool && request.headers.get('Accept') !== 'application/json') {
                 // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.

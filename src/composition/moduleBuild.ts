@@ -137,7 +137,7 @@ export async function buildModule(opts: BuildModuleOptions): Promise<ModuleBuild
             library: { type: 'assign-properties', name: [MODULES_GLOBAL, name] },
         },
     } as any, name);
-    const server = await run({
+    const server = opts.composition.clientOnly ? { js: [], css: [] } : await run({
         ...moduleConfig({ ...opts, target: 'node' }),
         entry: { [name]: barrel },
         output: { path: path.join(opts.outDir, 'server'), filename: '[name].cjs', library: { type: 'commonjs2' } },

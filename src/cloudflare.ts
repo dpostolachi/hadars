@@ -42,6 +42,8 @@ export interface CloudflareBundled {
      * string when `hadars export cloudflare` runs.
      */
     outHtml: string;
+    /** Public pinned asset descriptors embedded at export. */
+    pinnedClients?: Record<string, import('./composition/pinnedTypes').PinnedBuild['client']>;
 }
 
 /**
@@ -81,6 +83,7 @@ export function createCloudflareHandler(
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
+        request.pinnedClients = bundled.pinnedClients;
 
         if (fetchHandler) {
             const res = await fetchHandler(request);

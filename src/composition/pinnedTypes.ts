@@ -14,6 +14,7 @@ export interface PinnedBuildsOptions {
 export interface PinnedBuild {
     name: string;
     kind: 'shell' | 'module' | 'library';
+    clientOnly?: boolean;
     server: { dir: string; manifest: TargetManifest };
     /** Safe to return as client props; contains no local paths. */
     client: { baseUrl: string; manifest: TargetManifest; files?: string[]; integrity?: Record<string, string> };

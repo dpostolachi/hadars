@@ -1,3 +1,4 @@
+import { registerServerModules } from './composition/registerServerModules';
 /**
  * SSR render worker — runs in a node:worker_threads thread.
  *
@@ -52,6 +53,7 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     const { getInitProps, getFinalProps } = _ssrMod;
 
     const parsedReq = deserializeRequest(serialReq);
+    registerServerModules(serialReq.pinnedBuilds);
 
     const context: any = {
         head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200 },

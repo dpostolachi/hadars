@@ -24,3 +24,10 @@ export class CompositionCompatibilityError extends Error implements CompositionC
         this.kind = details.kind;
     }
 }
+
+export class CompositionLinkError extends Error {
+    constructor(readonly module: string, reason: string) {
+        super(`Cannot link module "${module}": ${reason}`);
+        this.name = 'CompositionLinkError';
+    }
+}

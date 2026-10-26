@@ -248,6 +248,18 @@ async function exportStatic(
     console.log(`  npx serve ${outputDir}`)
 }
 
+async function prepareLinkedExport(config: HadarsOptions, cwd: string) {
+    const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
+    const file = join(cwd, `.hadars-linked-${Date.now()}.js`);
+    const runtime = resolve(dirname(fileURLToPath(import.meta.url)), 'composition/runtime.js');
+    const { assemblePinnedExport } = await import('./src/composition/build');
+    const clients = pinned ? await assemblePinnedExport({ ...pinned,
+        lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
+        integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined,
+    }, resolve(cwd, '.hadars/static'), { file, runtime }) : undefined;
+    return { clients, file, import: pinned ? `import ${JSON.stringify(file)};` : '' };
+}
+
 // ── hadars export cloudflare ─────────────────────────────────────────────────
 
 async function bundleCloudflare(
@@ -271,16 +283,19 @@ async function bundleCloudflare(
         process.exit(1)
     }
 
+    const linked = await prepareLinkedExport(config, cwd);
+
     // Resolve cloudflare.js from the dist/ directory (sibling of cli.js).
     const cloudflareModule = resolve(dirname(fileURLToPath(import.meta.url)), 'cloudflare.js')
     const shimPath = join(cwd, `.hadars-cloudflare-shim-${Date.now()}.ts`)
     const shim = [
+        linked.import,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createCloudflareHandler } from ${JSON.stringify(cloudflareModule)};`,
         `import config from ${JSON.stringify(configPath)};`,
         `export default createCloudflareHandler(config as any, { ssrModule: ssrModule as any, outHtml });`,
-    ].join('\n') + '\n'
+    ].join('\n').replace('outHtml }', `outHtml, pinnedClients: ${JSON.stringify(linked.clients)} }`) + '\n'
     await writeFile(shimPath, shim, 'utf-8')
 
     try {
@@ -319,6 +334,7 @@ async function bundleCloudflare(
         console.log(`     and all other requests to the Worker.`)
         console.log(`  4. Deploy: wrangler deploy`)
     } finally {
+        await unlink(linked.file).catch(() => {})
         await unlink(shimPath).catch(() => {})
     }
 }
@@ -422,12 +438,8 @@ async function bundleBunny(
         process.exit(1)
     }
 
-    const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
-    const { assemblePinnedExport } = await import('./src/composition/build');
-    const pinnedClients = pinned ? await assemblePinnedExport({ ...pinned,
-        lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
-        integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined,
-    }, resolve(cwd, '.hadars/static')) : undefined;
+    const linked = await prepareLinkedExport(config, cwd);
+    const pinnedClients = linked.clients;
 
     // 3. Write a temporary entry shim.
     //    The shim imports the SSR module + HTML template statically so esbuild
@@ -437,6 +449,7 @@ async function bundleBunny(
     const bunnyModule = resolve(dirname(fileURLToPath(import.meta.url)), 'bunny.js')
     const shimPath = join(cwd, `.hadars-bunny-shim-${Date.now()}.ts`)
     const shim = [
+        linked.import,
         `import * as BunnySDK from "@bunny.net/edgescript-sdk";`,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
@@ -484,6 +497,7 @@ async function bundleBunny(
         console.log(`\nFor local testing with Deno:`)
         console.log(`  deno run -A ${outputFile}`)
     } finally {
+        await unlink(linked.file).catch(() => {})
         await unlink(shimPath).catch(() => {})
     }
 }

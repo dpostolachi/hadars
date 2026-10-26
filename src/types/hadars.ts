@@ -132,6 +132,8 @@ export type ScriptProps = ScriptHTMLAttributes<HTMLScriptElement>;
 export type CompositionOptions =
     | {
         role: 'module';
+        /** Explicitly skip server linking; this module renders only in the browser. */
+        clientOnly?: boolean;
         /** Unique module name; also the key the client bundle registers under. */
         name: string;
         /** Namespace name -> source file, relative to the project root. A host reads `module[name].Export`. */

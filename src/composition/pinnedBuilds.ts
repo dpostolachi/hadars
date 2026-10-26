@@ -1,4 +1,4 @@
-import { CompositionCompatibilityError, type CompositionCompatibilityDetails } from './errors';
+import { CompositionLinkError, CompositionCompatibilityError, type CompositionCompatibilityDetails } from './errors';
 import { valid } from 'semver';
 import { assertVersionContracts } from './versions';
 import { hash, canonical, computeBuildId } from './identity';
@@ -102,13 +102,15 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             if (m.typeApi && m.typeApi.declarationsSha256 !== hash(JSON.stringify([...(m.types ?? [])].sort().map((p) => [p, m.files.find((f: any) => f.path === p)?.sha256])))) fail(name, 'declaration API checksum mismatch');
             const serverEntries = new Set([...m.targets.server.js, ...m.targets.server.css]);
             if ([...m.targets.client.js, ...m.targets.client.css].some((f) => serverEntries.has(f))) fail(name, 'client and server entries overlap');
-            if (kind === 'module' && (m.targets.server.js.length !== 1 || !m.targets.client.js.length)) fail(name, 'expected one server entry and at least one client entry');
+            if (m.clientOnly !== undefined && typeof m.clientOnly !== 'boolean') fail(name, 'invalid clientOnly flag');
+            if (kind === 'module' && ((!m.clientOnly && m.targets.server.js.length !== 1) || !m.targets.client.js.length)) throw new CompositionLinkError(name, 'expected one server entry and at least one client entry; declare clientOnly for a browser-only module');
             const baseUrl = publicBase.replace(/\/?$/, '/') + id + '/';
-            result[m.name] = { name: m.name, kind, server: { dir, manifest: m.targets.server }, client: {
+            result[m.name] = { name: m.name, kind, ...(m.clientOnly ? { clientOnly: true } : {}), server: { dir, manifest: m.targets.server }, client: {
                 baseUrl, manifest: m.targets.client, files: m.files.map((f: any) => f.path).filter((f: string) => !serverEntries.has(f) && !f.endsWith('.d.ts') && (f.startsWith('client/') || [...m.targets.client.js, ...m.targets.client.css].includes(f))),
                 integrity: Object.fromEntries(m.files.filter((f: any) => integrity[`${id}/${f.path}`]).map((f: any) => [f.path, integrity[`${id}/${f.path}`]])),
             } };
         } catch (e: any) {
+            if (e instanceof CompositionLinkError) throw e;
             if (e.message?.startsWith('[hadars] Pinned build ')) throw e;
             if (e instanceof CompositionCompatibilityError) incompatible(name, e.message, e);
             fail(name, e.message);
@@ -130,7 +132,7 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             requires = metadata.requires;
         } catch (err: any) { if (err.code !== 'ENOENT') fail(name, `cannot read local version contract: ${err.message}`); }
         assertVersionContracts(name, requires, shell.provides);
-        result[name] = { name, kind: 'module', server: { dir: path.resolve(override.serverDir), manifest: await readTarget(override.serverDir) },
+        result[name] = { name, kind: 'module', ...(result[name]?.clientOnly ? { clientOnly: true } : {}), server: { dir: path.resolve(override.serverDir), manifest: await readTarget(override.serverDir) },
             client: { baseUrl: override.clientUrl, manifest: await readTarget(path.join(override.serverDir, '..', 'client')) } };
     }
     return result;

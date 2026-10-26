@@ -10,3 +10,5 @@ export { assemblePinnedExport } from './exportBuilds';
 export { resolveModuleRequires } from './versions';
 export { CompositionCompatibilityError } from './errors';
 export type { CompositionCompatibilityDetails } from './errors';
+
+export { CompositionLinkError } from './errors';

@@ -2,7 +2,7 @@
 export { SHARED_GLOBAL, MODULES_GLOBAL, DEFAULT_SHARED } from './constants';
 export type { TargetManifest } from './constants';
 export { provideShared } from './provideShared';
-export { registerModule, getModule } from './registry';
+export { registerModule, registerLinkedModule, getModule } from './registry';
 export { loadClientModule } from './loadModule';
 export type { LoadClientModuleOptions } from './loadModule';
 export { ModuleHead } from './ModuleHead';

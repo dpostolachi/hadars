@@ -46,7 +46,7 @@ The v1 lock contains `snapshotId`, `snapshotSha256`, `snapshot: { id, shell, mod
 
 Before serving, hadars checks snapshot and manifest identity, declared files, byte lengths, SHA-256, runtime contract, and module compatibility with the pinned shell. Production requires production builds and verifies every file at startup. Dev validates on startup and subsequent requests, reusing file hashes when size and modification/change timestamps are unchanged. Missing, modified, unsafe, or symlinked artifacts stop resolution with a build name and recovery instruction. Keep production artifacts immutable while the server runs. Lock checksums verify consistency; trust in the lock's origin must be established before starting hadars.
 
-`HadarsRequest.pinnedBuilds` contains resolved builds keyed by name. Shell and library builds are included; they are not executed automatically. Load only the modules the page needs:
+`HadarsRequest.pinnedBuilds` contains resolved builds keyed by name. Shell and library builds are included; they are not executed automatically. Dev/run registers lazy server loaders for pinned modules before `getInitProps`. Edge exports register statically linked loaders with the same lookup API. Publish shared packages before the first lookup; only modules the page requests are evaluated:
 
 ```tsx
 import * as React from 'react';
@@ -55,19 +55,20 @@ import * as jsxDev from 'react/jsx-dev-runtime';
 import type { HadarsRequest } from 'hadars';
 import type { PinnedBuild } from 'hadars/composition';
 import {
-    provideShared, loadServerModule, loadClientModule,
+    provideShared, loadClientModule,
     registerModule, getModule, ModuleHead,
-} from 'hadars/composition';
+} from 'hadars/composition/runtime';
 
 provideShared({ react: React, 'react/jsx-runtime': jsx, 'react/jsx-dev-runtime': jsxDev });
 
 type Props = { client: PinnedBuild['client'] };
 
 export async function getInitProps(req: HadarsRequest): Promise<Props> {
-    const build = req.pinnedBuilds?.greeter;
-    if (!build) throw new Error('Missing pinned greeter build');
-    registerModule('greeter', await loadServerModule(build.server));
-    return { client: build.client };
+    const client = req.pinnedClients?.greeter;
+    if (!client) throw new Error('Missing pinned greeter build');
+    // The same lookup works in dev/run and in a linked edge export.
+    const { greeting } = getModule('greeter');
+    return { client };
 }
 
 export async function getClientProps(props: Props) {
@@ -81,7 +82,7 @@ export default function App({ client }: Props) {
 }
 ```
 
-Only return `build.client` through client props; the server descriptor contains local paths. `loadServerModule` accepts either a target directory containing `manifest.json` or a resolved `{ dir, manifest }` descriptor. It evaluates the declared CommonJS server entry. Modules require one server entry and at least one browser entry. The browser loader waits for styles and scripts before hydration and deduplicates concurrent loads. It may also fetch `<baseUrl>/manifest.json` when no manifest is supplied.
+Only return `build.client` through client props; the server descriptor contains local paths. `loadServerModule` accepts either a target directory containing `manifest.json` or a resolved `{ dir, manifest }` descriptor. It evaluates the declared CommonJS server entry. Modules require one server entry and at least one browser entry, unless explicitly declared `clientOnly`. The browser loader waits for styles and scripts before hydration and deduplicates concurrent loads. It may also fetch `<baseUrl>/manifest.json` when no manifest is supplied.
 
 For custom server integrations, `resolvePinnedBuilds(options, dev?)` from `hadars/composition/build` performs the same validation and returns the same descriptors. Pinned filesystem loading is integrated with `dev`/`run`. The edge export embeds public client metadata and stages client assets as described below; static site export does not automatically assemble pinned files.
 
@@ -115,8 +116,9 @@ entry remains compatible with Node shells; it also exports the filesystem loader
 `loadServerModule` (directory or descriptor), `resolvePinnedBuilds`, and reading
 pinned `buildsDir` are filesystem-bound. Import these from
 `hadars/composition/build` in Node tooling. The edge handler accepts bundled data;
-it must never resolve a pinned directory at request time. Server bundle static
-registration is a future extension point for filesystem-free module SSR.
+it must never resolve a pinned directory at request time. Edge export statically links pinned server bundles and registers them before
+`getInitProps` or rendering. Use `getModule(name)` from the runtime entry in both
+paths; app code does not need a filesystem loader or a target-specific branch.
 
 ## Module build hooks
 
@@ -191,7 +193,7 @@ module/library manifest filename arrays. Paths resolve from the working director
 The build command writes the manifest separately from the immutable artifact;
 lock verification does not require an app configuration.
 
-## Pinned client export
+## Pinned edge export
 
 The edge export automatically resolves the production lock, validates every
 pinned file, rejects undeclared files, embeds public module client descriptors,
@@ -210,10 +212,48 @@ server descriptor or local path. Return that descriptor as client props and use
 export integrations can call `assemblePinnedExport(pinnedOptions, staticDir)`
 and pass its result as the handler's bundled `pinnedClients` field.
 
-Pinned server bundles are validated but never copied into static output or loaded
-by the edge handler. A future exporter can statically import these bundles and
-register their namespaces after publishing shared packages. That extension must
-retain shared externals and must not introduce request-time filesystem access.
+Pinned server entries are compiled from verified snapshot bytes into a generated
+link module and bundled into the shell's single server script. No artifact
+paths, filesystem imports, or request-time directory resolution are needed.
+The link module registers lazy factories before handling requests. The first
+`getModule('greeter')` in `getInitProps` or the render path evaluates the module;
+subsequent lookups return the same exports. Dev/run installs equivalent lazy
+loaders and observes rebuilt files on subsequent requests. `loadServerModule`
+remains supported for explicit Node loading by directory or descriptor.
+
+Shared imports remain references to the shell's `provideShared` values, including
+React and JSX runtimes. Publish these values before calling `getModule`; a module
+must declare additional shared specifiers when it is built. Linking does not
+resolve those specifiers to another package copy. The shell can publish providers
+at module initialization or in `getInitProps` before its first module lookup.
+Browser registration still uses `loadClientModule` and `registerModule` before
+hydration. Return only `req.pinnedClients[name]` as client props.
+
+A missing server entry or unsupported dependency fails export with
+`CompositionLinkError` (exported by the build entry), including the module name.
+Server byte tampering or missing artifacts fails integrity validation before
+linking or staging assets. Static relative dependencies inside the verified
+artifact are supported; unresolved externals, filesystem dependencies and dynamic
+loading are rejected. Rebuild modules with the required packages declared shared
+or with dependencies bundled for a filesystem-free runtime.
+
+Declare `composition.clientOnly: true` when building a module that deliberately
+has no server render path. `buildModule` omits its server entry, and
+`createModuleBuild` records `clientOnly: true` in the immutable manifest. Such
+modules retain public client assets and descriptors but receive no server
+registration. Render a shell placeholder for them and load them in the browser.
+The optional true flag participates in content identity before declaration
+metadata; manifests without it retain their existing identities.
+
+Export prints each linked module's build ID, generated linked byte size and
+total byte size of its verified server inputs. `.hadars/static/composition-provenance.json` records the
+snapshot, shell and module build IDs, linked server file sizes/SHA-256 hashes,
+and staged client file sizes/hashes. It contains artifact-relative filenames
+only, with no local directories. Server bytes are never copied into public
+output. Custom export tooling can supply `{ file, runtime }` as the third argument
+to `assemblePinnedExport`: `file` receives the generated link module, and
+`runtime` names the filesystem-free runtime entry. Import that link module into
+the shell's server entry before handling requests.
 
 ## Shared package version contracts
 

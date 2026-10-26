@@ -18,6 +18,7 @@ export interface BuildManifest {
     provides: string[] | Record<string, string>;
     requires: Record<string, string>;
     files: Array<{ path: string; size: number; sha256: string }>;
+    clientOnly?: boolean;
     types?: string[];
     typeApi?: { declarationsSha256: string; exports: Record<string, Record<string, string>> };
 }
@@ -35,6 +36,7 @@ export interface CreateBuildOptions {
     provides?: string[] | Record<string, string>;
     runtimeContract?: '1' | '2';
     requires?: Record<string, string>;
+    clientOnly?: boolean;
     types?: string[];
     typeApi?: BuildManifest['typeApi'];
 }
@@ -73,6 +75,7 @@ export function createBuild(opts: CreateBuildOptions) {
     if (contract === '1' && opts.provides && !Array.isArray(opts.provides)) throw new Error('Versioned provides require manifest contract 2');
     if (contract === '2' && Array.isArray(opts.provides) && opts.provides.length) throw new Error('Contract 2 provides must map packages to versions');
     const content: Omit<BuildManifest, 'buildId'> = {
+        ...(opts.clientOnly ? { clientOnly: true } : {}),
         ...(opts.types ? { types: opts.types } : {}), ...(opts.typeApi ? { typeApi: opts.typeApi } : {}),
         kind: opts.kind, name: opts.name, runtimeContract: contract, flavour: opts.flavour ?? 'production',
         targets: opts.targets, exposes: opts.exposes ?? [], shared: opts.shared ?? [],
@@ -114,7 +117,7 @@ export function createModuleBuild(opts: BuildModuleOptions & { buildsDir: string
         });
         return createBuild({ sourceDir: staging, buildsDir: opts.buildsDir, kind: 'module', name: opts.composition.name,
             flavour: opts.mode === 'development' ? 'dev' : 'production', exposes: Object.keys(opts.composition.exposes),
-            shared: opts.composition.shared, requires: { ...resolveModuleRequires(opts), ...opts.requires }, targets: { client: prefix('client'), server: prefix('server') } });
+            clientOnly: opts.composition.clientOnly, shared: opts.composition.shared, requires: { ...resolveModuleRequires(opts), ...opts.requires }, targets: { client: prefix('client'), server: prefix('server') } });
     } finally { rmSync(staging, { recursive: true, force: true }); }
 }
 

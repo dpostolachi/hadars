@@ -112,17 +112,46 @@ test('edge export runs a composed shell without pinned directories or a resolver
     const { symlinkSync } = await import('node:fs');
     symlinkSync(join(root, 'test/fixtures/composition-shell/node_modules'), join(f.dir, 'node_modules'), 'dir');
     writeFileSync(join(f.dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', module: 'ESNext', moduleResolution: 'bundler' } }));
-    writeFileSync(join(f.dir, 'App.tsx'), `import { ModuleHead } from 'hadars/composition/runtime';
-        export function getInitProps(req) { return { client: req.pinnedClients.greeter }; }
-        export default function App({ client }) { return <><ModuleHead client={client} /><div>composed shell</div></>; }`);
+    writeFileSync(join(f.dir, 'shared-api.ts'), 'export const token = { marker: "shell-copy-unique-marker" };');
+    writeFileSync(join(f.dir, 'module.tsx'), `import { token } from 'shared-api';
+        import { useState } from 'react';
+        export { useState, token };
+        export function View() { const [value] = useState('linked server output'); return <p>{value}</p>; }`);
+    const opts = { cwd: f.dir, outDir: join(f.dir, 'second'), buildsDir: f.options.buildsDir,
+        composition: { role: 'module' as const, name: 'second', exposes: { page: 'module.tsx' }, shared: ['shared-api'] } };
+    const second = createModuleBuild({ ...opts, result: await buildModule(opts) });
+    const shell = createShellBuild({ ...f.shellOpts, provides: ['shared-context', 'shared-api'] });
+    const lock = assembleLockfile({ shell: shell.manifest, modules: [f.module.manifest, second.manifest] });
+    writeFileSync(f.options.lockFile, JSON.stringify(lock));
+    writeFileSync(join(f.dir, 'App.tsx'), `import * as React from 'react';
+        import * as jsx from 'react/jsx-runtime';
+        import * as jsxDev from 'react/jsx-dev-runtime';
+        import { token } from './shared-api';
+        import { ModuleHead, provideShared, getModule } from 'hadars/composition/runtime';
+        provideShared({ react: React, 'react/jsx-runtime': jsx, 'react/jsx-dev-runtime': jsxDev, 'shared-api': { token } });
+        export function getInitProps(req) {
+            const linked = getModule('second');
+            if (linked !== getModule('second') || linked.page.token !== token || linked.page.useState !== React.useState) throw new Error('shared identity mismatch');
+            return { client: req.pinnedClients.greeter };
+        }
+        export default function App({ client }) {
+            const View = getModule('second').page.View;
+            return <><ModuleHead client={client} /><div>composed shell {getModule('greeter').page.title}</div><View /></>;
+        }`);
     writeFileSync(join(f.dir, 'hadars.config.ts'), `export default { entry: 'App.tsx',
         composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'hadars.lock', buildsDir: 'builds' } } };`);
     const output = join(f.dir, 'edge.mjs');
     const child = Bun.spawn([process.execPath, join(root, 'dist/cli.js'), 'export', 'bunny', output], { cwd: f.dir, stdout: 'pipe', stderr: 'pipe' });
     const [status, stderr, stdout] = await Promise.all([child.exited, new Response(child.stderr).text(), new Response(child.stdout).text()]);
     if (status !== 0) throw new Error(stdout + stderr);
+    expect(stdout).toContain('Linked module \"greeter\"');
+    expect(stdout).toContain('Linked module \"second\"');
     const code = readFileSync(output, 'utf8');
-    expect(code).not.toMatch(/node:fs|fs\/promises/);
+    expect(code).not.toMatch(/node:fs|node:path|fs\/promises/);
+    expect(code.split('shell-copy-unique-marker')).toHaveLength(2);
+    const provenance = readFileSync(join(f.dir, '.hadars/static/composition-provenance.json'), 'utf8');
+    expect(provenance).not.toContain(f.dir);
+    expect(JSON.parse(provenance).modules.second).toMatchObject({ buildId: second.manifest.buildId, server: expect.arrayContaining([expect.objectContaining({ path: 'server/second.cjs', sha256: expect.any(String) })]) });
     expect(code).not.toContain('server/greeter.cjs');
     expect(readFileSync(join(f.dir, '.hadars/static/_builds', f.module.manifest.buildId, 'client/greeter.js'))).toEqual(readFileSync(join(f.module.dir, 'client/greeter.js')));
     const sdk = code.match(/from "(@[^\"]+sdk)"/);
@@ -136,6 +165,8 @@ test('edge export runs a composed shell without pinned directories or a resolver
         const html = await response.text();
         expect(response.status).toBe(200);
         expect(html).toContain('composed shell');
+        expect(html).toContain('linked server output');
+        expect(html).toContain('page');
         expect(html).toContain(`/_builds/${f.module.manifest.buildId}/client/greeter.js`);
         expect(html).toContain('sha256-');
     } finally { delete (globalThis as any).__hadarsPinnedExportHandler; }
@@ -223,4 +254,86 @@ test('contract, flavour and missing shared compatibility errors keep their field
         await compatibilityError(() => verifyLockfile(f.options, c.dev), c.fields, c.message);
         if (!c.dev) await compatibilityError(() => assemblePinnedExport(f.options, join(f.dir, 'static')), c.fields, c.message);
     }
+});
+
+test('linked export rejects changed or missing server bytes before staging assets', async () => {
+    const { assemblePinnedExport } = await import('../src/composition/build');
+    for (const mode of ['size', 'hash', 'missing']) {
+        const f = await fixture();
+        const file = join(f.module.dir, 'server/greeter.cjs');
+        if (mode === 'missing') rmSync(file);
+        else if (mode === 'size') writeFileSync(file, 'changed');
+        else { const bytes = readFileSync(file); bytes[0] = bytes[0]! ^ 1; writeFileSync(file, bytes); }
+        const output = join(f.dir, 'static');
+        await expect(assemblePinnedExport(f.options, output, { file: join(f.dir, 'link.js'), runtime: 'unused' }))
+            .rejects.toThrow(mode === 'hash' ? 'sha256 mismatch' : mode === 'size' ? 'size mismatch' : 'ENOENT');
+        expect((await import('node:fs')).existsSync(output)).toBe(false);
+    }
+});
+
+test('server linking rejects unsupported dependencies with a named module error', async () => {
+    const { linkServer } = await import('../src/composition/linkServer');
+    for (const source of ["module.exports = require('node:fs');", 'module.exports = require(globalThis.entry);', "module.exports = require('./missing.cjs');"]) {
+        await expect(linkServer('example', 'server/main.cjs', new Map([['server/main.cjs', Buffer.from(source)]])))
+            .rejects.toMatchObject({ name: 'CompositionLinkError', module: 'example' });
+    }
+});
+
+test('a server entry is mandatory unless the immutable module explicitly declares clientOnly', async () => {
+    const { createBuild, assemblePinnedExport } = await import('../src/composition/build');
+    const f = await fixture();
+    const options = { sourceDir: f.module.dir, buildsDir: f.options.buildsDir, kind: 'module' as const,
+        name: 'greeter', exposes: ['page'], targets: { client: f.module.manifest.targets.client, server: { js: [], css: [] } } };
+    for (const clientOnly of [false, true]) {
+        const module = createBuild({ ...options, clientOnly });
+        writeFileSync(f.options.lockFile, JSON.stringify(assembleLockfile({ shell: f.shell.manifest, modules: [module.manifest] })));
+        const file = join(f.dir, 'linked.js');
+        const result = assemblePinnedExport(f.options, join(f.dir, 'static'), { file, runtime: 'unused' });
+        if (!clientOnly) await expect(result).rejects.toMatchObject({ name: 'CompositionLinkError', module: 'greeter' });
+        else {
+            expect((await result).greeter).toBeDefined();
+            expect(readFileSync(file, 'utf8')).not.toContain('registerLinkedModule("greeter"');
+            expect(JSON.parse(readFileSync(join(f.dir, 'static/composition-provenance.json'), 'utf8')).modules.greeter)
+                .toMatchObject({ clientOnly: true, server: [] });
+        }
+    }
+});
+
+test('clientOnly module builds omit the server entry', async () => {
+    const f = await fixture();
+    const result = await buildModule({ cwd: join(import.meta.dir, 'fixtures/composition-module'), outDir: join(f.dir, 'browser-only'),
+        composition: { role: 'module', name: 'browser-only', clientOnly: true, exposes: { page: 'src/page.tsx' } } });
+    expect(result.client.js.length).toBe(1);
+    expect(result.server.js).toEqual([]);
+});
+
+test('node descriptors and directories still load into the same application lookup', async () => {
+    const f = await fixture();
+    const { loadServerModule } = await import('../src/composition/build');
+    const { registerModule, getModule } = await import('../src/composition/runtime');
+    const builds = await verifyLockfile(f.options);
+    const { registerServerModules } = await import('../src/composition/registerServerModules');
+    registerServerModules(builds);
+    expect(getModule('greeter').page.title).toBe('page');
+    const module = await loadServerModule(builds.greeter!.server);
+    registerModule('node-example', module);
+    expect(getModule('node-example')).toBe(module);
+    expect(getModule('node-example').page.title).toBe('page');
+    expect((await loadServerModule(join(f.dir, 'module/server'))).page.title).toBe('page');
+});
+
+test('export rejects a pinned server dependency that cannot be statically linked', async () => {
+    const { createBuild, assemblePinnedExport } = await import('../src/composition/build');
+    const f = await fixture();
+    const sourceDir = join(f.dir, 'unsupported');
+    mkdirSync(join(sourceDir, 'client'), { recursive: true });
+    mkdirSync(join(sourceDir, 'server'), { recursive: true });
+    writeFileSync(join(sourceDir, 'client/main.js'), 'globalThis.example = {};');
+    writeFileSync(join(sourceDir, 'server/main.cjs'), "module.exports = require('node:path');");
+    const module = createBuild({ sourceDir, buildsDir: f.options.buildsDir, kind: 'module', name: 'unsupported', exposes: ['page'],
+        targets: { client: { js: ['client/main.js'], css: [] }, server: { js: ['server/main.cjs'], css: [] } } });
+    writeFileSync(f.options.lockFile, JSON.stringify(assembleLockfile({ shell: f.shell.manifest, modules: [module.manifest] })));
+    await expect(assemblePinnedExport(f.options, join(f.dir, 'static'), { file: join(f.dir, 'linked.js'), runtime: 'unused' }))
+        .rejects.toMatchObject({ name: 'CompositionLinkError', module: 'unsupported' });
+    expect((await import('node:fs')).existsSync(join(f.dir, 'static'))).toBe(false);
 });
