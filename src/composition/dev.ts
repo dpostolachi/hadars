@@ -25,10 +25,10 @@ export interface ModuleDevServer {
 // First entry of the dev client: applies hot updates when the dev server reports a rebuild.
 // An update no component boundary accepts (e.g. a file that also exports a context) cannot be
 // applied in place, so the page reloads, as webpack-dev-server does.
-const HMR_CLIENT = `if (module.hot) {
+const HMR_CLIENT = `if (import.meta.webpackHot) {
     const es = new EventSource(__webpack_public_path__ + '__hmr');
     es.onmessage = () => {
-        module.hot.check(true).catch((e) => {
+        import.meta.webpackHot.check(true).catch((e) => {
             globalThis.__hadarsModuleHmrError = String((e && e.message) || e);
             location.reload();
         });
@@ -115,25 +115,37 @@ export async function startModuleDevServer(opts: ModuleDevServerOptions): Promis
         writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
     };
 
+    const watchers: Array<{ close(): Promise<void> }> = [];
     const watch = (compiler: NonNullable<ReturnType<typeof rspack>>, dir: string, after?: (stats: any) => void) =>
-        new Promise<{ close(): Promise<void> }>((resolve, reject) => {
+        new Promise<void>((resolve, reject) => {
             let first = true;
             const watching = compiler.watch({}, (err, stats) => {
-                if (err) return first ? reject(err) : console.error('[hadars] module build error', err);
-                if (stats?.hasErrors()) console.error(stats.toString({ errors: true }));
-                else if (stats) { writeManifest(dir, stats); after?.(stats); }
-                if (first) { first = false; resolve({ close: () => new Promise<void>((r) => watching.close(() => r())) }); }
+                const error = err ?? (stats?.hasErrors() ? new Error(`[hadars] Initial module compilation failed:\n${stats.toString({ errors: true })}`) : undefined);
+                if (error) {
+                    if (first) { first = false; reject(error); }
+                    else console.error('[hadars] module build error', error);
+                    return;
+                }
+                if (stats) { writeManifest(dir, stats); after?.(stats); }
+                if (first) { first = false; resolve(); }
             });
+            watchers.push({ close: () => new Promise<void>((r) => watching.close(() => r())) });
         });
 
     let builds = 0;
-    const [clientWatch, serverWatch] = await Promise.all([
+    const results = await Promise.allSettled([
         watch(clientCompiler, clientDir, (stats) => {
             builds++;
             for (const c of sseClients) c.write(`data: ${stats.hash}\n\n`);
         }),
         watch(serverCompiler, serverDir),
     ]);
+    const failure = results.find((r) => r.status === 'rejected');
+    if (failure?.status === 'rejected') {
+        await Promise.all(watchers.map((w) => w.close()));
+        await new Promise<void>((r) => server.close(() => r()));
+        throw failure.reason;
+    }
 
     return {
         clientUrl,
@@ -141,7 +153,7 @@ export async function startModuleDevServer(opts: ModuleDevServerOptions): Promis
         get builds() { return builds; },
         async close() {
             for (const c of sseClients) c.end();
-            await Promise.all([clientWatch.close(), serverWatch.close()]);
+            await Promise.all(watchers.map((w) => w.close()));
             await new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections?.(); });
         },
     };

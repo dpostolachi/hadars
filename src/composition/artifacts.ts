@@ -1,3 +1,4 @@
+import { CompositionCompatibilityError } from './errors';
 import { lstatSync, readdirSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type { TargetManifest } from './constants';
@@ -127,7 +128,17 @@ export function assembleLockfile({ shell, modules = [], libraries = [] }: { shel
     if (shell.kind !== 'shell' || modules.some((m) => m.kind !== 'module') || libraries.some((m) => m.kind !== 'library')) throw new Error('Incorrect lock build kind');
     if (new Set(all.map((m) => m.name)).size !== all.length) throw new Error('Duplicate lock build name');
     for (const m of all) if (m.buildId !== computeBuildId(m)) throw new Error(`Build identity mismatch: ${m.name}`);
-    for (const m of modules) assertVersionContracts(m.name, m.requires, shell.provides);
+    for (const m of all) {
+        if (!['1', '2'].includes(m.runtimeContract)) throw new CompositionCompatibilityError('incompatible runtime contract or flavour',
+            { module: m.name, kind: 'contract', requiredRange: '1 | 2', providedVersion: m.runtimeContract });
+        if (!['production', 'dev'].includes(m.flavour)) throw new CompositionCompatibilityError('incompatible runtime contract or flavour',
+            { module: m.name, kind: 'flavour', requiredRange: 'production | dev', providedVersion: m.flavour });
+    }
+    for (const m of modules) {
+        assertVersionContracts(m.name, m.requires, shell.provides);
+        if (m.flavour !== shell.flavour) throw new CompositionCompatibilityError('flavour differs from the pinned shell',
+            { module: m.name, kind: 'flavour', requiredRange: shell.flavour, providedVersion: m.flavour });
+    }
     const pins = (builds: BuildManifest[]) => Object.fromEntries([...builds].sort((a, b) => a.name.localeCompare(b.name)).map((m) => [m.name, m.buildId]));
     const identity = { shell: shell.buildId, modules: pins(modules), libraries: pins(libraries) };
     const snapshot = { ...identity, id: 'snap_' + hash(JSON.stringify(identity)).slice(0, 16) };

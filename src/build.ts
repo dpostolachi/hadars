@@ -1,3 +1,4 @@
+import { cleanOutput } from './utils/cleanOutput';
 import { resolvePinnedBuilds, servePinnedAsset } from './composition/pinnedBuilds';
 import { createProxyHandler } from "./utils/proxyHandler";
 import { parseRequest } from "./utils/request";
@@ -358,16 +359,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         process.exit(1);
     }
 
-    // Keep immutable inputs and generated declarations across dev restarts.
-    const inputs = new Set(['builds', 'integrity.json', 'types', 'tsconfig.json']);
-    for (const input of pinned ? [pinned.lockFile, pinned.buildsDir, pinned.integrityFile, ...Object.values(pinnedBuilds ?? {}).map((b) => b.server.dir)] : []) {
-        if (!input) continue;
-        const relative = pathMod.relative(pathMod.resolve(HadarsFolder), pathMod.resolve(input));
-        if (relative && relative !== '..' && !relative.startsWith(`..${pathMod.sep}`) && !pathMod.isAbsolute(relative)) inputs.add(relative.split(pathMod.sep)[0]!);
-    }
-    for (const file of await fs.readdir(HadarsFolder).catch(() => [])) {
-        if (!inputs.has(file)) await fs.rm(pathMod.join(HadarsFolder, file), { recursive: true, force: true });
-    }
+    await cleanOutput(options);
     await fs.mkdir(SsrImportDir, { recursive: true });
 
     let { port = 9090, baseURL: configuredBaseURL = '' } = options;
@@ -792,10 +784,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             } finally {
                 if (!clientResolved) {
                     clientResolved = true;
-                    resolve();
+                    if (stats.hasErrors()) reject(new Error('[hadars] Initial client compilation failed'));
+                    else resolve();
                 }
             }
         });
+        (clientCompiler as any).hooks.failed.tap('initial-build', reject);
         devServer.start().catch(reject);
     });
 
@@ -858,11 +852,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 }
             }
             if (!gotMarker) {
-                console.warn('SSR worker did not signal initial build completion within timeout');
+                throw new Error('[hadars] Initial SSR compilation failed: worker did not signal completion');
             }
         } catch (err) {
             console.error('Error reading SSR worker output', err);
             stdoutReader = null;
+            throw err;
         }
     })();
 
@@ -871,6 +866,13 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // port is bound right away. Incoming requests await this promise before
     // processing, so they hold in-flight and all resolve together once ready.
     const readyPromise = Promise.all([clientBuildDone, ssrBuildDone]);
+
+    readyPromise.catch((err) => {
+        console.error('[hadars] Dev startup failed:', err);
+        cleanupChild();
+        cleanupLock();
+        process.exit(1);
+    });
 
     readyPromise.then(async () => {
         // Generate image variants once after the initial build so /_images/ URLs
@@ -1089,6 +1091,8 @@ export const build = async (options: HadarsRuntimeOptions) => {
         );
         process.exit(1);
     }
+
+    await cleanOutput(options);
 
     const entry = pathMod.resolve(__dirname, options.entry);
 

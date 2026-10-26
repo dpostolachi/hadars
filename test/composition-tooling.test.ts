@@ -2,10 +2,19 @@ import { test, expect, afterAll } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildModule, createModuleBuild, createShellBuild, createIntegrityMap, assembleLockfile, verifyLockfile, computeBuildId } from '../src/composition/build';
+import { buildModule, createModuleBuild, createShellBuild, createIntegrityMap, assembleLockfile, verifyLockfile, computeBuildId, CompositionCompatibilityError, type CompositionCompatibilityDetails, type BuildManifest } from '../src/composition/build';
 
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+async function compatibilityError(action: () => unknown, fields: CompositionCompatibilityDetails, message: string) {
+    let error: unknown;
+    try { await action(); } catch (e) { error = e; }
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(CompositionCompatibilityError);
+    expect(error).toMatchObject({ name: 'CompositionCompatibilityError', ...fields });
+    expect((error as Error).message).toContain(message);
+}
 
 async function fixture(versions?: { required: string; provided: string }) {
     const dir = mkdtempSync(join(tmpdir(), 'hadars-artifacts-'));
@@ -141,7 +150,9 @@ test('contract 2 pins versioned provides and enforces ranges in production, dev 
     const { createBuild, assemblePinnedExport } = await import('../src/composition/build');
     const incompatible = createBuild({ ...f.module.manifest, sourceDir: f.module.dir, buildsDir: f.options.buildsDir,
         runtimeContract: '2', requires: { 'shared-context': '^2.0.0' } });
-    expect(() => assembleLockfile({ shell: f.shell.manifest, modules: [incompatible.manifest] })).toThrow('shared-context');
+    const fields = { module: 'greeter', package: 'shared-context', requiredRange: '^2.0.0', providedVersion: '1.4.0', kind: 'version' as const };
+    await compatibilityError(() => assembleLockfile({ shell: f.shell.manifest, modules: [incompatible.manifest] }), fields,
+        'Module "greeter" requires package "shared-context" range "^2.0.0"; shell provides "1.4.0"');
     // Simulate an externally produced, self-consistent lock containing incompatible pins.
     const { hash, canonical } = await import('../src/composition/identity');
     const lock = assembleLockfile({ shell: f.shell.manifest });
@@ -153,17 +164,18 @@ test('contract 2 pins versioned provides and enforces ranges in production, dev 
     lock.snapshotSha256 = hash(canonical(lock.snapshot));
     writeFileSync(f.options.lockFile, JSON.stringify(lock));
     const message = 'package "shared-context" range "^2.0.0"; shell provides "1.4.0"';
-    await expect(verifyLockfile(f.options)).rejects.toThrow(message);
-    await expect(verifyLockfile(f.options, true)).rejects.toThrow(message);
-    await expect(assemblePinnedExport(f.options, join(f.dir, 'static'))).rejects.toThrow(message);
+    await compatibilityError(() => verifyLockfile(f.options), fields, message);
+    await compatibilityError(() => verifyLockfile(f.options, true), fields, message);
+    await compatibilityError(() => assemblePinnedExport(f.options, join(f.dir, 'static')), fields, message);
 });
 
 test('dev override requirements are checked against the pinned shell', async () => {
     const f = await fixture({ required: '^1.0.0', provided: '1.4.0' });
     writeFileSync(join(f.dir, 'module/composition.json'), JSON.stringify({ requires: { 'shared-context': '^3.0.0' } }));
-    await expect(verifyLockfile({ ...f.options, overrides: { greeter: {
+    await compatibilityError(() => verifyLockfile({ ...f.options, overrides: { greeter: {
         serverDir: join(f.dir, 'module/server'), clientUrl: 'http://127.0.0.1:4200/',
-    } } }, true)).rejects.toThrow('package "shared-context" range "^3.0.0"; shell provides "1.4.0"');
+    } } }, true), { module: 'greeter', package: 'shared-context', requiredRange: '^3.0.0', providedVersion: '1.4.0', kind: 'version' },
+        'package "shared-context" range "^3.0.0"; shell provides "1.4.0"');
 });
 
 test('module tooling can infer exact shared requirements from installed dependencies', async () => {
@@ -181,4 +193,34 @@ test('module tooling can infer exact shared requirements from installed dependen
     expect(build.manifest.requires).toEqual({ 'shared-api': '2.3.4' });
     expect(JSON.parse(readFileSync(join(opts.outDir, 'composition.json'), 'utf8')).requires).toEqual(build.manifest.requires);
     expect(build.manifest.runtimeContract).toBe('2');
+});
+
+test('contract, flavour and missing shared compatibility errors keep their fields through resolution and export', async () => {
+    const f = await fixture();
+    const { hash, canonical } = await import('../src/composition/identity');
+    const { assemblePinnedExport } = await import('../src/composition/build');
+    const cases: Array<{ target: 'shell' | 'module'; patch: Partial<BuildManifest>; fields: CompositionCompatibilityDetails; message: string; dev?: boolean; assembly?: boolean }> = [
+        { target: 'module', patch: { runtimeContract: '99' }, fields: { module: 'greeter', kind: 'contract', requiredRange: '1 | 2', providedVersion: '99' }, message: 'incompatible runtime contract or flavour', assembly: true },
+        { target: 'shell', patch: { runtimeContract: '99' }, fields: { module: 'shell', kind: 'contract', requiredRange: '1 | 2', providedVersion: '99' }, message: 'incompatible runtime contract or flavour', assembly: true },
+        { target: 'module', patch: { flavour: 'unknown' as BuildManifest['flavour'] }, fields: { module: 'greeter', kind: 'flavour', requiredRange: 'production | dev', providedVersion: 'unknown' }, message: 'incompatible runtime contract or flavour', dev: true, assembly: true },
+        { target: 'module', patch: { flavour: 'dev' }, fields: { module: 'greeter', kind: 'flavour', requiredRange: 'production', providedVersion: 'dev' }, message: 'flavour differs from the pinned shell', dev: true, assembly: true },
+        { target: 'shell', patch: { flavour: 'dev' }, fields: { module: 'shell', kind: 'flavour', requiredRange: 'production', providedVersion: 'dev' }, message: 'incompatible runtime contract or flavour' },
+        { target: 'module', patch: { shared: ['missing-api'] }, fields: { module: 'greeter', kind: 'shared', package: 'missing-api', requiredRange: undefined, providedVersion: undefined }, message: 'shared package "missing-api" is not provided by the pinned shell' },
+    ];
+    for (const c of cases) {
+        const shell = { ...f.shell.manifest, ...(c.target === 'shell' ? c.patch : {}) };
+        const module = { ...f.module.manifest, ...(c.target === 'module' ? c.patch : {}) };
+        shell.buildId = computeBuildId(shell);
+        module.buildId = computeBuildId(module);
+        if (c.assembly) await compatibilityError(() => assembleLockfile({ shell, modules: [module] }), c.fields, c.message);
+        // External lock producers can supply internally consistent but incompatible manifests.
+        const snapshot = { shell: shell.buildId, modules: { greeter: module.buildId }, libraries: {} };
+        const id = 'snap_' + hash(JSON.stringify(snapshot)).slice(0, 16);
+        const fullSnapshot = { ...snapshot, id };
+        const lock = { version: 1, snapshot: fullSnapshot, snapshotId: id, snapshotSha256: hash(canonical(fullSnapshot)),
+            builds: Object.fromEntries([shell, module].map((manifest) => [manifest.buildId, { manifest, sha256: hash(canonical(manifest)) }])) };
+        writeFileSync(f.options.lockFile, JSON.stringify(lock));
+        await compatibilityError(() => verifyLockfile(f.options, c.dev), c.fields, c.message);
+        if (!c.dev) await compatibilityError(() => assemblePinnedExport(f.options, join(f.dir, 'static')), c.fields, c.message);
+    }
 });

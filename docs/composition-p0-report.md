@@ -32,7 +32,7 @@ tamper detection, duplicate names, immutability and CLI verification.
 `bun test`: 329 pass, 0 fail. No new typecheck diagnostics; existing diagnostic
 union ordering may vary, but the error locations and codes remain unchanged.
 
-No commits or external publication. Items 6 and 7 are outside scope.
+No commits or external publication.
 
 ## Item 4 — complete
 
@@ -62,6 +62,47 @@ error locations/codes as baseline; no diagnostics were added in touched files.
 
 ## Final scope
 
-Items 1–5 are implemented. Static server registration remains a documented
-extension point. Items 6 and 7 remain outside scope. All changes are uncommitted;
+Items 1–7 and the named compatibility error are implemented. Static server registration remains a documented
+extension point. Items 6 and 7 are covered by the follow-up work below. All changes are uncommitted;
 no pushes, remote comments, issues, publication or deployment actions occurred.
+
+## Follow-up item 6 — ESM dev HMR complete
+
+The generated module dev client uses the parser-supported `import.meta.webpackHot`
+API, including when its output lives in an ESM package scope. The existing browser
+fixture now supplies `type: module` and verifies Fast Refresh, retained shell state,
+reload fallback and updated server rendering without editing generated files.
+Module startup rejects failed initial stats and closes both watchers and its HTTP
+listener. Shell client and SSR startup also reject failed initial compilation;
+the CLI exits nonzero with a clear diagnostic instead of accepting completion.
+Added module rejection and failing-shell CLI tests. `bun test`: 337 pass, 0 fail.
+Typecheck retains the baseline diagnostics. Nothing remains for this item.
+
+## Follow-up item 7 — output retention complete
+
+Added `HadarsOptions.moduleOutputDirs` for relative or absolute staging/output
+paths. Dev and build now use one cleanup policy: only `static` and `.ssr-modules`
+are pruned, with configured module paths and pinned inputs excluded recursively.
+Unknown user directories under `.hadars` are retained by default. Root compiler
+outputs can be replaced by compilation; module filenames should stay separate.
+Documented ownership, symlink handling and module helper outDir behavior.
+An actual dev/build fixture checks configured paths outside and under `.hadars`,
+a nested path within static output, an unconfigured user directory, and removal
+of stale generated output. `bun test`: 338 pass, 0 fail. Typecheck matches the
+baseline. Nothing remains for this item.
+
+## Follow-up version contract — named compatibility error complete
+
+Exported `CompositionCompatibilityError` and its typed details from the build
+entry. It extends Error and retains existing messages, with readonly module,
+package, requiredRange, providedVersion and kind fields. Resolver diagnostics
+retain the class and fields when adding pinned-build context. Dev overrides and
+export preserve it too. Lock assembly now checks supported runtime contracts and
+flavours and shell/module flavour agreement as well as versions. Contract 1 and
+2 remain interoperable; integrity failures remain ordinary Errors.
+Tests assert the class, fields and diagnostic at version, contract, flavour and
+missing-shared rejection sites, including assembly, resolver, overrides and
+export. Documented field semantics and catch usage. `bun test`: 339 pass, 0 fail.
+`bun run build:all` passes; typecheck has the same baseline diagnostics. Nothing
+remains for the requested items. Static server registration remains a future
+extension point. All changes remain uncommitted with no external writes.

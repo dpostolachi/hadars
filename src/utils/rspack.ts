@@ -621,7 +621,8 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
 
                 if (first) {
                     first = false;
-                    resolve(stats);
+                    if (stats?.hasErrors()) reject(new Error(`Initial compilation failed:\n${stats.toString({ errors: true })}`));
+                    else resolve(stats);
                 } else {
                     try {
                         opts.onChange && opts.onChange(stats);

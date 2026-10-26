@@ -1,3 +1,4 @@
+import { CompositionCompatibilityError } from './errors';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -32,7 +33,8 @@ export function assertVersionContracts(name: string, requires: Record<string, st
     for (const [pkg, range] of Object.entries(requires)) {
         const version = Array.isArray(provides) ? undefined : provides[pkg];
         if (!validRange(range) || !version || !valid(version) || !satisfies(version, range)) {
-            throw new Error(`Module "${name}" requires package "${pkg}" range "${range}"; shell provides "${version ?? 'missing'}"`);
+            throw new CompositionCompatibilityError(`Module "${name}" requires package "${pkg}" range "${range}"; shell provides "${version ?? 'missing'}"`,
+                { module: name, package: pkg, requiredRange: range, providedVersion: version, kind: 'version' });
         }
     }
 }

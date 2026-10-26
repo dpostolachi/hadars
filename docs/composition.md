@@ -103,7 +103,7 @@ overrides: {
 },
 ```
 
-The shell must run `hadars dev`. The override uses the local server entry and client manifest instead of the pinned module and drops pinned SRI values. It supports Fast Refresh, reload fallback, and updated SSR. Overrides must name pinned modules and are ignored in production. The pinned set is still validated. Generated `.hadars/builds`, `types`, `integrity.json`, and `tsconfig.json`, plus configured pinned inputs, survive dev restarts.
+The shell must run `hadars dev`. The override uses the local server entry and client manifest instead of the pinned module and drops pinned SRI values. It supports Fast Refresh in ESM projects (`"type": "module"`), reload fallback, and updated SSR. The generated HMR client uses `import.meta.webpackHot`; no generated-file rewrite is needed. An initial compilation error rejects module dev startup and makes shell dev exit nonzero with a compilation diagnostic. Overrides must name pinned modules and are ignored in production. The pinned set is still validated. Pinned inputs, generated declarations and configured module output survive dev restarts (see cleanup policy below).
 
 ## Runtime boundaries
 
@@ -256,3 +256,63 @@ Lock assembly, production resolution, dev resolution (including overrides) and
 edge export reject incompatible versions with the module name, package, required
 range and provided version. A dev override's serverDir and clientUrl must come
 from the same build.
+
+## Output retention
+
+Set `moduleOutputDirs` in the app configuration to retain module staging and build
+output during both `dev` and `build`. Paths are relative to the project working
+directory, or absolute. This also protects nested directories within owned output:
+
+```ts
+export default {
+    entry: 'src/App.tsx',
+    moduleOutputDirs: ['module-output', '.hadars/modules', '.hadars/static/modules'],
+};
+```
+
+Hadars owns and cleans `.hadars/static` (compiled client assets and exported static
+files) and `.hadars/.ssr-modules` (temporary server imports) on dev/build startup.
+Configured module directories and pinned inputs inside those directories are
+excluded from cleanup, including their parents. Other contents of `.hadars` are
+retained, including unknown user directories, `builds`, `types`, `integrity.json`
+and `tsconfig.json`. Root server bundles/chunks are generated files that the
+compiler may replace; `.hadars-lock.json` is managed by the running process.
+Keep module filenames separate from generated shell filenames. Cleanup never
+traverses symlinks to prune preserved inputs. `buildModule` and
+`startModuleDevServer` do not clear their `outDir`.
+
+## Compatibility errors
+
+`CompositionCompatibilityError` is exported from `hadars/composition/build`
+alongside the Node tooling that throws it. It extends `Error`, keeps the existing diagnostic message,
+and sets `name` to `CompositionCompatibilityError`. Lock assembly, pinned
+resolution, dev override checks and export use it for compatibility failures;
+integrity and malformed-file errors remain ordinary errors.
+
+Its readonly fields are `module` (the affected build name), `package` (the shared
+specifier, when relevant), `requiredRange`, `providedVersion`, and `kind`:
+
+- `version`: a package version is missing or does not satisfy its range.
+- `contract`: an unsupported manifest runtime contract; requiredRange is `1 | 2`.
+- `flavour`: an unsupported flavour, a dev build in production, or a module whose
+  flavour differs from its shell. The fields contain the allowed and actual values.
+- `shared`: a shared package has no shell provider.
+
+Fields without an applicable value are `undefined`. Contract 1 and contract 2
+may coexist because they share the same runtime ABI. Assembly validates supported
+contracts/flavours and matching shell/module flavours; resolution additionally
+enforces the requested dev/production mode.
+
+```ts
+import { verifyLockfile, CompositionCompatibilityError } from 'hadars/composition/build';
+
+try {
+    await verifyLockfile(pinnedOptions);
+} catch (error) {
+    if (error instanceof CompositionCompatibilityError) {
+        console.error(error.kind, error.module, error.package,
+            error.requiredRange, error.providedVersion);
+    }
+    throw error;
+}
+```

@@ -1,3 +1,4 @@
+import { CompositionCompatibilityError, type CompositionCompatibilityDetails } from './errors';
 import { valid } from 'semver';
 import { assertVersionContracts } from './versions';
 import { hash, canonical, computeBuildId } from './identity';
@@ -15,6 +16,9 @@ const verified = new Map<string, string>();
 /** Validates the complete pin set before any entry is evaluated. Dev reuses unchanged file hashes. */
 export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = false): Promise<Record<string, PinnedBuild>> {
     const fail = (name: string, detail: string): never => { throw new Error(`[hadars] Pinned build "${name}": ${detail}. Restore the pinned files and lock file before starting.`); };
+    const incompatible = (name: string, detail: string, fields: Omit<CompositionCompatibilityDetails, 'module'>): never => {
+        throw new CompositionCompatibilityError(`[hadars] Pinned build "${name}": ${detail}. Restore the pinned files and lock file before starting.`, { module: name, ...fields });
+    };
     let lock: any;
     try { lock = JSON.parse(await readFile(options.lockFile, 'utf8')); }
     catch { return fail(options.lockFile, 'cannot read lock file as JSON'); }
@@ -53,14 +57,19 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             if (!m || m.kind !== kind || (pinName && m.name !== pinName) || !/^[A-Za-z0-9][\w-]*$/.test(m.name)
                 || m.buildId !== id || b.sha256 !== hash(canonical(m))) fail(name, 'manifest identity/checksum mismatch');
             if (result[m.name]) fail(name, 'duplicate build name');
-            if (!['1', '2'].includes(m.runtimeContract) || !['production', 'dev'].includes(m.flavour) || (!dev && m.flavour !== 'production')) fail(name, 'incompatible runtime contract or flavour');
+            if (!['1', '2'].includes(m.runtimeContract)) incompatible(name, 'incompatible runtime contract or flavour',
+                { kind: 'contract', requiredRange: '1 | 2', providedVersion: m.runtimeContract });
+            if (!['production', 'dev'].includes(m.flavour) || (!dev && m.flavour !== 'production')) incompatible(name, 'incompatible runtime contract or flavour',
+                { kind: 'flavour', requiredRange: dev ? 'production | dev' : 'production', providedVersion: m.flavour });
             if (!strings(m.exposes) || !strings(m.shared) || !(m.runtimeContract === '1' ? strings(m.provides) : record(m.provides) && Object.values(m.provides).every((v) => typeof v === 'string' && valid(v))) || !record(m.requires) || !Object.values(m.requires).every((v) => typeof v === 'string') || !Array.isArray(m.files)) fail(name, 'invalid manifest');
             if (kind === 'module') {
                 if (!m.exposes.length || m.exposes.some((key: string) => !/^[A-Za-z_$][\w$]*$/.test(key))) fail(name, 'invalid exposed namespace');
                 assertVersionContracts(name, m.requires, shell?.provides ?? []);
-                if (m.flavour !== shell?.flavour) fail(name, 'flavour differs from the pinned shell');
+                if (m.flavour !== shell?.flavour) incompatible(name, 'flavour differs from the pinned shell',
+                    { kind: 'flavour', requiredRange: shell?.flavour, providedVersion: m.flavour });
                 const provided = new Set([...DEFAULT_SHARED, ...(Array.isArray(shell?.provides) ? shell.provides : Object.keys(shell?.provides ?? {}))]);
-                for (const pkg of m.shared) if (!provided.has(pkg)) fail(name, `shared package "${pkg}" is not provided by the pinned shell`);
+                for (const pkg of m.shared) if (!provided.has(pkg)) incompatible(name, `shared package "${pkg}" is not provided by the pinned shell`,
+                    { kind: 'shared', package: pkg });
             }
             if (kind !== 'shell' && Object.keys(m.provides).length) fail(name, 'only a shell can provide shared packages');
             if (m.types !== undefined && !strings(m.types)) fail(name, 'invalid declaration list');
@@ -101,6 +110,7 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             } };
         } catch (e: any) {
             if (e.message?.startsWith('[hadars] Pinned build ')) throw e;
+            if (e instanceof CompositionCompatibilityError) incompatible(name, e.message, e);
             fail(name, e.message);
         }
     }

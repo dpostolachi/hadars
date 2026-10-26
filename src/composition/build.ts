@@ -8,3 +8,5 @@ export type { BuildManifest, CreateBuildOptions } from './artifacts';
 export { resolvePinnedBuilds as verifyLockfile } from './pinnedBuilds';
 export { assemblePinnedExport } from './exportBuilds';
 export { resolveModuleRequires } from './versions';
+export { CompositionCompatibilityError } from './errors';
+export type { CompositionCompatibilityDetails } from './errors';
