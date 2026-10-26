@@ -7,6 +7,7 @@ import type { HadarsOptions, HadarsEntryModule } from './src/types/hadars'
 import { renderStaticSite } from './src/static'
 import { runSources } from './src/source/runner'
 import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './src/source/inference'
+import { runtimeConfigPlugin } from './src/utils/exportConfig'
 import { checkLiveLock, isPidAlive, removeLock } from './src/utils/lock'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
@@ -319,7 +320,7 @@ async function bundleCloudflare(
             define: { 'global': 'globalThis' },
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — resolved at runtime by Cloudflare's `nodejs_compat` flag.
-            plugins: [nodeBuiltinsExternalPlugin()],
+            plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
         console.log(`Cloudflare Worker bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
@@ -399,6 +400,7 @@ async function bundleLambda(
             // Everything else (React, hadars runtime, etc.) is bundled in to
             // produce a truly self-contained single-file deployment.
             external: ['@rspack/*'],
+            plugins: [runtimeConfigPlugin(configPath)],
         })
         console.log(`Lambda bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
@@ -483,7 +485,7 @@ async function bundleBunny(
             define: { 'global': 'globalThis' },
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — Deno's Node compat layer resolves these at runtime.
-            plugins: [nodeBuiltinsExternalPlugin()],
+            plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
         console.log(`Bunny Edge Script bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)

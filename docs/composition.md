@@ -356,3 +356,46 @@ try {
     throw error;
 }
 ```
+
+## Bundled runtime configuration
+
+Single-file server exports project the config onto the options consumed by the
+request handler: `fetch`, `proxy`, `proxyCORS`, `cache`, `onError` and `onResponse`.
+Compiler plugins, rules, transforms, source hooks, static path generation and
+other build options are evaluated during compilation only. Their imports and
+eager initializers are excluded from the generated runtime config. Server module
+registration is independent of this projection.
+
+Use a declarative config object, optionally held in local variables with local
+object spreads or conditional objects. Runtime hooks retain their closure
+bindings and imports. A dependency used by a runtime hook is a real runtime
+dependency: it must work in the target runtime. The exporter does not stub or
+exclude filesystem APIs used by those hooks or by linked server modules.
+
+If the default config is assembled by a function, imported spreads, mutations or
+other top-level effects, export a separate declarative `runtimeConfig` object:
+
+```ts
+export const runtimeConfig = {
+    fetch: request => request.pathname === '/health'
+        ? new Response('ok') : undefined,
+};
+
+export default assembleBuildConfig({
+    ...runtimeConfig,
+    // Compilation options go here.
+});
+```
+
+The export uses only that object's dependency graph. Put required runtime
+initialization in a module imported by a retained binding, or inside a runtime
+hook; standalone side-effect imports and top-level statements in the config are
+not a runtime initialization mechanism. Unsupported config shapes fail with a
+diagnostic instead of bundling the entire build configuration. Direct adapter
+calls still receive the options supplied by the caller.
+
+The module-reference regression scan covers both bare and `node:`-prefixed
+`fs`/`path` imports, dynamic imports and requires. It includes a composed export
+with a compiler plugin that uses both modules, then executes the exported
+handler with its pinned directories unavailable. Earlier checks that covered
+only filesystem imports could miss path-only compilation dependencies.

@@ -138,7 +138,15 @@ test('edge export runs a composed shell without pinned directories or a resolver
             const View = getModule('second').page.View;
             return <><ModuleHead client={client} /><div>composed shell {getModule('greeter').page.title}</div><View /></>;
         }`);
-    writeFileSync(join(f.dir, 'hadars.config.ts'), `export default { entry: 'App.tsx',
+    writeFileSync(join(f.dir, 'compiler-plugin.mjs'), `import { existsSync } from 'node:fs';
+        import path from 'node:path';
+        globalThis.__compilerPluginLoaded = true;
+        export default { apply() { if (!existsSync(path.resolve('App.tsx'))) throw new Error('missing entry'); } };`);
+    writeFileSync(join(f.dir, 'hadars.config.ts'), `import compilerPlugin from './compiler-plugin.mjs';
+        const buildOnly = { plugins: [compilerPlugin], optimization: { marker: 'build-only-option-marker' } };
+        export default { ...buildOnly, entry: 'App.tsx',
+        fetch: req => req.pathname === '/runtime-hook' ? new Response('runtime hook retained') : undefined,
+        onResponse: response => { response.headers.set('x-runtime-hook', 'retained'); },
         composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'hadars.lock', buildsDir: 'builds' } } };`);
     const output = join(f.dir, 'edge.mjs');
     const child = Bun.spawn([process.execPath, join(root, 'dist/cli.js'), 'export', 'bunny', output], { cwd: f.dir, stdout: 'pipe', stderr: 'pipe' });
@@ -147,7 +155,10 @@ test('edge export runs a composed shell without pinned directories or a resolver
     expect(stdout).toContain('Linked module \"greeter\"');
     expect(stdout).toContain('Linked module \"second\"');
     const code = readFileSync(output, 'utf8');
-    expect(code).not.toMatch(/node:fs|node:path|fs\/promises/);
+    // Same module-reference scan as the offline export check, including bare names.
+    expect([...code.matchAll(/(?:from\s*|import\s*\(|require\s*\()\s*["'](?:node:)?(?:fs|path)(?:\/[^"']*)?["']/g)]).toEqual([]);
+    expect(code).not.toContain('__compilerPluginLoaded');
+    expect(code).not.toContain('build-only-option-marker');
     expect(code.split('shell-copy-unique-marker')).toHaveLength(2);
     const provenance = readFileSync(join(f.dir, '.hadars/static/composition-provenance.json'), 'utf8');
     expect(provenance).not.toContain(f.dir);
@@ -164,6 +175,9 @@ test('edge export runs a composed shell without pinned directories or a resolver
         const response = await (globalThis as any).__hadarsPinnedExportHandler(new Request('https://example.test/'));
         const html = await response.text();
         expect(response.status).toBe(200);
+        expect(response.headers.get('x-runtime-hook')).toBe('retained');
+        const hookResponse = await (globalThis as any).__hadarsPinnedExportHandler(new Request('https://example.test/runtime-hook'));
+        expect(await hookResponse.text()).toBe('runtime hook retained');
         expect(html).toContain('composed shell');
         expect(html).toContain('linked server output');
         expect(html).toContain('page');
