@@ -26,6 +26,7 @@
  *   BunnySDK.net.http.serve(createBunnyHandler(config, { ssrModule, outHtml }));
  */
 
+import { deploymentPinnedClients, runtimeAssetBase } from './utils/assetBase';
 import React from 'react';
 import type { PinnedBuild } from './composition/runtime';
 import { parseRequest } from './utils/request';
@@ -80,11 +81,12 @@ export function createBunnyHandler(
     const fetchHandler      = options.fetch;
     const handleProxy       = createProxyHandler(options);
     const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml));
+    const pinnedClients = deploymentPinnedClients(bundled.pinnedClients, bundled.outHtml, runtimeAssetBase());
     const { ssrModule }     = bundled;
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
-        request.pinnedClients = bundled.pinnedClients;
+        request.pinnedClients = pinnedClients;
 
         if (fetchHandler) {
             const res = await fetchHandler(request);

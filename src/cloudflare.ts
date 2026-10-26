@@ -20,6 +20,7 @@
  *   compatibility_flags = ["nodejs_compat"]
  */
 
+import { deploymentPinnedClients, runtimeAssetBase } from './utils/assetBase';
 import React from 'react';
 import { parseRequest } from './utils/request';
 import { createProxyHandler } from './utils/proxyHandler';
@@ -72,18 +73,35 @@ export interface CloudflareHandler {
  * import config from './hadars.config';
  * export default createCloudflareHandler(config, { ssrModule, outHtml });
  */
-export function createCloudflareHandler(
+export function createCloudflareHandler(options: HadarsOptions, bundled: CloudflareBundled): CloudflareHandler {
+    // Isolate template and response caches by deployment binding, without mutating process globals.
+    const handlers = new Map<unknown, CloudflareHandler>();
+    return { fetch(request, env, ctx) {
+        const bindings = (env ?? {}) as Record<string, unknown>;
+        const value = runtimeAssetBase(bindings);
+        let handler = handlers.get(value);
+        if (!handler) {
+            handler = createEnvironmentHandler(options, bundled, value);
+            handlers.set(value, handler);
+        }
+        return handler.fetch(request, env, ctx);
+    } };
+}
+
+function createEnvironmentHandler(
     options: HadarsOptions,
     bundled: CloudflareBundled,
+    assetBase: unknown,
 ): CloudflareHandler {
     const fetchHandler     = options.fetch;
     const handleProxy      = createProxyHandler(options);
-    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml));
+    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml), () => assetBase);
+    const pinnedClients = deploymentPinnedClients(bundled.pinnedClients, bundled.outHtml, assetBase);
     const { ssrModule }    = bundled;
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
-        request.pinnedClients = bundled.pinnedClients;
+        request.pinnedClients = pinnedClients;
 
         if (fetchHandler) {
             const res = await fetchHandler(request);

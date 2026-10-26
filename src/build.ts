@@ -1,3 +1,4 @@
+import { builtAssetMetadata, relocatePinnedBuilds, runtimeAssetBase, validateAssetBase } from './utils/assetBase';
 import { registerServerModules } from './composition/registerServerModules';
 import { cleanOutput } from './utils/cleanOutput';
 import { resolvePinnedBuilds, servePinnedAsset } from './composition/pinnedBuilds';
@@ -1311,9 +1312,10 @@ export const run = async (options: HadarsRuntimeOptions) => {
         console.log(`[hadars] SSR render pool: ${workers} worker threads`);
     }
 
-    const getPrecontentHtml = makePrecontentHtmlGetter(
-        fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8')
-    );
+    const outHtml = await fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8');
+    const deploymentBuilds = relocatePinnedBuilds(pinnedBuilds, builtAssetMetadata(outHtml)?.base ?? '',
+        pinnedBuilds ? validateAssetBase(runtimeAssetBase()) : undefined);
+    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(outHtml));
     const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
 
     // Hoist and pre-import the SSR module at startup so the first request does
@@ -1326,10 +1328,10 @@ export const run = async (options: HadarsRuntimeOptions) => {
 
     const runHandler: CacheFetchHandler = async (req, ctx) => {
         const request = parseRequest(req);
-        request.pinnedBuilds = pinnedBuilds;
+        request.pinnedBuilds = deploymentBuilds;
         request.pinnedClients = request.pinnedBuilds ? Object.fromEntries(Object.values(request.pinnedBuilds).filter((b) => b.kind === 'module').map((b) => [b.name, b.client])) : undefined;
         if (request.pinnedBuilds) {
-            const asset = await servePinnedAsset(req, request.pinnedBuilds);
+            const asset = await servePinnedAsset(req, pinnedBuilds!);
             if (asset) return asset;
         }
         if (handler) {

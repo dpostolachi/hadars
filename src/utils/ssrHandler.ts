@@ -1,3 +1,4 @@
+import { ASSET_BASE_MARKER, builtAssetMetadata, runtimeAssetBase, validateAssetBase, relocateAssetUrl } from './assetBase';
 import { parseRequest } from './request';
 import { buildHeadHtml, escAttr } from './response';
 import type { AppHead, HadarsOptions } from '../types/hadars';
@@ -130,7 +131,7 @@ export async function buildSsrHtml(
  * post-content segments and caches the result. Call the returned function with
  * the per-request headHtml to produce the full HTML prefix and suffix.
  */
-export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
+export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>, getAssetBase: () => unknown = runtimeAssetBase) => {
     let preHead: string | null = null;
     let postHead: string | null = null;
     let postContent: string | null = null;
@@ -139,6 +140,22 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     // process's idle time before the first request arrives.  This way the
     // first real request finds preHead !== null and takes the sync path.
     const primed = htmlFilePromise.then(html => {
+        const metadata = builtAssetMetadata(html);
+        const base = validateAssetBase(getAssetBase());
+        if (metadata) {
+            const builtBase = metadata.base.replace(/\/+$/, '');
+            const assetUrls = new Set(metadata.files.map(file => (builtBase || '') + '/' + file));
+            html = html.replace(ASSET_BASE_MARKER, '');
+            if (base !== undefined) {
+                // Only the built template is rewritten; request head and application markup are untouched.
+                html = html.replace(/\b(src|href)="([^"]*)"/g, (_, attr, url) =>
+                    assetUrls.has(url.replace(/&amp;/g, '&'))
+                        ? `${attr}="${escAttr(relocateAssetUrl(url.replace(/&amp;/g, '&'), builtBase, base))}"`
+                        : `${attr}="${url}"`);
+                const script = `<script>globalThis.__HADARS_ASSET_BASE_URL__=${JSON.stringify(base).replace(/</g, '\\u003c')}</script>`;
+                html = html.replace(/<head\b[^>]*>/i, match => match + script);
+            }
+        }
         const headEnd = html.indexOf(HEAD_MARKER);
         const contentStart = html.indexOf(BODY_MARKER);
         // Both markers are required.  Without this check `indexOf` returns -1 and

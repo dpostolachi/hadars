@@ -1,4 +1,5 @@
 import rspack from "@rspack/core";
+import { RuntimeAssetsPlugin } from "./runtimeAssetsPlugin";
 import type { Configuration, RuleSetLoaderWithOptions, RuleSetRule } from "@rspack/core";
 import ReactRefreshPlugin from '@rspack/plugin-react-refresh';
 import path from 'node:path';
@@ -448,6 +449,7 @@ const buildCompilerConfig = (
         ...(isServerBuild ? { externalsPresets: { node: true } } : {}),
         ...(optimization !== undefined ? { optimization } : {}),
         plugins: [
+            !isServerBuild && opts.mode === 'production' && new RuntimeAssetsPlugin(base || ''),
             !isServerBuild && new rspack.HtmlRspackPlugin({
                 publicPath: base || '/',
                 template: opts.htmlTemplate
