@@ -1,0 +1,199 @@
+import { test, expect, afterAll } from 'bun:test';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, readdirSync, openSync, closeSync } from 'node:fs';
+import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { createBuild, assembleLockfile, verifyExport } from '../src/composition/build';
+import { hash } from '../src/composition/identity';
+const root = join(import.meta.dir, '..');
+const dir = mkdtempSync(join(root, '.split-test-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
+function write(file: string, data: string) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, data); }
+const spec = { mode: 'per-module', defaultGroup: 'main', mounts: { admin: ['/admin/**'], shop: ['/shop/**'] }, budgets: { unitBytes: 9_000_000 } };
+function config(split?: any) {
+    write(join(dir, 'hadars.config.ts'), `export default { entry: 'App.tsx', port: Number(process.env.PORT || 9090), composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'lock.json', buildsDir: 'builds' } }, ${split ? `split: ${JSON.stringify(split)},` : ''} fetch: () => new Response('hook'), onResponse: r => r };`);
+}
+let invocation = 0;
+async function cli(...args: string[]) {
+    const log = join(dir, `cli-${invocation++}.log`);
+    const fd = openSync(log, 'w');
+    try {
+        const child = Bun.spawn(['node', '--import', join(dir, 'node-runtime.mjs'), join(root, 'dist/cli.js'), ...args], { cwd: dir, stdout: fd, stderr: fd });
+        const code = await child.exited;
+        const stdout = readFileSync(log, 'utf8');
+        if (code) throw new Error(stdout);
+        return stdout;
+    } finally { closeSync(fd); }
+}
+test('composed split export: isolation, final hashes, probes, budgets and complete seal', async () => {
+    // A fixed clock stabilizes legacy temporary filenames embedded in bundle comments.
+    write(join(dir, 'node-runtime.mjs'), 'globalThis.Deno = { version: { deno: "test" } }; Date.now = () => 1700000000000;');
+    mkdirSync(join(dir, 'node_modules'));
+    for (const name of readdirSync(join(root, 'node_modules'))) if (name !== 'hadars') symlinkSync(join(root, 'node_modules', name), join(dir, 'node_modules', name), 'dir');
+    symlinkSync(root, join(dir, 'node_modules/hadars'), 'dir');
+    write(join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', target: 'ES2022', module: 'ESNext' } }));
+    write(join(dir, 'App.tsx'), `import React from 'react'; export default () => <main>shell</main>;`);
+    const targets = { client: { js: ['client/entry.js'], css: [] }, server: { js: ['server/entry.cjs'], css: [] } };
+    const pins = ['shell', 'admin', 'shop'].map(name => {
+        const source = join(dir, 'sources', name);
+        write(join(source, 'client/entry.js'), `globalThis.${name}Client = true;`);
+        write(join(source, 'server/entry.cjs'), `module.exports = { marker: '${name.toUpperCase()}_SERVER_MARKER' };`);
+        return createBuild({ sourceDir: source, buildsDir: join(dir, 'builds'), kind: name === 'shell' ? 'shell' : 'module', name, exposes: name === 'shell' ? [] : ['page'], targets }).manifest;
+    });
+    write(join(dir, 'lock.json'), JSON.stringify(assembleLockfile({ shell: pins[0]!, modules: pins.slice(1) })));
+    config({ ...spec, budgets: undefined });
+    const logs = await cli('export', 'bunny');
+    console.log(logs.match(/Shared shell build:.*|Unit .*|Split units bundled.*/g)?.join('\n'));
+    expect(logs.match(/Shared shell build:/g)?.length).toBe(1);
+    const metadata = '.hadars/static/composition-provenance.json';
+    const manifestPath = join(dir, '.hadars/split-manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(JSON.stringify(manifest)).not.toContain(dir);
+    expect(manifest.budgets).toEqual({ unitBytes: 9_000_000 });
+    expect(readdirSync(join(dir, 'units')).sort()).toEqual(['admin', 'main', 'shop']);
+    expect(verifyExport(dir, metadata).version).toBe(2);
+    const plan = JSON.parse(await cli('composition', 'routing-plan', '.'));
+    expect(plan.map((g: any) => g.group)).toEqual(['admin', 'shop', 'main']);
+    for (const group of manifest.groups) {
+        const file = join(dir, group.unit.file);
+        const bytes = readFileSync(file);
+        expect(hash(bytes)).toBe(group.unit.sha256);
+        expect(bytes.length).toBe(group.unit.size);
+        for (const name of ['admin', 'shop']) expect(bytes.toString().includes(name.toUpperCase() + '_SERVER_MARKER')).toBe(group.name === name);
+        expect(bytes.length).toBeLessThan(spec.budgets.unitBytes);
+        // Replace only the runtime-provided serve API; execute the complete generated unit.
+        const source = bytes.toString().replace(/import \* as (\w+) from "@bunny.net\/edgescript-sdk";/, 'const $1 = { net: { http: { serve: h => globalThis.__splitTestHandler = h } } };');
+        const runnable = join(dir, `execute-${group.name}.mjs`);
+        write(runnable, source);
+        delete (globalThis as any).__HADARS_SERVER_MODULE_STATE__;
+        await import(runnable);
+        const handler = (globalThis as any).__splitTestHandler;
+        const response = await handler(new Request('http://local/__hadars/release'));
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ release: manifest.releaseId, group: group.name, shell: manifest.shell });
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        const hook = await handler(new Request('http://local/'));
+        expect(await hook.text()).toBe('hook');
+        expect(hook.headers.get('x-hadars-group')).toBe(group.name);
+        expect(hook.headers.get('x-hadars-release')).toBe(manifest.releaseId);
+    }
+    // Real listeners exercise the development/production probe before the configured hook.
+    for (const mode of ['run', 'dev']) {
+        const reservation = createServer();
+        await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+        const port = (reservation.address() as { port: number }).port;
+        await new Promise<void>(resolve => reservation.close(() => resolve()));
+        const log = join(dir, `live-${mode}.log`);
+        const fd = openSync(log, 'w');
+        const server = Bun.spawn(['node', join(root, 'dist/cli.js'), mode], { cwd: dir,
+            env: { ...process.env, PORT: String(port) }, stdout: fd, stderr: fd });
+        try {
+            const base = `http://127.0.0.1:${port}`;
+            let response: Response | undefined;
+            for (let i = 0; i < 150; i++) {
+                if (server.exitCode !== null) throw new Error(readFileSync(log, 'utf8'));
+                try { response = await fetch(base + '/__hadars/release?probe=1'); break; } catch {}
+                await Bun.sleep(100);
+            }
+            if (!response) throw new Error(`Live ${mode} did not start: ${readFileSync(log, 'utf8')}`);
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({ release: 'dev-all', group: 'dev-all', shell: manifest.shell });
+            expect(response.headers.get('cache-control')).toBe('no-store');
+            expect(await (await fetch(base + '/admin/x')).text()).toBe('hook');
+            expect(await (await fetch(base + '/administrator')).text()).toBe('hook');
+            expect(readFileSync(log, 'utf8')).toContain('[split] GET /admin/x -> admin');
+            expect(readFileSync(log, 'utf8')).toContain('[split] GET /administrator -> main');
+        } finally { server.kill(); await server.exited; closeSync(fd); }
+    }
+    // Dev rebuilds the static graph; restore the completed split export for tamper checks.
+    config({ ...spec, budgets: { unitBytes: 8_000_000 } });
+    await cli('export', 'bunny');
+    const configured = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(configured.budgets).toEqual({ unitBytes: 8_000_000 });
+    expect(verifyExport(dir, metadata).version).toBe(2);
+    const first = join(dir, manifest.groups[0].unit.file), second = join(dir, manifest.groups[1].unit.file);
+    const original = readFileSync(first), other = readFileSync(second), json = readFileSync(manifestPath);
+    writeFileSync(first, Buffer.concat([original, Buffer.from('\n// edited')]));
+    expect(() => verifyExport(dir, metadata)).toThrow('Entry script changed');
+    writeFileSync(first, original);
+    rmSync(first);
+    expect(() => verifyExport(dir, metadata)).toThrow('Missing entry script');
+    writeFileSync(first, original);
+    write(join(dir, 'units/extra/bunny.mjs'), 'extra');
+    expect(() => verifyExport(dir, metadata)).toThrow('Extra unit');
+    rmSync(join(dir, 'units/extra'), { recursive: true });
+    writeFileSync(manifestPath, '{}');
+    expect(() => verifyExport(dir, metadata)).toThrow('Entry script changed: .hadars/split-manifest.json');
+    const edited = JSON.parse(json.toString()); edited.groups[0].patterns = ['/edited/**'];
+    writeFileSync(manifestPath, JSON.stringify(edited));
+    expect(() => verifyExport(dir, metadata)).toThrow('Entry script changed: .hadars/split-manifest.json');
+    writeFileSync(manifestPath, json);
+    writeFileSync(first, other); writeFileSync(second, original);
+    expect(() => verifyExport(dir, metadata)).toThrow('Entry script changed');
+    writeFileSync(first, original); writeFileSync(second, other);
+    const asset = join(dir, '.hadars/static/_builds', pins[1]!.buildId, 'client/entry.js');
+    const client = readFileSync(asset); writeFileSync(asset, 'edited');
+    expect(() => verifyExport(dir, metadata)).toThrow('Static hash mismatch');
+    rmSync(asset);
+    expect(() => verifyExport(dir, metadata)).toThrow('Missing static file');
+    writeFileSync(asset, client);
+    write(join(dir, '.hadars/static/extra.js'), 'extra');
+    expect(() => verifyExport(dir, metadata)).toThrow('Extra static file');
+    rmSync(join(dir, '.hadars/static/extra.js'));
+    const provenance = readFileSync(join(dir, metadata));
+    const changed = JSON.parse(provenance.toString()); changed.shell = 'edited';
+    writeFileSync(join(dir, metadata), JSON.stringify(changed));
+    expect(() => verifyExport(dir, metadata)).toThrow('metadata checksum mismatch');
+    writeFileSync(join(dir, metadata), provenance);
+    expect(() => verifyExport(dir, metadata, 'untrusted')).toThrow('metadata checksum mismatch');
+    expect(verifyExport(dir, metadata).version).toBe(2);
+    // A frozen shim filename makes byte comparison meaningful (the legacy bundler emits its filename).
+    config();
+    await cli('export', 'bunny');
+    const single = readFileSync(join(dir, 'bunny.mjs'));
+    expect(verifyExport(dir, metadata).version).toBe(1);
+    config({ mode: 'single' });
+    await cli('export', 'bunny');
+    expect(readFileSync(join(dir, 'bunny.mjs')).equals(single)).toBe(true);
+    // Independently bundle the pre-split shim and options as a byte-for-byte legacy regression.
+    const legacyDriver = join(dir, 'legacy.mjs');
+    write(legacyDriver, `
+        import { build } from ${JSON.stringify(join(root, 'node_modules/esbuild/lib/main.js'))};
+        import { builtinModules } from 'node:module';
+        import { writeFile } from 'node:fs/promises';
+        import { assemblePinnedExport } from ${JSON.stringify(join(root, 'dist/composition/build.js'))};
+        import { runtimeConfigPlugin } from ${JSON.stringify(join(root, 'src/utils/exportConfig.ts'))};
+        const cwd = ${JSON.stringify(dir)}, root = ${JSON.stringify(root)};
+        const link = cwd + '/.hadars-linked-1700000000000.js';
+        const shim = cwd + '/.hadars-bunny-shim-1700000000000.ts';
+        const config = cwd + '/hadars.config.ts';
+        const clients = await assemblePinnedExport({ lockFile: cwd + '/lock.json', buildsDir: cwd + '/builds' }, cwd + '/.hadars/static', { file: link, runtime: root + '/dist/composition/runtime.js' });
+        await writeFile(shim, [
+            'import ' + JSON.stringify(link) + ';',
+            'import * as BunnySDK from "@bunny.net/edgescript-sdk";',
+            'import * as ssrModule from ' + JSON.stringify(cwd + '/.hadars/index.ssr.js') + ';',
+            'import outHtml from ' + JSON.stringify(cwd + '/.hadars/static/out.html') + ';',
+            'import { createBunnyHandler } from ' + JSON.stringify(root + '/dist/bunny.js') + ';',
+            'import config from ' + JSON.stringify(config) + ';',
+            'BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml, pinnedClients: ' + JSON.stringify(clients) + ' }));',
+        ].join('\\n') + '\\n');
+        await build({ entryPoints: [shim], bundle: true, platform: 'browser', format: 'esm', target: ['es2022'],
+            outfile: cwd + '/legacy.mjs.out', sourcemap: false, loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
+            external: ['@rspack/*', '@bunny.net/edgescript-sdk'], define: { global: 'globalThis', __EDGE_RUNTIME__: 'true' },
+            plugins: [runtimeConfigPlugin(config), { name: 'node-builtins-external', setup(b) {
+                b.onResolve({ filter: /^(?:node:)?[a-z_][a-z0-9_\\/-]*$/ }, args => {
+                    const name = args.path.replace(/^node:/, '');
+                    if (builtinModules.includes(name)) return { path: 'node:' + name, external: true };
+                });
+            } }],
+        });
+    `);
+    const fd = openSync(join(dir, 'legacy.log'), 'w');
+    try {
+        const legacy = Bun.spawn(['node', legacyDriver], { cwd: dir, stdout: fd, stderr: fd });
+        expect(await legacy.exited).toBe(0);
+        expect(readFileSync(join(dir, 'legacy.mjs.out')).equals(single)).toBe(true);
+    } finally { closeSync(fd); }
+    config({ ...spec, budgets: { unitBytes: 1 } });
+    await expect(cli('export', 'bunny')).rejects.toThrow('SPLIT_SIZE_EXCEEDED');
+    expect(() => verifyExport(dir, metadata)).toThrow();
+}, 120_000);

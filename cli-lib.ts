@@ -249,7 +249,7 @@ async function exportStatic(
     console.log(`  npx serve ${outputDir}`)
 }
 
-async function prepareLinkedExport(config: HadarsOptions, cwd: string) {
+async function prepareLinkedExport(config: HadarsOptions, cwd: string, subset?: { modules: string[]; onLinkedBytes: (bytes: number) => void }) {
     const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
     const file = join(cwd, `.hadars-linked-${Date.now()}.js`);
     const runtime = resolve(dirname(fileURLToPath(import.meta.url)), 'composition/runtime.js');
@@ -257,7 +257,7 @@ async function prepareLinkedExport(config: HadarsOptions, cwd: string) {
     const clients = pinned ? await assemblePinnedExport({ ...pinned,
         lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
         integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined,
-    }, resolve(cwd, '.hadars/static'), { file, runtime }) : undefined;
+    }, resolve(cwd, '.hadars/static'), { file, runtime, ...subset }) : undefined;
     return { clients, file, import: pinned ? `import ${JSON.stringify(file)};` : '',
         finalize: (entry: string) => { if (pinned) finalizeExport(cwd, entry, resolve(cwd, '.hadars/static')); } };
 }
@@ -422,6 +422,39 @@ async function bundleLambda(
     }
 }
 
+async function bundleSplit(config: HadarsOptions, configPath: string, cwd: string): Promise<void> {
+    const started = performance.now();
+    const { resolvePinnedBuilds, splitGroups } = await import('./src/composition/build');
+    const { completeSplitExport } = await import('./src/composition/exportIntegrity');
+    const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
+    if (!pinned) throw new Error('SPLIT_PINNED_REQUIRED: per-module requires a pinned shell lock');
+    const resolved = { ...pinned, lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
+        integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined };
+    const groups = splitGroups(config.split, await resolvePinnedBuilds(resolved))!;
+    const lock = JSON.parse(await readFile(resolved.lockFile, 'utf8'));
+    // A failed re-export must not leave a stale deployable seal or stale units.
+    const { rm } = await import('node:fs/promises');
+    await rm(join(cwd, 'units'), { recursive: true, force: true });
+    await rm(join(cwd, '.hadars/split-manifest.json'), { force: true });
+    const manifest: import('./src/composition/split').SplitManifest = {
+        version: 1, releaseId: '', mode: 'per-module', defaultGroup: (config.split as any).defaultGroup,
+        shell: lock.snapshot.shell, snapshot: lock.snapshotId, probe: { path: '/__hadars/release' },
+        budgets: { unitBytes: config.split?.mode === 'per-module' ? config.split.budgets?.unitBytes ?? 9_000_000 : 9_000_000 }, groups,
+    };
+    const linkedSizes: Record<string, number> = {};
+    for (const group of groups) {
+        let linkedBytes = 0;
+        group.unit.file = `units/${group.name}/bunny.mjs`;
+        const entry = join(cwd, group.unit.file);
+        await mkdir(dirname(entry), { recursive: true });
+        await bundleBunny(config, configPath, entry, cwd, { modules: group.modules, group: group.name,
+            shell: manifest.shell, onLinkedBytes: bytes => { linkedBytes += bytes; } });
+        linkedSizes[group.name] = linkedBytes;
+    }
+    completeSplitExport(cwd, manifest, join(cwd, '.hadars/static'), linkedSizes);
+    console.log(`Split units bundled and sealed: ${(performance.now() - started).toFixed(0)} ms; release ${manifest.releaseId}`);
+}
+
 // ── hadars export bunny ──────────────────────────────────────────────────────
 
 async function bundleBunny(
@@ -429,10 +462,18 @@ async function bundleBunny(
     configPath: string,
     outputFile: string,
     cwd: string,
+    splitUnit?: { modules: string[]; group: string; shell: string; onLinkedBytes: (bytes: number) => void },
 ): Promise<void> {
-    // 1. Ensure the hadars production build is up to date.
-    console.log('Building hadars project...')
-    await Hadars.build({ ...config, mode: 'production' })
+    // Compile once; group exports reuse both compiled graphs.
+    if (!splitUnit) {
+        console.log('Building hadars project...')
+        const started = performance.now();
+        await Hadars.build({ ...config, mode: 'production' });
+        if (config.split?.mode === 'per-module') {
+            console.log(`Shared shell build: ${(performance.now() - started).toFixed(0)} ms (one compilation for all groups)`);
+            return bundleSplit(config, configPath, cwd);
+        }
+    }
 
     // 2. Resolve paths.
     const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
@@ -447,7 +488,7 @@ async function bundleBunny(
         process.exit(1)
     }
 
-    const linked = await prepareLinkedExport(config, cwd);
+    const linked = await prepareLinkedExport(config, cwd, splitUnit);
     const pinnedClients = linked.clients;
 
     // 3. Write a temporary entry shim.
@@ -457,14 +498,17 @@ async function bundleBunny(
     //    external so it is never bundled.
     const bunnyModule = resolve(dirname(fileURLToPath(import.meta.url)), 'bunny.js')
     const shimPath = join(cwd, `.hadars-bunny-shim-${Date.now()}.ts`)
+    const splitRuntime = resolve(dirname(fileURLToPath(import.meta.url)), 'composition/splitRuntime.js');
+    const { RELEASE_PLACEHOLDER } = await import('./src/composition/exportIntegrity');
     const shim = [
+        ...(splitUnit ? [`import { splitHandler } from ${JSON.stringify(splitRuntime)};`] : []),
         linked.import,
         `import * as BunnySDK from "@bunny.net/edgescript-sdk";`,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createBunnyHandler } from ${JSON.stringify(bunnyModule)};`,
         `import config from ${JSON.stringify(configPath)};`,
-        `BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml, pinnedClients: ${JSON.stringify(pinnedClients)} }));`,
+        `BunnySDK.net.http.serve(${splitUnit ? "splitHandler(" : ""}createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml, pinnedClients: ${JSON.stringify(pinnedClients)} })${splitUnit ? ", " + JSON.stringify({ release: RELEASE_PLACEHOLDER, group: splitUnit.group, shell: splitUnit.shell }) + ")" : ""});`,
     ].join('\n') + '\n'
     await writeFile(shimPath, shim, 'utf-8')
 
@@ -494,6 +538,7 @@ async function bundleBunny(
             // externals — Deno's Node compat layer resolves these at runtime.
             plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
+        if (splitUnit) return;
         linked.finalize(outputFile);
         console.log(`Bunny Edge Script bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
@@ -918,6 +963,12 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
     const action = argv[3];
     const input = argv[4];
     const output = argv[5];
+    if (action === 'routing-plan') {
+      if (!input) throw new Error('Usage: composition routing-plan directory');
+      const { routingPlan } = await import('./src/composition/build');
+      console.log(JSON.stringify(routingPlan(JSON.parse(await readFile(resolve(cwd, input, '.hadars/split-manifest.json'), 'utf8'))), null, 2));
+      return;
+    }
     if (action === 'verify-export') {
       if (!input || !output) throw new Error('Usage: composition verify-export directory metadata.json [expected-checksum]');
       const { verifyExport } = await import('./src/composition/build');
@@ -991,6 +1042,7 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
             process.exit(0)
         case 'export': {
             const subCmd = argv[3]
+            if (cfg.split?.mode === 'per-module' && subCmd !== 'bunny') throw new Error('SPLIT_TARGET_UNSUPPORTED: per-module export requires the edge-script target');
             if (subCmd === 'lambda') {
                 const outputFile = resolve(cwd, argv[4] ?? 'lambda.mjs')
                 await bundleLambda(cfg, configPath, outputFile, cwd)

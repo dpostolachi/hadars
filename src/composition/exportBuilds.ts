@@ -8,7 +8,7 @@ import { linkServer } from './linkServer';
 import { resolvePinnedBuilds } from './pinnedBuilds';
 
 /** Validates all pinned bytes before staging declared client assets; returns public data only. */
-export async function assemblePinnedExport(options: PinnedBuildsOptions, staticDir: string, link?: { file: string; runtime: string }): Promise<Record<string, PinnedBuild['client']>> {
+export async function assemblePinnedExport(options: PinnedBuildsOptions, staticDir: string, link?: { file: string; runtime: string; modules?: string[]; onLinkedBytes?: (bytes: number) => void }): Promise<Record<string, PinnedBuild['client']>> {
     const builds = await resolvePinnedBuilds(options);
     const lock = JSON.parse(await readFile(options.lockFile, 'utf8'));
     const clients: Record<string, PinnedBuild['client']> = Object.create(null);
@@ -35,9 +35,10 @@ export async function assemblePinnedExport(options: PinnedBuildsOptions, staticD
         const serverFiles = manifest.files.filter((f) => f.path.startsWith('server/') || [...manifest.targets.server.js, ...manifest.targets.server.css].includes(f.path));
         provenance.modules[build.name] = { buildId: id, clientOnly: !!manifest.clientOnly,
             server: manifest.clientOnly ? [] : serverFiles, client: manifest.files.filter((f) => client.files?.includes(f.path)) };
-        if (link && !manifest.clientOnly) {
+        if (link && !manifest.clientOnly && (!link.modules || link.modules.includes(build.name))) {
             const linked = await linkServer(build.name, manifest.targets.server.js[0]!, files);
             provenance.modules[build.name]!.server = manifest.files.filter((f) => linked.files.includes(f.path));
+            link.onLinkedBytes?.(Buffer.byteLength(linked.factory));
             registrations.push(`registerLinkedModule(${JSON.stringify(build.name)}, ${linked.factory});`);
             console.log(`Linked module "${build.name}" (${id}): ${Buffer.byteLength(linked.factory)} linked bytes; ${provenance.modules[build.name]!.server.reduce((n, f) => n + f.size, 0)} server input bytes`);
         }

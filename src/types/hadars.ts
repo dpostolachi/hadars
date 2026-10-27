@@ -163,6 +163,8 @@ export interface HadarsOptions {
      * tooling and by `hadars dev`/`hadars run` for a shell; the CLI does not build modules yet.
      */
     composition?: CompositionOptions;
+    /** Export one server unit per mounted composition module. */
+    split?: import('../composition/split').SplitOptions;
     /** Module staging/output directories to retain during dev/build cleanup, relative to cwd or absolute. */
     moduleOutputDirs?: string[];
     port?: number;

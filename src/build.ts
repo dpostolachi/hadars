@@ -1,3 +1,4 @@
+import { splitGroups, matchGroup } from './composition/split';
 import { readPublicEnv } from './utils/publicEnv';
 import { builtAssetMetadata, relocatePinnedBuilds, runtimeAssetBase, validateAssetBase } from './utils/assetBase';
 import { registerServerModules } from './composition/registerServerModules';
@@ -294,7 +295,17 @@ const reactDefines = async (): Promise<Record<string, string>> => {
     };
 };
 
+function splitDevRequest(options: HadarsOptions, groups: ReturnType<typeof splitGroups>, builds: Record<string, import('./composition/pinnedTypes').PinnedBuild> | undefined, req: Request): Response | undefined {
+    if (!groups || options.split?.mode !== 'per-module') return;
+    const pathname = new URL(req.url).pathname;
+    console.log(`[split] ${req.method} ${pathname} -> ${matchGroup({ defaultGroup: options.split.defaultGroup, groups }, pathname)}`);
+    if (req.method === 'GET' && pathname === '/__hadars/release') return new Response(JSON.stringify({
+        release: 'dev-all', group: 'dev-all', shell: Object.values(builds ?? {}).find(b => b.kind === 'shell')?.server.dir.split(pathMod.sep).pop() ?? '',
+    }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+}
+
 const validateOptions = (options: HadarsRuntimeOptions) => {
+    if (options.split && !['single', 'per-module'].includes(options.split.mode)) throw new Error('SPLIT_MODE_INVALID: expected single or per-module');
     if (!options.entry) {
         throw new Error("Entry file is required");
     }
@@ -353,6 +364,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
     const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
     const pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, true) : undefined;
+    const split = splitGroups(options.split, pinnedBuilds);
 
     const liveLock = await checkLiveLock(HadarsFolder);
     if (liveLock) {
@@ -972,6 +984,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     };
 
     await serve(port, async (req, ctx) => {
+        const probe = splitDevRequest(options, split, pinnedBuilds, req);
+        if (probe) return probe;
         // Hold requests until both builds are ready. Once resolved this is a no-op.
         await readyPromise;
         // Then hold until the client compiler is idle, so the browser never connects
@@ -1086,6 +1100,10 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
 export const build = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
+    if (options.split?.mode === 'per-module') {
+        const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
+        splitGroups(options.split, pinned ? await resolvePinnedBuilds(pinned) : undefined);
+    }
 
     const liveLock = await checkLiveLock(HadarsFolder);
     if (liveLock) {
@@ -1255,6 +1273,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
     const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
     const pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, false) : undefined;
+    const split = splitGroups(options.split, pinnedBuilds);
 
     let { port = 9090, workers = 1 } = options;
     const clustered = isNode && workers > 1;
@@ -1413,9 +1432,14 @@ export const run = async (options: HadarsRuntimeOptions) => {
         }
     };
 
+    const cachedHandler = options.cache ? createRenderCache(options.cache, runHandler) : runHandler;
     await serve(
         port,
-        options.cache ? createRenderCache(options.cache, runHandler) : runHandler,
+        async (req, ctx) => {
+            const probe = splitDevRequest(options, split, pinnedBuilds, req);
+            if (probe) return probe;
+            return cachedHandler(req, ctx);
+        },
         options.websocket,
     );
 };

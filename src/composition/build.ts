@@ -15,3 +15,6 @@ export { CompositionLinkError } from './errors';
 
 export { finalizeExport, verifyExport } from './exportIntegrity';
 export type { ExportFile, ExportOutput } from './exportIntegrity';
+
+export { routingPlan, matchGroup, splitGroups } from './split';
+export type { SplitOptions, SplitManifest, SplitGroup } from './split';
