@@ -116,7 +116,7 @@ test('edge export runs a composed shell without pinned directories or a resolver
     writeFileSync(join(f.dir, 'module.tsx'), `import { token } from 'shared-api';
         import { useState } from 'react';
         export { useState, token };
-        export function View() { const [value] = useState('linked server output'); return <p>{value}</p>; }`);
+        export function View() { const [value] = useState('linked server output require import('); return <p>{value}</p>; }`);
     const opts = { cwd: f.dir, outDir: join(f.dir, 'second'), buildsDir: f.options.buildsDir,
         composition: { role: 'module' as const, name: 'second', exposes: { page: 'module.tsx' }, shared: ['shared-api'] } };
     const second = createModuleBuild({ ...opts, result: await buildModule(opts) });
@@ -200,7 +200,7 @@ test('edge export runs a composed shell without pinned directories or a resolver
         const hookResponse = await (globalThis as any).__hadarsPinnedExportHandler(new Request('https://example.test/runtime-hook'));
         expect(await hookResponse.text()).toBe('runtime hook retained');
         expect(html).toContain('composed shell');
-        expect(html).toContain('linked server output');
+        expect(html).toContain('linked server output require import(');
         expect(html).toContain('page');
         expect(html).toContain(`/_builds/${f.module.manifest.buildId}/client/greeter.js`);
         expect(html).toContain('sha256-');
