@@ -1,0 +1,87 @@
+{
+  "releaseId": "d8f1eededdd014d7",
+  "units": [
+    {
+      "group": "admin",
+      "path": "units/admin/bunny.mjs",
+      "sha256": "e90e6eb190e9aa012b503b43bedd07d3d98ceefbfcbf71e6c6c0dec331f47a4e",
+      "size": 523,
+      "normalizedSha256": "b365eae1963f540a0876a30ac46b9f8e0875719b6f78b15c14ffd39850abd145"
+    },
+    {
+      "group": "shop",
+      "path": "units/shop/bunny.mjs",
+      "sha256": "7e0c15b3d0d1cc5a6feaade9378f3fd4cd5fba272077bd0260428ede2726ecae",
+      "size": 521,
+      "normalizedSha256": "ff80ca0a2a0e986305c0d8a5ed2b94a6b921d5f2522ae8d0d3fc0f7b77327274"
+    },
+    {
+      "group": "main",
+      "path": "units/main/bunny.mjs",
+      "sha256": "704674cd52d831011099b850dbe5660fa3328a4f0f75042bbfc9790e2893b2fe",
+      "size": 521,
+      "normalizedSha256": "24a223f8d81a20ba3065949373a2b29347d58de1d51a674dd0ec4234ae94c2d5"
+    }
+  ],
+  "manifestSha256": "734afeeeff85e921803035997dd81ee800b147c3f83574d4b0a7b29ea247354a",
+  "staticDigest": "271bc85e9ac3b2541831e7efddec5adf9987de8442b93b8e4cdfa2d248fbf38a",
+  "metadataSha256": "5c1969d62d2e7258c91103b2940ecc8c4efe07cd323095a570c3f49a6a82ddfe",
+  "routingPlan": [
+    {
+      "group": "admin",
+      "patterns": [
+        "/admin/**",
+        "/control"
+      ]
+    },
+    {
+      "group": "shop",
+      "patterns": [
+        "/shop/**",
+        "/buy"
+      ]
+    },
+    {
+      "group": "main",
+      "patterns": []
+    }
+  ],
+  "paths": {
+    "/": "main",
+    "/admin": "admin",
+    "/admin/": "admin",
+    "/admin/a": "admin",
+    "/admin/a/b": "admin",
+    "/administrator": "main",
+    "/admin2": "main",
+    "/ADMIN": "main",
+    "//admin": "main",
+    "/%61dmin": "main",
+    "/admin%2Fx": "main",
+    "/admin/%2F": "admin",
+    "/admin//x": "admin",
+    "/admin/../shop": "admin",
+    "/admin?x=1#f": "admin",
+    "/shop": "shop",
+    "/shop/": "shop",
+    "/shop/item": "shop",
+    "/shopping": "main",
+    "/shop2": "main",
+    "/SHOP": "main",
+    "/shop%2Fx": "main",
+    "/shop/%2f": "shop",
+    "/shop//item": "shop",
+    "/control": "admin",
+    "/control/": "main",
+    "/control/x": "main",
+    "/controller": "main",
+    "/buy": "shop",
+    "/buy/": "main",
+    "/buyer": "main",
+    "/unknown": "main",
+    "/__hadars/release": "main",
+    "/a": "main",
+    "/shop#hash": "shop",
+    "/admin;param": "main"
+  }
+}

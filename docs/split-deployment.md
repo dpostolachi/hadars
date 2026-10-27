@@ -1,6 +1,109 @@
 # RFC: split server deployment, one app release
 
-Status: proposed. All APIs, commands and formats introduced here are proposals.
+Status: MFE-unit vertical slice implemented first; page-level groups are a later extension.
+
+The implemented contract is published in [split export contract](split-export-contract.md).
+See [local validation](split-validation.md) for verification results.
+
+## Implemented vertical slice (manifest version 1)
+
+The configuration and contract in this section supersede the proposed page-level
+model below. Splitting currently supports the existing `export bunny` CLI target.
+There is no router script: a deployment tool applies native edge CDN rules from
+the exported plan. Uploading and activation belong to that tool.
+
+```ts
+export default {
+  entry: 'src/App.tsx',
+  composition: { role: 'shell', name: 'shell',
+    pinned: { lockFile: 'hadars.lock', buildsDir: 'builds' } },
+  split: {
+    mode: 'per-module', defaultGroup: 'main',
+    mounts: { admin: ['/admin/**'], shop: ['/shop/**'] },
+    budgets: { unitBytes: 9_000_000 }
+  }
+};
+```
+
+An absent `split` or `{ mode: 'single' }` uses the existing single export.
+Each mounted module must exist in the lock. Every unmounted pinned module must
+have `clientOnly: true` in its immutable build manifest. The default group name
+is required and cannot also be a module mount. The default unit links no module
+server factories; other units link only their named module. All units contain
+the same compiled shell. The shell must render placeholders for unavailable
+server modules and load those modules on the client; an unconditional server
+`getModule` call for an unavailable module still reports an error.
+
+Export compiles the application once and bundles the compiled graphs per group.
+It prints shared compilation and group bundling time, final unit bytes, and
+linked factory bytes. An oversized unit throws `SplitSizeExceededError` with
+`SPLIT_SIZE_EXCEEDED`, its group, unit size, linked size and budget. The default
+budget is 9,000,000 uncompressed bytes. A failed export has no valid completed seal.
+
+Output paths are relative to the export working directory:
+
+- `units/<group>/bunny.mjs`: independently deployable entry scripts.
+- `.hadars/static/`: one shared client graph and all pinned client files.
+- `.hadars/split-manifest.json`: public-safe release, shell and snapshot IDs,
+  probe path, default group, release-wide `budgets: { unitBytes }`, and ordered
+  groups with patterns, module membership, and each final unit's file, SHA-256 and size.
+
+Non-default groups sort by their longest literal prefix descending, then group
+name in code-unit order; the default group is last with empty patterns/modules.
+Patterns are `/` or slash-separated `[A-Za-z0-9._~-]+` literal segments,
+optionally ending in `/**`. That suffix matches both the prefix itself and paths
+beginning with the prefix plus `/`. Other wildcards, empty segments, query or
+fragment characters, and trailing pattern slashes are invalid. Equal
+or nested literal prefixes across different groups are rejected with
+`SPLIT_PATTERN_NESTED`: mounts must be prefix-free across groups in this version.
+Same-group patterns may overlap. Nested mounts are a later extension requiring
+explicit per-pattern plan ordering.
+
+`routingPlan(manifest)` and `matchGroup(manifest, pathname)` are exported from
+`hadars/composition/build`. The CLI `hadars composition routing-plan <directory>`
+prints the plan as JSON. The last empty-pattern record is the fallback.
+Matching is case sensitive on the **raw pathname**, without decoding escapes or
+normalizing dot segments or repeated slashes. Query and fragment suffixes are
+ignored by the reference matcher. Thus `/admin`, `/admin/` and `/admin/x` match
+`/admin/**`; `/administrator`, `/admin2`, `/ADMIN`, `/%61dmin` and `/admin%2Fx`
+do not. `/admin/%2F` and `/admin//x` do match. A deployment tool must preserve
+these semantics or reject native routing configurations it cannot express.
+
+Every unit intercepts `GET /__hadars/release` before application hooks, caches
+and proxies. It returns 200 JSON `{release, group, shell}` with
+`Cache-Control: no-store`. Every response, including hook/proxy/error responses,
+receives `x-hadars-release` and `x-hadars-group` headers outside the adapter.
+Browser release gating is a later extension.
+
+Release identity avoids circular hashing using the fixed 16-byte literal
+`SPLITRELEASE0000`, which occurs exactly once per generated unit. First bundle
+all units with this placeholder. Hash canonical JSON of
+`{ groups, shell, snapshot, static }`, where `groups` are the full ordered group
+records with placeholder-byte unit hashes and final sizes, and `static` is the
+shared inventory digest; the first 16 hex characters are `releaseId`. Patch the
+single literal in each unit, then record SHA-256 of the **final bytes** in the
+manifest and seal. Verification reconstructs placeholder hashes from final bytes
+and checks release identity as well as all final hashes. The placeholder and
+release have equal length. The manifest itself is outside the static inventory.
+The budget is sealed in the manifest but excluded from release identity because
+it is policy, not code or routing.
+
+`composition-provenance.json.output` uses version 2 for split exports: `units`
+contains path/hash/size records, `manifest` seals the split manifest, and `static`
+and `metadataSha256` keep the existing inventory and canonical checksum rules.
+`verifyExport` and `hadars composition verify-export` support both output
+versions. Missing, changed, extra or swapped unit files, edited manifest routes,
+and static changes fail verification. Retain the metadata checksum through a
+trusted channel when passing artifacts to the deployment tool.
+
+`dev` and `run` still serve all modules in one process. Each request logs the
+reference-selected group (`[split] METHOD pathname -> group`). The reserved probe
+responds before app hooks with `group: 'dev-all'` and `release: 'dev-all'`.
+This checks routing decisions, not per-unit runtime isolation.
+
+## Later page-level proposal
+
+The remainder is a proposal, not implemented API. Status: proposed. All APIs, commands and formats introduced here are proposals.
 The existing single-server export remains the default. Target names below describe
 capabilities: **edge-script**, **bound-worker**, and **function**; the adapters
 retain their existing CLI target identifiers.

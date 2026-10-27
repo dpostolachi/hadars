@@ -1,0 +1,89 @@
+{
+  "snapshot": "snap_68645e0d00670fcc",
+  "shell": "6257700c269d177d",
+  "modules": {
+    "admin": {
+      "buildId": "c4000f483c0c4bb0",
+      "clientOnly": false,
+      "server": [
+        {
+          "path": "server/entry.cjs",
+          "size": 38,
+          "sha256": "a8cafa236ed81d1dcaab54ba4b555817e9ebd5198fa7990fcff4878280a1f54e"
+        }
+      ],
+      "client": [
+        {
+          "path": "client/entry.js",
+          "size": 31,
+          "sha256": "2ca89514a4557fb7c7a83aef3fefebdbf658506e4de2e6b1e595412dd845250f"
+        }
+      ]
+    },
+    "shop": {
+      "buildId": "3f0418380eabedab",
+      "clientOnly": false,
+      "server": [
+        {
+          "path": "server/entry.cjs",
+          "size": 37,
+          "sha256": "2a3cd5baea12eb61b3b09f40953c1c2201e1994bc93fa23ddc8a488474533e1e"
+        }
+      ],
+      "client": [
+        {
+          "path": "client/entry.js",
+          "size": 30,
+          "sha256": "3845a953747d0696a587a9a2efa591dd95dac310e27e0f9ddf0fb2deac77ee96"
+        }
+      ]
+    }
+  },
+  "output": {
+    "version": 2,
+    "units": [
+      {
+        "path": "units/admin/bunny.mjs",
+        "sha256": "e90e6eb190e9aa012b503b43bedd07d3d98ceefbfcbf71e6c6c0dec331f47a4e",
+        "size": 523
+      },
+      {
+        "path": "units/shop/bunny.mjs",
+        "sha256": "7e0c15b3d0d1cc5a6feaade9378f3fd4cd5fba272077bd0260428ede2726ecae",
+        "size": 521
+      },
+      {
+        "path": "units/main/bunny.mjs",
+        "sha256": "704674cd52d831011099b850dbe5660fa3328a4f0f75042bbfc9790e2893b2fe",
+        "size": 521
+      }
+    ],
+    "manifest": {
+      "path": ".hadars/split-manifest.json",
+      "sha256": "734afeeeff85e921803035997dd81ee800b147c3f83574d4b0a7b29ea247354a",
+      "size": 1167
+    },
+    "static": {
+      "directory": ".hadars/static",
+      "files": [
+        {
+          "path": "_builds/3f0418380eabedab/client/entry.js",
+          "sha256": "3845a953747d0696a587a9a2efa591dd95dac310e27e0f9ddf0fb2deac77ee96",
+          "size": 30
+        },
+        {
+          "path": "_builds/c4000f483c0c4bb0/client/entry.js",
+          "sha256": "2ca89514a4557fb7c7a83aef3fefebdbf658506e4de2e6b1e595412dd845250f",
+          "size": 31
+        },
+        {
+          "path": "out.html",
+          "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27",
+          "size": 44
+        }
+      ],
+      "sha256": "271bc85e9ac3b2541831e7efddec5adf9987de8442b93b8e4cdfa2d248fbf38a"
+    },
+    "metadataSha256": "5c1969d62d2e7258c91103b2940ecc8c4efe07cd323095a570c3f49a6a82ddfe"
+  }
+}
