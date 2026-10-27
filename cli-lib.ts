@@ -422,7 +422,7 @@ async function bundleLambda(
     }
 }
 
-async function bundleSplit(config: HadarsOptions, configPath: string, cwd: string): Promise<void> {
+async function bundleSplit(config: HadarsOptions, configPath: string, cwd: string, emitShell = true): Promise<void> {
     const started = performance.now();
     const { resolvePinnedBuilds, splitGroups } = await import('./src/composition/build');
     const { completeSplitExport } = await import('./src/composition/exportIntegrity');
@@ -431,7 +431,9 @@ async function bundleSplit(config: HadarsOptions, configPath: string, cwd: strin
     const resolved = { ...pinned, lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
         integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined };
     const groups = splitGroups(config.split, await resolvePinnedBuilds(resolved))!;
-    const lock = JSON.parse(await readFile(resolved.lockFile, 'utf8'));
+    const { pinExportShell } = await import('./src/composition/exportShell');
+    const { lock, lockFile } = pinExportShell(cwd, JSON.parse(await readFile(resolved.lockFile, 'utf8')), resolved.buildsDir, emitShell);
+    config = { ...config, composition: { ...config.composition!, role: 'shell', pinned: { ...resolved, lockFile, integrityFile: undefined } } } as HadarsOptions;
     // A failed re-export must not leave a stale deployable seal or stale units.
     const { rm } = await import('node:fs/promises');
     await rm(join(cwd, 'units'), { recursive: true, force: true });
@@ -442,6 +444,7 @@ async function bundleSplit(config: HadarsOptions, configPath: string, cwd: strin
         budgets: { unitBytes: config.split?.mode === 'per-module' ? config.split.budgets?.unitBytes ?? 9_000_000 : 9_000_000 }, groups,
     };
     const linkedSizes: Record<string, number> = {};
+    const linkedModules: Record<string, unknown> = {};
     for (const group of groups) {
         let linkedBytes = 0;
         group.unit.file = `units/${group.name}/bunny.mjs`;
@@ -450,8 +453,14 @@ async function bundleSplit(config: HadarsOptions, configPath: string, cwd: strin
         await bundleBunny(config, configPath, entry, cwd, { modules: group.modules, group: group.name,
             shell: manifest.shell, onLinkedBytes: bytes => { linkedBytes += bytes; } });
         linkedSizes[group.name] = linkedBytes;
+        const provenance = JSON.parse(await readFile(join(cwd, '.hadars/static/composition-provenance.json'), 'utf8'));
+        for (const name of group.modules) linkedModules[name] = provenance.modules[name];
     }
-    completeSplitExport(cwd, manifest, join(cwd, '.hadars/static'), linkedSizes);
+    const provenanceFile = join(cwd, '.hadars/static/composition-provenance.json');
+    const provenance = JSON.parse(await readFile(provenanceFile, 'utf8'));
+    Object.assign(provenance.modules, linkedModules);
+    await writeFile(provenanceFile, JSON.stringify(provenance, null, 2));
+    completeSplitExport(cwd, manifest, join(cwd, '.hadars/static'), linkedSizes, emitShell);
     console.log(`Split units bundled and sealed: ${(performance.now() - started).toFixed(0)} ms; release ${manifest.releaseId}`);
 }
 
@@ -463,6 +472,7 @@ async function bundleBunny(
     outputFile: string,
     cwd: string,
     splitUnit?: { modules: string[]; group: string; shell: string; onLinkedBytes: (bytes: number) => void },
+    emitShell = true,
 ): Promise<void> {
     // Compile once; group exports reuse both compiled graphs.
     if (!splitUnit) {
@@ -471,7 +481,7 @@ async function bundleBunny(
         await Hadars.build({ ...config, mode: 'production' });
         if (config.split?.mode === 'per-module') {
             console.log(`Shared shell build: ${(performance.now() - started).toFixed(0)} ms (one compilation for all groups)`);
-            return bundleSplit(config, configPath, cwd);
+            return bundleSplit(config, configPath, cwd, emitShell);
         }
     }
 
@@ -1052,8 +1062,8 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 await bundleCloudflare(cfg, configPath, outputFile, cwd)
                 process.exit(0)
             } else if (subCmd === 'bunny') {
-                const outputFile = resolve(cwd, argv[4] ?? 'bunny.mjs')
-                await bundleBunny(cfg, configPath, outputFile, cwd)
+                const outputFile = resolve(cwd, argv[4]?.startsWith('--') ? 'bunny.mjs' : argv[4] ?? 'bunny.mjs')
+                await bundleBunny(cfg, configPath, outputFile, cwd, undefined, !argv.includes('--no-emit-shell'))
                 process.exit(0)
             } else if (subCmd === 'static') {
                 const outDirArg = argv[4] ?? 'out'

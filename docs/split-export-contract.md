@@ -2,7 +2,8 @@
 
 This document describes the implemented per-module export, independently of any
 hosting service. The export working directory contains `units/`,
-`.hadars/split-manifest.json`, and `.hadars/static/`. No routing script, upload,
+`.hadars/split-manifest.json`, `.hadars/static/`, `shell/artifact/`,
+`shell/manifest.json`, and `hadars.lock`. No routing script, upload,
 activation, browser release gating, or detached signature verification is supplied.
 The later proposal in split-deployment.md does not extend this contract.
 
@@ -48,6 +49,47 @@ preserve configuration order, including same-group duplicates or overlaps.
 Modules have the singleton/empty ordering above. Units in the seal use this same
 group order.
 
+## Shell identity
+
+Split export pins its own shared production compile before bundling units or
+computing release identity. The earlier shell pin supplies name, provides map,
+runtime contract, shared/exposed specifiers and requirements; its compiled bytes
+and build ID are replaced. Module and library manifests/pins remain unchanged.
+The public `createShellBuild` and `assembleLockfile` helpers compute the final
+native manifest, build ID, snapshot ID, snapshot checksum and lock content.
+Every unit embeds this final shell ID, and manifest, release identity and
+provenance use the final shell and snapshot IDs. No post-export re-pin is needed.
+
+The shell artifact has precisely this file set (relative to `shell/artifact`):
+
+- `server/`: top-level `.hadars/` files matching `^.+\.ssr\.(js|css)$`,
+  including the `index.ssr.js` entry and SSR chunks used by unit bundling.
+- `client/`: the complete `.hadars/static/` tree, recursively excluding entries
+  named `_builds` or `composition-provenance.json`. This includes HTML, assets,
+  generated files and project static files, as well as JS/CSS chunks.
+
+Client targets are the top-level client JS/CSS files. Server targets are
+`server/index.ssr.js` and top-level server CSS files. Every artifact file has its
+SHA-256 and byte size in the native build manifest. Client bytes are copied
+from the same static output that is sealed; server bytes are copied from the
+same compile that the units bundle. Module assets are staged after shell pinning.
+Assembly provenance is excluded to avoid hashing the shell's own identity.
+
+The default split CLI emits `shell/artifact/`, `shell/manifest.json`, and the final
+`hadars.lock` in the export working directory, covered by `output.shell` below.
+The immutable build is also retained in the configured builds directory. The
+configured input lock is preserved unless it is the output `hadars.lock` itself;
+that path intentionally receives the final lock. A private `.hadars/export.lock.json`
+feeds native unit assembly and is outside the deployment inventory.
+
+`export <target> --no-emit-shell` skips copying the artifact, manifest and final
+lock to deployment paths, and omits `output.shell`. It still computes and uses
+the final shell/snapshot identity. It removes a previous `shell/` output but does
+not delete a preexisting `hadars.lock`, which may be an input. Verification in
+this mode has only the original v2 guarantees, since pin files are absent.
+Single-unit exports keep the existing v1 output and byte behavior; emitting a
+shell build for single-unit exports is not implemented.
+
 ## Routing grammar and native translation
 
 A pattern is `/`, or slash-separated `[A-Za-z0-9._~-]+` literal segments with an
@@ -92,6 +134,7 @@ This document versions the `output` member, not the enclosing provenance format.
 | Output field | Type and requiredness |
 | --- | --- |
 | `version` | required number, exactly `2` |
+| `shell` | optional `ExportFile[]`, complete `shell/` inventory in ascending path order followed by `hadars.lock`; emitted by default for new split exports |
 | `units` | required `ExportFile[]`, in manifest group order, one per group |
 | `manifest` | required `ExportFile`, path `.hadars/split-manifest.json` |
 | `static` | required `{directory: string, files: ExportFile[], sha256: string}` |
@@ -100,7 +143,7 @@ This document versions the `output` member, not the enclosing provenance format.
 
 `ExportFile` has exactly the emitted fields `{path: string, sha256: string,
 size: number}`: relative path, SHA-256 of actual bytes, and actual byte count.
-Unit and manifest paths are relative to the working directory. Static file paths
+Shell, lock, unit and manifest paths are relative to the working directory. Static file paths
 are relative to `static.directory`, emitted as `.hadars/static`. Paths use `/`,
 must be nonempty, cannot be absolute or contain backslashes, NUL, empty, `.` or
 `..` components. Symbolic links and special files are rejected. Unit paths must
@@ -175,10 +218,18 @@ policy do not enter the identity; actual code embedding probe behavior does.
    to the seal. Check exact per-group file paths, module membership and sizes
    against the budget. Require exactly one embedded release occurrence per unit,
    reconstruct placeholder hashes and recompute release identity.
-6. Validate unique static paths and inventory actual regular files, excluding
+6. When `output.shell` is present, inventory the complete `shell/` tree and lock,
+   compare sealed hashes/sizes and reject extra artifact files. Require a native
+   shell manifest whose computed build ID equals manifest `shell`. Check all
+   artifact hashes/sizes and byte equality of each client file with shared static
+   output. Reassemble the lock natively and require exact content and final
+   snapshot equality. Compare module pins with unit-link provenance build IDs
+   and server input hashes with their pinned manifests. Older v2 exports without
+   this optional field remain supported.
+7. Validate unique static paths and inventory actual regular files, excluding
    provenance. Report missing, changed or extra files. Check both the declared
    inventory digest and actual inventory digest against the sealed static digest.
-7. Throw accumulated differences if any; otherwise return the sealed output.
+8. Throw accumulated differences if any; otherwise return the sealed output.
 
 The verifier does not execute scripts or probe deployments. It does not validate
 all unknown metadata or schema extensions, authenticate signatures, or ignore
@@ -243,7 +294,7 @@ membership: ...`, `Invalid embedded release: ...`, and
 
 `test/fixtures/split-export/` is a complete sealed working directory plus
 `expected.json`, containing literal release, final and normalized unit hashes,
-sizes, manifest/static/metadata digests, routing plan and 36 pathname results.
+sizes, final shell/snapshot identities, shell inventory, manifest/static/metadata digests, routing plan and 36 pathname results.
 The conformance test reads this fixture without generating or updating it and
 mutates copies to check every exported file class.
 

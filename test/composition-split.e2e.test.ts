@@ -1,16 +1,17 @@
 import { test, expect, afterAll } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, readdirSync, openSync, closeSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, readdirSync, openSync, closeSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { createBuild, assembleLockfile, verifyExport } from '../src/composition/build';
+import { pinExportShell } from '../src/composition/exportShell';
 import { hash } from '../src/composition/identity';
 const root = join(import.meta.dir, '..');
 const dir = mkdtempSync(join(root, '.split-test-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 function write(file: string, data: string) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, data); }
 const spec = { mode: 'per-module', defaultGroup: 'main', mounts: { admin: ['/admin/**'], shop: ['/shop/**'] }, budgets: { unitBytes: 9_000_000 } };
-function config(split?: any) {
-    write(join(dir, 'hadars.config.ts'), `export default { entry: 'App.tsx', port: Number(process.env.PORT || 9090), composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'lock.json', buildsDir: 'builds' } }, ${split ? `split: ${JSON.stringify(split)},` : ''} fetch: () => new Response('hook'), onResponse: r => r };`);
+function config(split?: any, label = 'export') {
+    write(join(dir, 'hadars.config.ts'), `export default { entry: 'App.tsx', define: { __BUILD_LABEL__: ${JSON.stringify(JSON.stringify(label))} }, port: Number(process.env.PORT || 9090), composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'lock.json', buildsDir: 'builds' } }, ${split ? `split: ${JSON.stringify(split)},` : ''} fetch: () => new Response('hook'), onResponse: r => r };`);
 }
 let invocation = 0;
 async function cli(...args: string[]) {
@@ -31,7 +32,7 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     for (const name of readdirSync(join(root, 'node_modules'))) if (name !== 'hadars') symlinkSync(join(root, 'node_modules', name), join(dir, 'node_modules', name), 'dir');
     symlinkSync(root, join(dir, 'node_modules/hadars'), 'dir');
     write(join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', target: 'ES2022', module: 'ESNext' } }));
-    write(join(dir, 'App.tsx'), `import React from 'react'; export default () => <main>shell</main>;`);
+    write(join(dir, 'App.tsx'), `import React from 'react'; export default () => <main>{__BUILD_LABEL__}</main>;`);
     const targets = { client: { js: ['client/entry.js'], css: [] }, server: { js: ['server/entry.cjs'], css: [] } };
     const pins = ['shell', 'admin', 'shop'].map(name => {
         const source = join(dir, 'sources', name);
@@ -40,6 +41,10 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
         return createBuild({ sourceDir: source, buildsDir: join(dir, 'builds'), kind: name === 'shell' ? 'shell' : 'module', name, exposes: name === 'shell' ? [] : ['page'], targets }).manifest;
     });
     write(join(dir, 'lock.json'), JSON.stringify(assembleLockfile({ shell: pins[0]!, modules: pins.slice(1) })));
+    config(undefined, 'earlier');
+    await cli('build');
+    const earlier = pinExportShell(dir, JSON.parse(readFileSync(join(dir, 'lock.json'), 'utf8')), join(dir, 'builds'), false).lock;
+    write(join(dir, 'lock.json'), JSON.stringify(earlier));
     config({ ...spec, budgets: undefined });
     const logs = await cli('export', 'bunny');
     console.log(logs.match(/Shared shell build:.*|Unit .*|Split units bundled.*/g)?.join('\n'));
@@ -48,6 +53,26 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     const manifestPath = join(dir, '.hadars/split-manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(JSON.stringify(manifest)).not.toContain(dir);
+    expect(manifest.shell).not.toBe(earlier.snapshot.shell);
+    expect(manifest.snapshot).not.toBe(earlier.snapshotId);
+    const earlierClient = earlier.builds[earlier.snapshot.shell]!.manifest.targets.client.js[0]!;
+    expect(existsSync(join(dir, '.hadars/static', earlierClient.slice(7)))).toBe(false);
+    const finalLock = JSON.parse(readFileSync(join(dir, 'hadars.lock'), 'utf8'));
+    expect(finalLock.snapshot.modules).toEqual(earlier.snapshot.modules);
+    expect(finalLock.snapshotId).toBe(manifest.snapshot);
+    const linked = JSON.parse(readFileSync(join(dir, metadata), 'utf8'));
+    for (const name of ['admin', 'shop']) {
+        expect(linked.modules[name].buildId).toBe(finalLock.snapshot.modules[name]);
+        expect(linked.modules[name].server).toEqual(finalLock.builds[finalLock.snapshot.modules[name]].manifest.files.filter((f: any) => f.path.startsWith('server/')));
+    }
+    const shell = JSON.parse(readFileSync(join(dir, 'shell/manifest.json'), 'utf8'));
+    expect(shell.buildId).toBe(manifest.shell);
+    for (const f of shell.files) {
+        const bytes = readFileSync(join(dir, 'shell/artifact', f.path));
+        const compiled = f.path.startsWith('client/') ? join(dir, '.hadars/static', f.path.slice(7)) : join(dir, '.hadars', f.path.slice(7));
+        expect(bytes.equals(readFileSync(compiled))).toBe(true);
+        expect(hash(bytes)).toBe(f.sha256);
+    }
     expect(manifest.budgets).toEqual({ unitBytes: 9_000_000 });
     expect(readdirSync(join(dir, 'units')).sort()).toEqual(['admin', 'main', 'shop']);
     expect(verifyExport(dir, metadata).version).toBe(2);
@@ -96,7 +121,7 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
             }
             if (!response) throw new Error(`Live ${mode} did not start: ${readFileSync(log, 'utf8')}`);
             expect(response.status).toBe(200);
-            expect(await response.json()).toEqual({ release: 'dev-all', group: 'dev-all', shell: manifest.shell });
+            expect(await response.json()).toEqual({ release: 'dev-all', group: 'dev-all', shell: earlier.snapshot.shell });
             expect(response.headers.get('cache-control')).toBe('no-store');
             expect(await (await fetch(base + '/admin/x')).text()).toBe('hook');
             expect(await (await fetch(base + '/administrator')).text()).toBe('hook');
@@ -146,6 +171,11 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     writeFileSync(join(dir, metadata), provenance);
     expect(() => verifyExport(dir, metadata, 'untrusted')).toThrow('metadata checksum mismatch');
     expect(verifyExport(dir, metadata).version).toBe(2);
+    await cli('export', 'bunny', '--no-emit-shell');
+    const omitted = verifyExport(dir, metadata);
+    expect(omitted.version).toBe(2);
+    expect('shell' in omitted).toBe(false);
+    expect(readdirSync(dir)).not.toContain('shell');
     // A frozen shim filename makes byte comparison meaningful (the legacy bundler emits its filename).
     config();
     await cli('export', 'bunny');

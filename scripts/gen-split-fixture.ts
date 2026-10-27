@@ -6,6 +6,7 @@ import { build } from 'esbuild';
 import { createBuild, assembleLockfile } from '../src/composition/artifacts';
 import { assemblePinnedExport } from '../src/composition/exportBuilds';
 import { completeSplitExport, RELEASE_PLACEHOLDER } from '../src/composition/exportIntegrity';
+import { pinExportShell } from '../src/composition/exportShell';
 import { hash } from '../src/composition/identity';
 import { splitGroups, routingPlan, matchGroup, type SplitManifest } from '../src/composition/split';
 const destination = resolve(process.argv[2] ?? 'test/fixtures/split-export');
@@ -20,11 +21,16 @@ try {
         return createBuild({ sourceDir: source, buildsDir: join(scratch, 'builds'), kind: name === 'shell' ? 'shell' : 'module', name,
             exposes: name === 'shell' ? [] : ['page'], targets: { client: { js: ['client/entry.js'], css: [] }, server: { js: ['server/entry.cjs'], css: [] } } }).manifest;
     });
-    const lock = assembleLockfile({ shell: pins[0]!, modules: pins.slice(1) });
+    let lock = assembleLockfile({ shell: pins[0]!, modules: pins.slice(1) });
     write(join(scratch, 'lock.json'), JSON.stringify(lock));
     const staticDir = join(destination, '.hadars/static');
     await assemblePinnedExport({ lockFile: join(scratch, 'lock.json'), buildsDir: join(scratch, 'builds') }, staticDir);
+    write(join(destination, '.hadars/index.ssr.js'), 'export default () => null;\n');
+    write(join(staticDir, 'index.js'), 'globalThis.shellClient = true;\n');
     write(join(staticDir, 'out.html'), '<!doctype html><title>Split fixture</title>\n');
+    lock = pinExportShell(destination, lock, join(scratch, 'builds')).lock;
+    write(join(scratch, 'lock.json'), JSON.stringify(lock));
+    await assemblePinnedExport({ lockFile: join(scratch, 'lock.json'), buildsDir: join(scratch, 'builds') }, staticDir);
     const groups = splitGroups({ mode: 'per-module', defaultGroup: 'main', mounts: { admin: ['/admin/**', '/control'], shop: ['/shop/**', '/buy'] } },
         Object.fromEntries(pins.map(p => [p.name, { ...p }])) as any)!;
     const manifest: SplitManifest = { version: 1, releaseId: '', mode: 'per-module', defaultGroup: 'main', shell: lock.snapshot.shell,
@@ -37,9 +43,11 @@ try {
             bundle: true, format: 'esm', target: 'es2022', minify: true, legalComments: 'none', write: false });
         write(join(destination, group.unit.file), result.outputFiles[0]!.contents);
     }
-    const output = completeSplitExport(destination, manifest, staticDir);
+    const output = completeSplitExport(destination, manifest, staticDir, {}, true);
+    rmSync(join(destination, '.hadars/index.ssr.js'));
+    rmSync(join(destination, '.hadars/export.lock.json'));
     const paths = ['/', '/admin', '/admin/', '/admin/a', '/admin/a/b', '/administrator', '/admin2', '/ADMIN', '//admin', '/%61dmin', '/admin%2Fx', '/admin/%2F', '/admin//x', '/admin/../shop', '/admin?x=1#f', '/shop', '/shop/', '/shop/item', '/shopping', '/shop2', '/SHOP', '/shop%2Fx', '/shop/%2f', '/shop//item', '/control', '/control/', '/control/x', '/controller', '/buy', '/buy/', '/buyer', '/unknown', '/__hadars/release', '/a', '/shop#hash', '/admin;param'];
-    const expected = { releaseId: manifest.releaseId, units: groups.map(g => ({ group: g.name, path: g.unit.file, sha256: g.unit.sha256, size: g.unit.size,
+    const expected = { shell: manifest.shell, snapshot: manifest.snapshot, shellInventory: output.shell, releaseId: manifest.releaseId, units: groups.map(g => ({ group: g.name, path: g.unit.file, sha256: g.unit.sha256, size: g.unit.size,
         normalizedSha256: hash(readFileSync(join(destination, g.unit.file), 'utf8').replace(manifest.releaseId, RELEASE_PLACEHOLDER)) })),
         manifestSha256: output.manifest.sha256, staticDigest: output.static.sha256, metadataSha256: output.metadataSha256,
         routingPlan: routingPlan(manifest), paths: Object.fromEntries(paths.map(p => [p, matchGroup(manifest, p)])) };

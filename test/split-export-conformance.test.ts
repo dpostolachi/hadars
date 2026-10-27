@@ -16,6 +16,9 @@ test('committed conformance vector verifies every literal without regeneration',
     if (output.version !== 2) throw new Error('Expected split output');
     const manifest = json(fixture, output.manifest.path);
     expect(manifest.releaseId).toBe(expected.releaseId);
+    expect(manifest.shell).toBe(expected.shell);
+    expect(manifest.snapshot).toBe(expected.snapshot);
+    expect(output.shell).toEqual(expected.shellInventory);
     expect(output.metadataSha256).toBe(expected.metadataSha256);
     expect(hash(read(fixture, output.manifest.path))).toBe(expected.manifestSha256);
     expect(output.manifest.sha256).toBe(expected.manifestSha256);
@@ -106,5 +109,34 @@ test('resealed policy changes keep release identity, while tiny budgets fail ver
             if (budget === 1) expect(() => verifyExport(dir, metadataPath)).toThrow('SPLIT_SIZE_EXCEEDED: admin: 523 unit bytes > 1 budget bytes');
             else expect(verifyExport(dir, metadataPath).version).toBe(2);
         }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Refresh the outer checksums to exercise semantic checks independently of the seal.
+function reseal(root: string) {
+    const metadata = json(root, metadataPath);
+    for (const f of [...metadata.output.shell, ...metadata.output.static.files]) {
+        const base = f.path.startsWith('shell/') || f.path === 'hadars.lock' ? root : join(root, metadata.output.static.directory);
+        const bytes = read(base, f.path); f.sha256 = hash(bytes); f.size = bytes.length;
+    }
+    metadata.output.static.sha256 = hash(JSON.stringify(metadata.output.static.files.map((f: any) => [f.path, f.sha256, f.size])));
+    const { metadataSha256, signature, ...output } = metadata.output;
+    metadata.output.metadataSha256 = hash(canonical({ ...metadata, output }));
+    writeFileSync(join(root, metadataPath), JSON.stringify(metadata));
+}
+for (const [name, mutate, error] of [
+    ['artifact', (root: string) => writeFileSync(join(root, 'shell/artifact/server/index.ssr.js'), 'edited'), 'Shell artifact hash mismatch'],
+    ['manifest', (root: string) => { const m = json(root, 'shell/manifest.json'); m.buildId = 'edited'; writeFileSync(join(root, 'shell/manifest.json'), JSON.stringify(m)); }, 'Shell build identity mismatch'],
+    ['snapshot', (root: string) => { const lock = json(root, 'hadars.lock'); lock.snapshotId = 'edited'; writeFileSync(join(root, 'hadars.lock'), JSON.stringify(lock)); }, 'Shell lock snapshot mismatch'],
+    ['module pin', (root: string) => { const lock = json(root, 'hadars.lock'); lock.snapshot.modules.admin = lock.snapshot.modules.shop; writeFileSync(join(root, 'hadars.lock'), JSON.stringify(lock)); }, 'Duplicate lock build name'],
+    ['linked pin', (root: string) => { const metadata = json(root, metadataPath); metadata.modules.admin.buildId = 'edited'; writeFileSync(join(root, metadataPath), JSON.stringify(metadata)); }, 'Shell lock module pins mismatch'],
+    ['server hash', (root: string) => { const metadata = json(root, metadataPath); metadata.modules.admin.server[0].sha256 = 'edited'; writeFileSync(join(root, metadataPath), JSON.stringify(metadata)); }, 'Shell lock linked server mismatch'],
+    ['client swap', (root: string) => writeFileSync(join(root, '.hadars/static/index.js'), read(root, '.hadars/static/out.html')), 'Shell client differs from static output'],
+] as const) test(`self-pinned ${name} semantic verification survives resealing`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'split-shell-'));
+    try {
+        cpSync(fixture, dir, { recursive: true });
+        mutate(dir); reseal(dir);
+        expect(() => verifyExport(dir, metadataPath)).toThrow(error);
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });

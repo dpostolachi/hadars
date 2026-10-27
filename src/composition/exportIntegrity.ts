@@ -1,7 +1,7 @@
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { readBuildFiles } from './artifacts';
-import { canonical, hash } from './identity';
+import { assembleLockfile, readBuildFiles, type BuildManifest } from './artifacts';
+import { canonical, computeBuildId, hash } from './identity';
 import { splitBudget, validateRoutes, type SplitManifest } from './split';
 
 export interface ExportFile {
@@ -22,6 +22,8 @@ export interface SingleExportOutput {
 export interface SplitExportOutput {
     version: 2;
     units: ExportFile[];
+    /** Optional self-pinned shell and final lock; absent in older v2 exports. */
+    shell?: ExportFile[];
     manifest: ExportFile;
     static: SingleExportOutput['static'];
     metadataSha256: string;
@@ -37,7 +39,7 @@ export function splitReleaseId(manifest: SplitManifest, groups: SplitManifest['g
     return hash(canonical({ groups, shell: manifest.shell, snapshot: manifest.snapshot, static: staticHash })).slice(0, 16);
 }
 /** Complete placeholder bundles using the same byte identity and seal pipeline for every exporter. */
-export function completeSplitExport(directory: string, manifest: SplitManifest, staticDir: string, linkedSizes: Record<string, number> = {}): SplitExportOutput {
+export function completeSplitExport(directory: string, manifest: SplitManifest, staticDir: string, linkedSizes: Record<string, number> = {}, emitShell = false): SplitExportOutput {
     validateRoutes(manifest);
     const budget = splitBudget(manifest.budgets);
     for (const group of manifest.groups) {
@@ -59,9 +61,9 @@ export function completeSplitExport(directory: string, manifest: SplitManifest, 
         writeFileSync(inside(directory, group.unit.file), bytes);
         group.unit.sha256 = hash(bytes);
     }
-    return finalizeSplitExport(directory, manifest, staticDir);
+    return finalizeSplitExport(directory, manifest, staticDir, emitShell);
 }
-export function finalizeSplitExport(directory: string, manifest: SplitManifest, staticDir: string): SplitExportOutput {
+export function finalizeSplitExport(directory: string, manifest: SplitManifest, staticDir: string, emitShell = false): SplitExportOutput {
     validateRoutes(manifest);
     splitBudget(manifest.budgets);
     const manifestPath = '.hadars/split-manifest.json';
@@ -72,6 +74,7 @@ export function finalizeSplitExport(directory: string, manifest: SplitManifest, 
     const files = inventory(staticDir, metadataFile);
     const output: SplitExportOutput = {
         version: 2,
+        ...(emitShell ? { shell: shellInventory(directory) } : {}),
         units: manifest.groups.map(g => ({ path: g.unit.file, sha256: g.unit.sha256, size: g.unit.size })),
         manifest: { path: manifestPath, sha256: hash(bytes), size: bytes.length },
         static: { directory: relative(directory, staticDir), files, sha256: digest(files) },
@@ -81,6 +84,42 @@ export function finalizeSplitExport(directory: string, manifest: SplitManifest, 
     output.metadataSha256 = metadataDigest(metadata);
     writeFileSync(metadataFile, JSON.stringify(metadata, null, 2) + '\n');
     return output;
+}
+
+function shellInventory(directory: string): ExportFile[] {
+    const lock = readEntry(directory, 'hadars.lock');
+    return [...inventory(inside(directory, 'shell'), '').map(f => ({ ...f, path: 'shell/' + f.path })),
+        { path: 'hadars.lock', sha256: hash(lock), size: lock.length }];
+}
+
+function verifyShell(directory: string, staticDir: string, manifest: SplitManifest, metadata: any, expected: ExportFile[]) {
+    if (canonical(shellInventory(directory)) !== canonical(expected)) throw new Error('Shell inventory mismatch');
+    const shell: BuildManifest = JSON.parse(readEntry(directory, 'shell/manifest.json').toString());
+    if (shell.kind !== 'shell' || shell.buildId !== manifest.shell || computeBuildId(shell) !== shell.buildId) throw new Error('Shell build identity mismatch');
+    const files = readBuildFiles(inside(directory, 'shell/artifact'));
+    if (files.size !== shell.files.length || new Set(shell.files.map(f => f.path)).size !== shell.files.length) throw new Error('Shell artifact file set mismatch');
+    for (const f of shell.files) {
+        inside(directory, 'shell/artifact/' + f.path);
+        const bytes = files.get(f.path);
+        if (!bytes || bytes.length !== f.size || hash(bytes) !== f.sha256) throw new Error(`Shell artifact hash mismatch: ${f.path}`);
+        if (f.path.startsWith('client/') && !bytes.equals(readEntry(staticDir, f.path.slice(7)))) throw new Error(`Shell client differs from static output: ${f.path}`);
+    }
+    const lock = JSON.parse(readEntry(directory, 'hadars.lock').toString());
+    const pins = (values: Record<string, string>) => Object.values(values).map(id => lock.builds[id].manifest);
+    const rebuilt = assembleLockfile({ shell, modules: pins(lock.snapshot.modules), libraries: pins(lock.snapshot.libraries) });
+    if (canonical(lock) !== canonical(rebuilt) || lock.snapshotId !== manifest.snapshot) throw new Error('Shell lock snapshot mismatch');
+    const modules = Object.fromEntries(Object.entries(metadata.modules).map(([name, value]: [string, any]) => [name, value.buildId]));
+    if (canonical(modules) !== canonical(lock.snapshot.modules)) throw new Error('Shell lock module pins mismatch');
+    for (const [name, linked] of Object.entries(metadata.modules) as [string, any][]) {
+        const pin = lock.builds[modules[name] as string].manifest;
+        if (!!pin.clientOnly !== linked.clientOnly) throw new Error(`Shell lock client-only mismatch: ${name}`);
+        const serverFiles = pin.files.filter((p: any) => p.path.startsWith('server/') || [...pin.targets.server.js, ...pin.targets.server.css].includes(p.path));
+        for (const f of linked.server) if (!serverFiles.some((p: any) => canonical(p) === canonical(f))) throw new Error(`Shell lock linked server mismatch: ${name}`);
+        if (!pin.clientOnly && pin.targets.server.js.some((entry: string) => !linked.server.some((f: any) => f.path === entry))) throw new Error(`Shell lock missing server inputs: ${name}`);
+    }
+    const mounted = manifest.groups.flatMap(g => g.modules);
+    for (const name of mounted) if (!Object.hasOwn(modules, name)) throw new Error(`Shell lock unknown linked module: ${name}`);
+    for (const name of Object.keys(modules)) if (!lock.builds[modules[name] as string].manifest.clientOnly && !mounted.includes(name)) throw new Error(`Shell lock unlinked module: ${name}`);
 }
 
 function relative(directory: string, file: string): string {
@@ -151,7 +190,7 @@ export function verifyExport(directory: string, metadataPath: string, expectedMe
     }
     const staticDir = inside(directory, output.static.directory);
     const differences: string[] = [];
-    const entries = output.version === 1 ? [output.entry] : [...output.units, output.manifest];
+    const entries = output.version === 1 ? [output.entry] : [...output.units, output.manifest, ...(output.shell ?? [])];
     const seen = new Set<string>();
     for (const entry of entries) {
         inside(directory, entry.path);
@@ -171,6 +210,7 @@ export function verifyExport(directory: string, metadataPath: string, expectedMe
             for (const p of actualUnits.keys()) if (!expectedUnits.has('units/' + p)) differences.push(`Extra unit: units/${p}`);
             const manifest: SplitManifest = JSON.parse(readEntry(directory, output.manifest.path).toString('utf8'));
             validateRoutes(manifest);
+            if (output.shell) verifyShell(directory, staticDir, manifest, metadata, output.shell);
             const budget = splitBudget(manifest.budgets);
             if (manifest.version !== 1 || manifest.mode !== 'per-module' || manifest.probe?.path !== '/__hadars/release' || !/^[a-f0-9]{16}$/.test(manifest.releaseId)) throw new Error('Invalid split manifest');
             if (manifest.shell !== metadata.shell || manifest.snapshot !== metadata.snapshot) throw new Error('Split manifest composition identity mismatch');

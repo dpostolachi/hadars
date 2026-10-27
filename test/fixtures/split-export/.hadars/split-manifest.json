@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "releaseId": "d8f1eededdd014d7",
+  "releaseId": "43f816339f869e7f",
   "mode": "per-module",
   "defaultGroup": "main",
-  "shell": "6257700c269d177d",
-  "snapshot": "snap_68645e0d00670fcc",
+  "shell": "e96ba89c588b35a2",
+  "snapshot": "snap_4b0555e011a63cb1",
   "probe": {
     "path": "/__hadars/release"
   },
@@ -23,7 +23,7 @@
       ],
       "unit": {
         "file": "units/admin/bunny.mjs",
-        "sha256": "e90e6eb190e9aa012b503b43bedd07d3d98ceefbfcbf71e6c6c0dec331f47a4e",
+        "sha256": "82999bcc69f643b609a5db1b2bc486954d1ea93383a951c3550cdd36bb4e3558",
         "size": 523
       }
     },
@@ -38,7 +38,7 @@
       ],
       "unit": {
         "file": "units/shop/bunny.mjs",
-        "sha256": "7e0c15b3d0d1cc5a6feaade9378f3fd4cd5fba272077bd0260428ede2726ecae",
+        "sha256": "23e0048a9a35727827730275d4ad5a34ae22f2f033be30c108d8503ae6a65dda",
         "size": 521
       }
     },
@@ -48,7 +48,7 @@
       "modules": [],
       "unit": {
         "file": "units/main/bunny.mjs",
-        "sha256": "704674cd52d831011099b850dbe5660fa3328a4f0f75042bbfc9790e2893b2fe",
+        "sha256": "c00df672ee72ae712c94869dcf371e6308757626ff371c148ba927731cffbab8",
         "size": 521
       }
     }

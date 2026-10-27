@@ -1,31 +1,60 @@
 {
-  "releaseId": "d8f1eededdd014d7",
+  "shell": "e96ba89c588b35a2",
+  "snapshot": "snap_4b0555e011a63cb1",
+  "shellInventory": [
+    {
+      "path": "shell/artifact/client/index.js",
+      "sha256": "c70088b63f0a16eb439f7bb0546bebabc72b3bc7cb8246de2fa7d0a7e9abd43d",
+      "size": 31
+    },
+    {
+      "path": "shell/artifact/client/out.html",
+      "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27",
+      "size": 44
+    },
+    {
+      "path": "shell/artifact/server/index.ssr.js",
+      "sha256": "0f4cb4d839bac55f41d2555b3166b085a217277cf3e8854182440077fa2f0fd0",
+      "size": 27
+    },
+    {
+      "path": "shell/manifest.json",
+      "sha256": "2e014b8e8e59c2bb64cf23c509b091ff85725e7ce053f72b27523b761c797c71",
+      "size": 857
+    },
+    {
+      "path": "hadars.lock",
+      "sha256": "2f02387249dc420376c8d88c5721d40410b5d2ff4af4b4cce8d486fdc77ae75a",
+      "size": 3768
+    }
+  ],
+  "releaseId": "43f816339f869e7f",
   "units": [
     {
       "group": "admin",
       "path": "units/admin/bunny.mjs",
-      "sha256": "e90e6eb190e9aa012b503b43bedd07d3d98ceefbfcbf71e6c6c0dec331f47a4e",
+      "sha256": "82999bcc69f643b609a5db1b2bc486954d1ea93383a951c3550cdd36bb4e3558",
       "size": 523,
-      "normalizedSha256": "b365eae1963f540a0876a30ac46b9f8e0875719b6f78b15c14ffd39850abd145"
+      "normalizedSha256": "a986f2d7e6f1f54c54d97e92061da4d842b65ebfa7d5536c794d64ee8bc93e9b"
     },
     {
       "group": "shop",
       "path": "units/shop/bunny.mjs",
-      "sha256": "7e0c15b3d0d1cc5a6feaade9378f3fd4cd5fba272077bd0260428ede2726ecae",
+      "sha256": "23e0048a9a35727827730275d4ad5a34ae22f2f033be30c108d8503ae6a65dda",
       "size": 521,
-      "normalizedSha256": "ff80ca0a2a0e986305c0d8a5ed2b94a6b921d5f2522ae8d0d3fc0f7b77327274"
+      "normalizedSha256": "bf271de25413e8f0dbdd8711475e509545e1a6df7fecef583b200507fbbfa7e7"
     },
     {
       "group": "main",
       "path": "units/main/bunny.mjs",
-      "sha256": "704674cd52d831011099b850dbe5660fa3328a4f0f75042bbfc9790e2893b2fe",
+      "sha256": "c00df672ee72ae712c94869dcf371e6308757626ff371c148ba927731cffbab8",
       "size": 521,
-      "normalizedSha256": "24a223f8d81a20ba3065949373a2b29347d58de1d51a674dd0ec4234ae94c2d5"
+      "normalizedSha256": "cd60cf7ef1042de71792f5af6f503797617c46fc1f1841e2e217e90c19620ddb"
     }
   ],
-  "manifestSha256": "734afeeeff85e921803035997dd81ee800b147c3f83574d4b0a7b29ea247354a",
-  "staticDigest": "271bc85e9ac3b2541831e7efddec5adf9987de8442b93b8e4cdfa2d248fbf38a",
-  "metadataSha256": "5c1969d62d2e7258c91103b2940ecc8c4efe07cd323095a570c3f49a6a82ddfe",
+  "manifestSha256": "75c211d2d52cdff34709611bb7b44010cfdd8c5a5129f8445d8ac2d36a9f80c1",
+  "staticDigest": "cf1ea35389c4c1abfa67e23cc50bbfb11c095647bb6084fec56d7723be1aa8f6",
+  "metadataSha256": "d5f3a3472ea97bea1fd6e6a9d8b7ac2d3d11e777a795434f26be9d18e10dcad1",
   "routingPlan": [
     {
       "group": "admin",
