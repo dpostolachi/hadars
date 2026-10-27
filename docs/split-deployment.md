@@ -11,9 +11,9 @@ retain their existing CLI target identifiers.
 | Server output | One self-contained unit per group | Independent memory, concurrency and bundle size |
 | Browser output | One release-wide client chunk graph | Cross-group navigation preserves the app and shared state |
 | Composition | One validated snapshot; link a subset per group | Remove unused server factories without mixing module versions |
-| Activation | Immutable release router/config plus one external pointer | Never activate group pointers independently |
+| Activation | Stage a complete release, then apply a receipt-recorded native plan | Per-request coherence with release gating; strict atomic mode is optional |
 | Failure | Fail closed; no fallback to another release | Availability must not conceal a partial deployment |
-| Initial dispatch | Generated edge router; private binding or function router next | Shared semantics before target-specific routing optimizations |
+| Dispatch | Native routing plan executed by the deployment tool; router only as opt-in fallback | No extra hop, no extra failure point, no code in the request path |
 | Integrity | Version 2 sealed output with a trusted checksum | Covers every group, static asset, route and composition pin |
 
 ## 1. Goals, limits and atomicity
@@ -24,7 +24,8 @@ Prevent rejection by a roughly 10 MB single-script limit, avoid parsing unrelate
 pages on cold start, isolate crashes/resource exhaustion, and permit different
 memory/concurrency settings for hot and infrequently used paths. Splitting reduces
 the server graph, not necessarily total uploaded bytes: shared libraries duplicate.
-A router and common external dependencies remain shared failure points.
+Common external dependencies remain shared failure points. No routing script or
+function sits in front of groups in the default deployment.
 
 Non-goals: deploying a group independently, dynamically fetching server code,
 distributed in-memory sessions/caches, automatic inference of arbitrary routers,
@@ -36,37 +37,89 @@ target, not a fresh allowance for every hop. Splitting cannot evade that limit.
 A release is a tuple of route/membership plan, immutable group units, one client
 graph, one complete pinned snapshot, static inventory and runtime contract.
 The deployment tool MUST stage and verify the entire tuple before activation.
-A router captures one immutable dispatch table at initialization (or reads one
-whole versioned record once per request); it never reads individual group pointers.
 Every destination is an immutable revision, never a mutable `latest` endpoint.
-Each unit checks the authenticated release and group before hooks or cache lookup.
-A missing or mismatched unit returns an error, never a different group's unit or
-an older revision. Retrying cannot select a different release.
+Each self-contained unit embeds its release/group IDs and the same client graph
+and pinned snapshot identity. It handles a request entirely within that tuple;
+there are no cross-group server calls to assemble a render.
 
-The activation transaction compares the previous active pointer and changes that
-single pointer to the verified router/config revision. A deployment receipt binds
-the output seal to provider revision IDs, resolved endpoints, bindings, runtime
-configuration revision and probe results. A conflicting pointer update aborts.
-Rollback points to a retained, verified complete release. A deployment tool owns
-these operations; hadars supplies the plan, artifacts and verification protocol.
+**Scope of atomicity:** native routing with one API call per rule allows a short
+window in which requests for different paths reach different complete releases.
+On an edge-script CDN, one measured run on one provider on one day showed two
+rule updates and a default-script pointer update, submitted sequentially over
+about 1.2 s, becoming visible about 3.2–3.9 s after their respective calls and
+within 165 ms of each other (about 0.2 s). This is a single sample, not a bound.
+Updates straddling a periodic configuration sync boundary may have a longer
+window. Measure repeatedly before claiming propagation or mixed-release bounds.
+This window is acceptable ONLY with self-contained units and release gating:
+no request ever executes a mixed tuple. It is not an atomic whole-map update.
 
-**Scope of atomicity:** no request can execute a mixed tuple. Globally distributed
-configuration propagation can let complete releases N and N-1 serve different
-requests concurrently; in-flight N-1 requests finish on N-1. There is no universal
-instantaneous global cutover primitive. If the owner requires that stronger
-property, a provider without a linearizable ingress selector cannot meet it and
-the deployment tool must reject activation. Do not describe eventual propagation
-or several route updates as a globally atomic switch.
+HTML embeds its release ID and client graph ID. Framework data/navigation and
+mutation requests carry the existing browser release selector. Before **any**
+hook, cache lookup, proxy or render, a unit compares that selector to its embedded
+release ID and checks native destination/group context. A mismatch returns
+`409 SPLIT_RELEASE_MISMATCH` with `Cache-Control: no-store`; an expired selector
+returns `409 SPLIT_RELEASE_EXPIRED`. The browser performs one document reload
+using the release-selector protocol, clearing the stale selector for the fresh
+document; it never replays a mutation. Bound reload attempts to one per failed
+navigation; if propagation still causes a mismatch, show a clear retry error.
+A document request without a selector adopts the unit's release. In-flight
+requests keep their selected unit/release through completion. A public
+selector is a consistency assertion, never a destination address or credential.
+Native routing need not keep old tabs on old units: if it cannot select a retained
+release natively, old tabs reload. Retain old units/assets for in-flight work,
+rollback and any supported native release affinity. No silent cross-release retry.
 
-Browser consistency also matters. HTML embeds its release ID and client graph ID.
-Framework data requests carry a browser release selector. The ingress accepts
-only retained, verified complete releases, then assigns trusted internal headers;
-it never trusts that selector as a group or destination address. An old tab keeps
-its release for data/navigation. After retention expires, return
-`409 SPLIT_RELEASE_EXPIRED` before rendering; the client performs one document
-reload, without replaying mutations. Content-addressed assets survive that window.
-A single global switch that immediately revokes all old releases necessarily
-requires old tabs to reload; that policy is separate from group consistency.
+The deployment tool MUST use this deterministic activation protocol:
+
+1. Verify the seal; stage **all** immutable group units, static assets and runtime
+   configuration. Probe each unit and validate the full new plan before writes.
+   Snapshot/read back every old rule, its precedence and the default pointer.
+   Lock deployment ownership or use conditional revisions; abort on conflicting
+   writers. Record old/new values and request identifiers in a durable receipt.
+2. Build an edit script over the union of old/new non-default patterns, sorted
+   by section 4 precedence and lexical tie-breaks. For each pattern, update its
+   stable rule ID, create it if new, or delete it if removed; expanded native rules
+   use their recorded adjacent expansion order. Apply that fixed order, waiting
+   for each API acknowledgement and recording each step. Validate intermediate
+   maps against old/new group ownership, including visibility combinations when
+   propagation reorders writes. Reject an edit script that could send a path to a
+   unit lacking its page; each unit also checks local ownership before hooks. Use a staged native map or
+   strict mode if a membership change cannot be updated safely in place.
+3. Flip the default-script pointer **last**. This keeps unmatched traffic on the
+   old release until explicit rule calls have succeeded and gives one final
+   catch-all step to reverse first. API order does not guarantee visibility order;
+   release gating is mandatory throughout propagation and rollback.
+4. Read back **every** rule and the default pointer, comparing normalized actions,
+   patterns, precedence and immutable unit identities with the receipt. Probe
+   each group's witness URLs through the **public hostname**, using a reserved
+   release-probe header or path that returns embedded release/group/client graph
+   IDs before app hooks. Bypass caches and check expected release, not just 200.
+   Repeat until convergence or a configured deadline; only then mark activated.
+5. On any API failure or verification timeout, stop forward writes and restore
+   applied steps in **reverse order**, including the default pointer first if
+   changed. Each idempotent step records intent, acknowledgement and readback;
+   reconcile ambiguous timeouts by readback before retry/undo. A rollback failure
+   leaves an explicit incomplete receipt, raises an operational error and resumes
+   reconciliation; never report success or delete either release. Verify all old
+   rules/pointer and public probes again. Conditional writes must not overwrite
+   another owner's intervening change; surface that conflict for reconciliation.
+
+A receipt binds the output seal and plan/translation digests to all provider
+resource revisions, resolved unit identities, runtime config revision, ordered
+forward/undo steps, readbacks and timestamped probe results. Rollback uses the
+previous verified receipt, not reconstructed mutable aliases. Hadars supplies
+artifacts and verification helpers; the deployment tool owns provider calls.
+
+**Optional strict-atomic mode:** stage a release-scoped hidden zone containing
+the complete native rule map, default unit and asset policy; verify it before
+changing **one** public ingress origin/zone-reference field. Rollback restores
+that field to the retained zone. This costs an extra ingress-to-hidden-zone hop
+(and associated latency, limits and failure surface), though it needs no routing
+script. The provider's ability to address a hidden zone through one field and
+retain coherent old/new maps is **to verify against provider docs before
+implementation**. Reject strict mode if unavailable; never silently enable a
+router. One field flip still propagates geographically: it does not promise a
+globally simultaneous cutover or terminate old in-flight requests.
 
 ## 2. Current implementation and the proposed group model
 
@@ -113,7 +166,7 @@ export default {
   split: {
     version: 1,
     defaultGroup: 'main',
-    budgets: { serverBytes: 9_000_000, routerBytes: 100_000 },
+    budgets: { serverBytes: 9_000_000 },
     pages: {
       home: { file: 'src/pages/Home.tsx', modules: [] },
       account: { file: 'src/pages/Account.tsx', modules: ['identity'] },
@@ -143,7 +196,7 @@ Unknown names fail. No globs are accepted in the first configuration version.
 Group `serverBytes` overrides the inherited budget. Capacity/memory settings are
 external deployment policy keyed by group, recorded in the receipt.
 
-Use the same matcher in analysis, generated clients, dev and routers:
+Use the same reference matcher in analysis, generated clients, dev and tests:
 
 - Match the URL pathname only, all methods, case sensitive. Query and fragment
   never affect selection. No host, regex, optional segment or method predicates.
@@ -159,7 +212,10 @@ Use the same matcher in analysis, generated clients, dev and routers:
   preserve the original raw path/query separately for the application. The outlet
   selects pages using the canonical path on both server and client. Never
   decode twice. Providers unable to expose or equivalently reject ambiguous raw
-  paths cannot use direct routing; ingress validation must precede routing.
+  paths cannot express `path-1` directly. Reject that native translation unless
+  equivalent native ingress validation is available; no custom routing code is
+  implied. Unit pre-hook validation is also required, but cannot correct a native
+  routing choice made with different normalization.
 - Rank matching patterns lexicographically by segment kinds from left to right:
   literal > parameter > rest; an exact end beats a rest matching zero segments.
   Ties whose languages overlap fail configuration, including `/a/:x` versus
@@ -228,8 +284,8 @@ Show startup measurements separately; size is only a proxy for cold start.
 
 The default edge safety budget is 9,000,000 bytes below an approximate 10 MB limit;
 the deployment tool supplies the actual account/runtime limit and measurement
-basis. Fail on either configured or target limits, including router, wrappers and
-linked factories. For function packages report the full archive and unpacked
+basis. Fail on either configured or target limits, including wrappers, linked
+factories and any optional fallback router. For function packages report the full archive and unpacked
 inventory, not just the handler. No silent budget escalation or gzip substitution
 for a runtime measuring source bytes. Reject an export lacking a target budget.
 
@@ -256,8 +312,9 @@ contains bootstrap dependencies and the selected page's transitive JS/CSS assets
 not all pages. Loading a page from another group is a browser dynamic import from
 that same graph; it does not reload the document or replace shared providers.
 Server-data requests still target the page's public URL with `Accept:
-application/json` and the browser release selector. The ingress then selects that
-release's destination group. The current data-only contract returns `serverData`,
+application/json` and the browser release selector. Native rules select a group;
+the unit gates the selector before any app work. The current data-only contract
+returns `serverData`,
 not arbitrary new initial props: app routers needing additional navigation props
 must explicitly fetch them or adopt a separately versioned data contract.
 
@@ -296,8 +353,7 @@ Proposed self-contained export root (not a public web root):
 split-output/
   split-manifest.json
   composition-provenance.json
-  dispatch-template.json
-  router/entry.mjs
+  routing-plan.json
   units/main/entry.mjs
   units/account/entry.mjs
   static/assets/...
@@ -305,8 +361,8 @@ split-output/
   static/out.html
 ```
 
-Only explicitly publishable static files are served. Templates, router source,
-server units and metadata are never exposed by directory fallback. Logical public
+Only explicitly publishable static files are served. Templates, optional fallback
+router source, server units and metadata are never exposed by directory fallback. Logical public
 mounts are in the manifest; deploy preserves their release-qualified mapping.
 All manifest paths are relative to this root, slash-separated, nonempty, without
 absolute paths, `..`, empty segments, backslashes, symlinks or special files.
@@ -315,7 +371,7 @@ Diagnostic source paths stay in a separate local report, outside the release.
 The manifest has a strict schema with unknown required versions rejected. Types
 below specify the complete minimum contract; hashes are lowercase 64-digit hex,
 sizes nonnegative safe integers, sets sorted and unique. Group order is name order;
-matching follows the grammar, never JSON order.
+matching follows grammar precedence; the routing plan serializes that order.
 
 ```ts
 type FileRecord = { path: string; sha256: string; size: number };
@@ -344,11 +400,10 @@ type SplitManifest = {
     directory: 'static'; files: FileRecord[]; sha256: string;
     mounts: Array<{ path: string; file: string; cache: 'immutable' | 'revalidate' }>;
   };
-  dispatch: {
-    grammar: 'path-1'; mode: 'router' | 'native';
-    template: FileRecord; routerFiles: FileRecord[];
-    releaseHeader: 'x-hadars-release'; groupHeader: 'x-hadars-group';
-    maxHops: 1;
+  routing: {
+    grammar: 'path-1'; mode: 'native' | 'router-opt-in';
+    plan: FileRecord; fallbackFiles: FileRecord[]; // empty by default
+    releaseSelector: 'x-hadars-release';
   };
 };
 ```
@@ -361,11 +416,11 @@ digests retain the existing sorted `[path, sha256, size]` tuple algorithm.
 
 Extend `finalizeExport` with an explicit split descriptor overload and
 `verifyExport` with `output.version: 2`; keep version 1 verification unchanged.
-Version 2 stores the manifest record, complete unit/router/control file inventory,
-static inventory, and their digests in the existing provenance structure. Create
+Version 2 stores the manifest record, complete unit/optional-fallback/control
+file inventory, static inventory, and their digests in the existing provenance structure. Create
 provenance even without composition pins. Preserve snapshot/module provenance
 fields and add per-group linking records. Finalize only after all bundles,
-reports required for activation, and dispatch templates exist.
+reports required for activation, and routing plans exist.
 
 One `output.metadataSha256` seals canonical recursively key-sorted JSON with only
 that checksum and reserved `output.signature` omitted, as today. It covers the
@@ -379,222 +434,208 @@ an untrusted self-reported checksum is insufficient. Signing remains external.
 
 Avoid a release-ID/hash cycle: assign a unique release ID before bundling (a
 SHA-256 of canonical build-plan inputs plus a build nonce), then embed it in
-units and templates. The final output seal identifies actual bytes. Publishing
+units and routing plans. The final output seal identifies actual bytes. Publishing
 the same release ID with a different seal is forbidden. Reproducible builds may
 supply the same nonce and inputs; a byte difference still prevents reuse.
 
-## 4. Dispatch contract and target mechanisms
+## 4. Routing plan contract and native mechanisms
 
-Hadars emits a logical dispatch template and generic router source, not account
-IDs, secrets or live hostnames. The deployment tool resolves logical unit IDs to
-immutable addresses, validates the table, installs it as immutable router
-configuration, and records its digest plus provider revisions in the receipt.
-This binding cannot be made by editing already sealed server output.
+Hadars emits versioned, declarative `routing-plan.json`, not routing code, account
+IDs, secrets or live hostnames. The deployment tool translates it into native
+CDN rules, routes, bindings where appropriate, or cache behaviours. It resolves
+logical unit references without editing sealed output. No phase depends on a
+generated router. Minimum plan schema (JSON serialization of these types):
 
-Example resolved table (illustrative ID `r1`; real IDs are full hashes):
-
-```json
-{
-  "version": 1,
-  "releaseId": "r1",
-  "runtimeContract": "split-1",
-  "outputSeal": "<64 hex digits>",
-  "grammar": "path-1",
-  "defaultGroup": "main",
-  "rules": [{ "pattern": "/account/**", "group": "account" }],
-  "destinations": {
-    "main": {
-      "unit": "units/main/entry.mjs",
-      "revision": "immutable-main-r1",
-      "transport": "https",
-      "address": "https://main-r1.units.example"
-    },
-    "account": {
-      "unit": "units/account/entry.mjs",
-      "revision": "immutable-account-r1",
-      "transport": "https",
-      "address": "https://account-r1.units.example"
-    }
-  },
-  "internalHeaders": {
-    "release": "x-hadars-release",
-    "group": "x-hadars-group",
-    "hop": "x-hadars-hop"
-  },
-  "maxHops": 1
-}
+```ts
+type RoutingPlan = {
+  version: 1;
+  releaseId: string;
+  runtimeContract: 'split-1';
+  grammar: 'path-1';
+  defaultGroup: string;
+  groups: Array<{ name: string; unit: string }>; // manifest group entry references
+  rules: Array<{ order: number; pattern: string; group: string }>;
+  staticMounts: Array<{ path: string; file: string }>;
+  releaseSelector: 'x-hadars-release';
+  probe: { header: 'x-hadars-release-probe'; protocol: 'split-probe-1' };
+};
 ```
 
-For private bindings, `transport` is `binding` and `address` is an enumerated
-binding name. For direct function invocation, it is `invoke` and the address is
-a qualified immutable function version. The template instead contains logical
-unit references and required capabilities. An omitted or extra destination,
-wrong seal/release, mutable revision or changed rule is a deployment error.
-Readiness probes authenticate to each group, ask for its release/group/client
-graph IDs and linked build IDs, and compare them with the sealed manifest.
-Probe HTML, JSON, body upload, redirect, error and static mounts before activation.
-Readback of deployed code hashes or a provider code digest is required where
-available; a successful health request alone does not establish artifact integrity.
+Groups are unique and name-sorted; default/rule groups must exist. Unit and static
+references must match sealed manifest inventory. Rules have contiguous zero-based
+`order`, highest grammar precedence first; overlap ties fail as in section 2.
+For disjoint equal-ranked patterns use lexical pattern then group order to make
+serialization and update order deterministic. Array order is an encoding of
+computed precedence, not user-defined precedence. Exact static inventory mounts
+precede app rules. The receipt separately binds the plan digest to the final seal
+(to avoid a hash cycle), resolved immutable revisions and translated rule IDs.
+Unknown versions, missing/extra groups or mutable destinations fail verification.
 
-The router strips incoming internal release/group/hop/original-request headers,
-selects a release under ingress policy, then assigns its table's release and group.
-The group authenticates the transport (private binding, invocation permission or
-signed origin request) and compares IDs to its embedded constants. Public HTTPS
-origins require request authentication, not just a magic header. A proposed
-signed envelope covers method, original URL, release, group, hop, timestamp and
-request ID; use short expiry and replay controls for sensitive operations, without
-buffering streaming bodies. Application body integrity remains protected by TLS.
-Authentication credentials are provisioned externally, never placed in public
-manifests. Return `503 SPLIT_RELEASE_MISMATCH` with `Cache-Control: no-store` on
-an authenticated ID mismatch, log expected/actual IDs and increment
-`split_release_mismatch_total`. Reject unauthenticated origin calls with 403.
+Translation MUST preserve the whole language, default selection, normalization
+and precedence of `path-1`, including negatives and boundary cases. Expand a rule
+into adjacent ordered native rules only when the expansion is exactly equivalent;
+record each expansion and witness in the translation receipt. Count expanded
+rules, static mounts and defaults against fixed provider/account limits before
+creating resources. Reject unsupported patterns with a witness and diagnostic;
+never broaden `/admin/**` to `/admin*`, which also matches `/administrator`.
+A wildcard that spans slashes cannot represent a one-segment `:id` by itself.
+If a provider cannot express that constraint, normalization, case sensitivity or
+zero-segment rest semantics exactly, reject the affected grammar subset for that
+translator. An unexpressible plan cannot silently opt into a router.
 
-### Edge-script target
+Conformance tests compare each translator's local model of native rules with the
+**same local reference matcher** used by hadars dev, analysis and client selection.
+Use exhaustive bounded segment cases plus generated witnesses/counterexamples:
+root, exact/prefix boundaries, parameters, empty/rest paths, overlapping rules,
+trailing/repeated slashes, escapes, case, query strings, all methods and static
+mounts. Test every intermediate update/undo map and release mismatch before any
+hook. A reference matcher/proxy simulates routing only in tests/dev; it is never
+production ingress. Native semantics unconfirmed by fixtures need provider-doc
+verification and eventual public-host probes before enabling a translator.
 
-Emit a tiny router with no app renderer, plus one standalone immutable group
-script per hostname. The deployment tool creates those scripts/hostnames and
-origin authentication, uploads static assets, installs a release-specific router
-with its resolved table, and flips the public ingress pointer to that router.
-A router of N has only N destinations. Group hostnames must never themselves
-resolve through the public router. Public ingress and private-origin caches must
-not bypass release selection.
+Common verification stages direct unit probes, then public-host probes for each
+group and each translated rule boundary/precedence witness. Reserved probes
+return embedded release/group/client graph IDs and linked build IDs, require
+deployment authentication, bypass cache and perform no app hooks. Read back all
+rules/defaults and code digests where available; health alone does not establish
+artifact integrity. Authentication and public Host/scheme/client-IP semantics
+must be native or unit-adapter capabilities, not a prerequisite routing function.
+Strip client-supplied internal group/forwarding claims; derive group/release from
+embedded constants and trusted native metadata. Public release selectors remain
+untrusted consistency assertions. Protect private origins with native access
+controls or signed origin requests; reject unauthorized direct calls with 403.
+Native destination context inconsistent with embedded IDs is a no-store
+`503 SPLIT_RELEASE_MISMATCH` before hooks; browser selector mismatches use 409.
+If the provider cannot supply the required trust boundary, reject deployment.
 
-Forward exactly once by replacing only the transport origin. Keep method, raw
-path/query and request-body stream, with cancellation/backpressure propagated.
-Use manual redirect handling: return 3xx and original `Location` unchanged, never
-follow an origin redirect as another router fetch. Preserve status, content
-encoding, cache headers, multiple `Set-Cookie` fields and response-body stream;
-strip hop-by-hop headers and regenerate lengths only if required by transport.
-Do not decompress, buffer or clone the body for routing. Before headers, a failed
-connection returns no-store 502, timeout 504; a group 4xx/5xx is returned unchanged.
-After headers, terminate a failed stream and record an error. No automatic replay
-of POST and no fallback to the default group or previous release.
+Group response caches are keyed by release, group, runtime config revision,
+method, canonical URL, representation and app cache key, with auth/cookie variation
+controlled by the app. Shared native caches must validate the selector before
+lookup and isolate releases or be disabled for HTML/data. Mismatch/error/probe
+responses are no-store; immutable assets use release-qualified keys. Native
+adapters must preserve original public URL/Host, method, query/body, redirects,
+multiple cookies, cancellation and supported streams. Reject unsupported upgrades
+with 501 before app hooks. Routing must never replay mutations or follow redirects
+internally. These are conformance requirements, not assumed provider features.
 
-TLS/SNI and transport Host identify the immutable group hostname. Carry the
-original Host, scheme and raw URL in authenticated internal headers; reconstruct
-the application-facing Request before `parseRequest`. Rebuild `Forwarded` and
-client-IP headers from the trusted ingress connection/provider metadata, dropping
-untrusted client values. Never use a client-supplied forwarded host to choose an
-origin. Cookies keep the public origin/path semantics; relative redirects resolve
-at the public URL, and app-generated absolute redirects use the reconstructed URL.
+All provider details below other than the supplied CDN measurements are
+**to verify against provider docs before implementation**. They describe proposed
+translator contracts, not capabilities established by this repository.
 
-Remove ordinary hop-by-hop fields, including those named by `Connection`.
-WebSocket/Upgrade is a separate capability: require an adapter capable of
-bidirectional tunnel forwarding, cancellation and close codes; preserve handshake
-fields through that API. Otherwise reject with explicit 501 before invoking a
-group, and reject configurations requiring upgrades at export/deploy validation.
-Generic `fetch` forwarding is not proof of tunnel support.
+### Edge-script CDN: native rules and a default script
 
-A trusted hop starts at 1; groups reject hop > 1 with 508. A forwarded request
-returning to ingress must be detected before stripping headers, using the
-authenticated envelope, and rejected. Also reject destination origins equal to
-any ingress origin, recursive service bindings and redirects as transport targets.
-An untrusted client's hop header cannot force a loop error.
+Measured on **an edge-script CDN**, one provider on one day: a public zone used
+one edge script as its default origin and carried edge rules. A URL-pattern
+condition with action **"run edge script"** selected a different standalone
+script directly. With `https://*/admin*` and `https://*/dashboard*`, matching paths
+used the rule's script and other paths used the default. The selected script saw
+the original public Host header. Measured warm latency was 52–98 ms across all
+routes, indistinguishable from the default route in this sample: no extra hop
+and no router. These samples do not establish latency bounds or exact `path-1`
+translation. Action **"change origin URL"** was ignored when the zone origin was
+an edge script; only "run edge script" worked for the tested script-to-script
+path routing. Do not translate this plan using origin-URL changes.
 
-Cost: one extra router invocation and one router-to-group subrequest per dynamic
-request, plus an origin round trip, connection establishment when cold and router
-scheduling. Measure p50/p95 locally; no fixed latency claim. Reserve that hop
-against an approximately 50-subrequest end-to-end budget: initially at most 49
-application upstream calls, with safety margin for other middleware. Provider
-accounting may differ across isolates; activation policy must use the stricter
-app budget and separately enforce each runtime's native limit. Co-locating groups
-reduces latency but does not remove the hop.
+The tool creates immutable standalone scripts for all groups, native ordered
+"run edge script" rules and the zone's default-script pointer, plus asset/cache
+configuration. Hadars emits the plan above and group script references. The
+translator must verify rule ordering/precedence and wildcard semantics. Candidate
+expansion of `/admin/**` is exact `/admin` plus `/admin/*`, subject to documented
+trailing slash, query, host and wildcard behaviour; the measured `/admin*` test
+is not proof of that expansion. Reject `:name` and any other subset that native
+conditions cannot express exactly. Verify fixed rule count limits, including
+expansion, other zone rules and reserved static mounts, before implementation.
 
-Default router HTML/data caching is off. Group response caches are namespaced by
-release, group, runtime config revision, method, canonical URL, representation and
-app cache key, with auth/cookie variation controlled by the app. Shared CDN caches
-must likewise key by selected release or be disabled; URL-only HTML caching would
-serve an old tuple after activation. Errors/mismatch/authenticated responses are
-not publicly cached by default. Immutable assets use release-qualified keys.
+Measured rule updates require one API call per rule, with no bulk call. Use the
+fixed ordered edit script and default-last protocol in section 1, public-host
+probes and complete readback; reverse receipt steps for rollback. The single-run
+propagation measurements there must be repeated, including sync-boundary cases.
+Earlier measurements showed a single default-pointer field change and cache
+purge becoming visible in about 3–5 s. Cache purges are neither activation nor a
+transaction barrier. This zone's cache ignored query strings by default unless
+configured: query-only release/probe selectors cannot establish isolation.
+Disable shared HTML/data/probe caching unless release-aware keys and selector
+validation before cache lookup are assured; immutable assets use release paths.
 
-Reject incremental pull-zone/CDN origin-rule activation: one rule per API call,
-no bulk transaction means a partially updated path map can mix releases. Native
-rules are acceptable only inside an inactive blue/green zone whose whole map and
-asset origins are verified first. The deployment tool then switches **one** ingress
-origin/zone-reference field to the staged zone, retaining the old zone for rollback.
-If the provider lacks that single field or cannot retain a coherent config per
-request, use the router instead. DNS edits, sequential rule writes and cache
-purges do not establish atomicity. Native rules remove the router invocation/hop
-but must supply authenticated release context and implement exactly `path-1`.
+### Cloudflare: native Workers Routes
 
-### Bound-worker target
+**To verify against provider docs before implementation:** Workers Routes patterns
+can select separate group workers directly. The tool creates release-specific
+workers with frozen versions/deployments, native route entries in the zone, a
+default/catch-all mapping and static/cache policy. Hadars emits the same ordered
+plan with worker unit references. Translate to Workers Routes patterns only with
+proven equivalence, including provider specificity, overlap ordering, wildcard
+slash behaviour and exclusions; verify route/worker/account limits. Reject
+unrepresentable `path-1` subsets rather than relying on a dispatch worker.
 
-Emit a router worker and binding declarations for group workers. The deployment
-tool creates uniquely named, release-specific services, private service bindings,
-assets and a router version whose complete binding set is immutable. Public
-routes point to the router, never individually to groups. Call
-`env.GROUP_ACCOUNT.fetch(request)` with reconstructed public URL and assigned IDs.
-A service binding avoids a public network round trip (often called zero hop),
-but still performs one logical dispatch/invocation and consumes applicable runtime
-limits/CPU; it is not a free function call. Errors, streaming and upgrades follow
-the common contract, gated by the binding API's capabilities.
+**To verify against provider docs before implementation:** route changes are
+per-route API calls; worker versions/deployments do not make multiple route
+writes one transaction. Freeze each release-specific worker deployment; never
+shift individual worker versions under a retained plan. Use section 1's ordered
+route updates and default-last mapping, record provider revision/route IDs,
+read back every route and worker deployment, and probe via the public hostname.
+Rollback reverses receipt steps to the previous routes/deployments and verifies
+public probes. Native propagation may serve different complete releases on
+different paths; release gating is required.
 
-Publish all group services first, probe them through the staged router and verify
-binding readback plus hashes. Activate only the router deployment/version.
-A binding to a mutable service that is subsequently updated breaks immutability;
-release-specific service names remain frozen until retirement. Editing public
-worker routes one at a time is not the activation mechanism.
+Service bindings are for worker-to-worker calls, which splitting should not need;
+they are not the default dispatch mechanism. Binding permissions, version pinning,
+origin protection and native request metadata are **to verify against provider
+docs before implementation** if an application independently needs such calls.
 
-Versioned deployments and gradual rollout may divide traffic between complete
-router versions with complete frozen binding sets. Never roll out group workers
-independently. For a strict single-release activation, use 0/100 router selection;
-weighted routing is an explicit policy allowing whole-release cohorts, with
-browser affinity to the selected release. Roll back router weights/version only.
-If the provider does not version bindings with code, create a new router service
-and switch the single ingress reference instead.
+### AWS: CloudFront cache behaviours and function URL origins
 
-### Function target
+**To verify against provider docs before implementation:** the tool publishes
+immutable group function packages/versions and separate function URL origins
+pinned to frozen release units, with origin authentication, static origins and
+one distribution configuration containing **all** ordered cache behaviours and
+the default behaviour. Hadars emits the routing plan with group package references;
+the translator expands patterns only if CloudFront semantics match `path-1`
+exactly, validating precedence, normalization, cache policies and behaviour/origin
+limits. Confirm which function URL qualifier forms are supported; if only aliases
+are usable, use release-specific aliases frozen until retirement, not `latest`.
 
-Emit group handlers/packages, gateway event-adapter declarations and a routing
-plan. The deployment tool publishes immutable function versions with independent
-memory/concurrency, grants invocation rights, stages static origins and creates
-one release router version. Recommended initial mode is a router function invoked
-by a stable gateway: it captures qualified group version addresses and invokes
-exactly one using request/response envelopes. This costs a second function
-invocation, serialization and an invocation round trip; initial implementation
-buffers like the existing function adapter. Payload limits apply to both legs.
-No streaming/upgrade claim until a separate transport supports it end to end.
-Activate by moving a **single router alias** to its published version. Weighted
-aliases are allowed only for complete routers and explicit whole-release rollout.
-Do not update one alias per group: even matching weight percentages can choose
-incompatible releases independently. Rollback changes that one router alias.
+**To verify against provider docs before implementation:** one conditional
+distribution configuration update replaces **all** behaviours in one API call.
+This is the strongest atomic story among these native candidates: each old/new
+configuration contains a complete map, unlike sequential per-route updates.
+Confirm per-request coherent config selection and cache isolation; distributed
+propagation still allows old/new configurations to coexist. The tool records the
+old/new full config, version token and unit revisions, reads back every behaviour
+and default, waits for deployment and verifies public-host group probes. Rollback
+conditionally restores the prior full config in one call and repeats verification;
+record ambiguous timeouts and reconcile instead of blindly overwriting changes.
 
-Direct distribution behaviours can map paths to version-qualified function URL
-origins. Emit a complete proposed distribution config with immutable origins and
-static mounts; the deployment tool submits it as one conditional configuration
-update using the previous version token, then waits for deployment. Old/new edge
-configs can coexist during propagation, each containing a complete path map.
-This qualifies only if the provider guarantees a coherent config for each request
-and cache keys separate releases. A config version token prevents concurrent
-writes; by itself it proves neither global instantaneous cutover nor cache safety.
-Native path grammars often differ; compile `path-1` exactly or reject this mode.
-Origin authentication must assign release headers outside client control.
+**To verify against provider docs before implementation:** an API Gateway
+alternative creates a complete staged API deployment integrating immutable group
+functions and switches one stage deployment reference where the selected gateway
+type supports that model. Verify path grammar, stage-switch semantics, limits,
+authentication, cache behaviour and full-config rollback for that gateway type.
+Function URLs alone do not route public paths. Neither native option needs a
+router function. The existing function adapter buffers gateway v1/v2 events;
+function URL event parity, public Host, cookies, binary bodies, repeated query
+parameters, env/asset-base parity and streaming require adapter conformance work.
+Do not infer streaming/upgrade support merely from the origin transport.
 
-A gateway can instead select a staged complete API deployment through one stage
-reference when that gateway type supports it. A load balancer's individual path
-rules/target groups are not a release transaction: use an inactive full listener
-configuration behind a switchable ingress, or the router function. Do not imply
-that a gateway stage, distribution update and load-balancer rule update share the
-same semantics. Reject unsupported native activation capabilities.
+### Explicit opt-in fallback, outside the critical path
 
-Function URLs provide HTTP endpoints and possible native response streaming, with
-public access disabled or authenticated; they are not a path router or atomic
-multi-function selector. Load-balancer invocation uses a different event/response
-shape and cookie encoding, and needs a dedicated adapter and tests. Today's
-adapter accepts gateway v1/v2 and buffers; it is not already load-balancer compatible.
-The new adapter must preserve separate cookies, binary bodies, repeated queries
-and original host. Stream-capable function URLs do not turn the current buffered
-handler into a streaming handler. In every mode stage/probe the entire map and
-restore the previous full config/router for rollback; group version aliases remain
-frozen or are not used.
+Only for a provider without native path routing, an owner may explicitly request
+a generated router. It consumes the same verified plan, freezes a complete map
+of immutable units and activates through one router revision pointer. It costs
+an extra invocation/hop, failure point and code in the request path. No native
+translator failure automatically enables it; unsupported plans fail clearly.
+Future fallback work must specify authenticated origin transport, original URL
+preservation, one-hop loop prevention, no mutation replay, manual redirects,
+stream cancellation, cookie/header fidelity, cache isolation, size/subrequest
+budgets and complete-map rollback. It is optional and no earlier phase depends
+on it. It is separate from the native hidden-zone strict-atomic trade-off.
 
 ## 5. Runtime semantics
 
 All dynamic requests enter one selected group. Authenticate release context first,
 then apply that group's runtime config, `fetch`, proxy, cache and render lifecycle.
-Run the shared entry's `getInitProps` once per request in that group, not in the
-router, then the normal render/finalize sequence. Group-specific initialization
-can branch on a proposed trusted `req.split = { releaseId, group }`. Common hooks
+Run the shared entry's `getInitProps` once per request in that group, then the
+normal render/finalize sequence. Group-specific initialization can branch on a proposed trusted `req.split = { releaseId, group }`. Common hooks
 that need composed modules declare them in every affected group's membership.
 Do not initialize other groups or perform hidden internal page requests.
 
@@ -631,14 +672,14 @@ Server redirects between groups are normal public HTTP redirects. Return them
 to the client; no server-side re-dispatch or second `getInitProps` inside one
 request. The next request resolves under browser release policy. Redirects,
 fetch/proxy responses, cached responses and render errors pass through a common
-`onResponse` wrapper once in the selected group. Router transport metrics are
+`onResponse` wrapper once in the selected group. Native routing/probe metrics are
 separate from app hooks. The edge-script adapter already wraps responses;
 other split adapters need lifecycle parity instead of assuming it exists today.
 `onError` records the selected release/group and preserves the current contract.
 Errors after streaming begins close the stream; hooks cannot replace an already
 sent status/body. The existing renderer produces body HTML before transport
 streaming in single-pass mode; this RFC does not promise incremental component
-rendering merely because the router preserves a `ReadableStream`.
+rendering merely because a native transport preserves a `ReadableStream`.
 
 Static mounts precede group matching by exact inventory lookup, not extension
 heuristics. Generated assets and pinned client trees are immutable. Root
@@ -649,16 +690,15 @@ static 404 without SSR. Unknown app paths render the common not-found page in th
 selected group. A missing group deployment is 503, never a page 404. Static HTML
 must use the same release/client graph; mutable root HTML caches are disallowed.
 
-Add instrumentation equivalent to `x-hadars-subrequests`: router dispatch count,
-application upstream count and trustworthy total, labelled by release/group.
-Strip client counters. Count the router hop once and exclude browser asset fetches
-from a server request's total. Provider-native counts are a separate measurement;
-if total app fetches are not instrumentable, report `unknown`, never an invented
-zero. Streaming work completing after headers is recorded in logs/metrics or
-supported trailers, not retroactively written into response headers. Emit
-`split_dispatch_total`, `split_dispatch_error_total`, per-group duration/size,
-`split_membership_error_total` and release mismatch metrics. Redact credentials,
-cookies and raw sensitive query strings.
+Add instrumentation equivalent to `x-hadars-subrequests`: application upstream
+count and trustworthy total, labelled by release/group. Strip client counters.
+Native direct routing adds zero router invocations; an explicitly enabled fallback
+counts its hop once. Exclude browser asset fetches from server request totals.
+Provider-native counts are separate measurements; report `unknown` when total
+app fetches cannot be instrumented. Work after headers is recorded in logs/metrics
+or supported trailers. Emit `split_dispatch_total`, `split_dispatch_error_total`,
+per-group duration/size, `split_membership_error_total` and release mismatch
+metrics. Redact credentials, cookies and raw sensitive query strings.
 
 ## 6. Development and diagnostics
 
@@ -667,14 +707,14 @@ with one browser HMR graph. Show selected group and resolved page in diagnostics
 load all pages by default for quick edits. Never imply that this default mode
 proves bundle isolation. Proposed `hadars dev --simulate-split` compiles isolated
 group graphs with the real replacement plugin, isolated module registries/caches
-and a local dispatcher. Single-process mode can use separate VM contexts; if the
-runtime cannot isolate globals reliably, use child processes behind the same
+and a local reference matcher/proxy used only in tests/dev. Single-process mode
+can use separate VM contexts; if the runtime cannot isolate globals reliably, use child processes behind the same
 public port. CI's multi-process harness is the reference for isolation behavior.
 Membership changes rebuild affected graphs and invalidate route tests.
 
 `hadars export <target> --split [output-directory]` validates the plan, compiles
 one client and all groups, enforces budgets, runs membership checks, generates
-the target dispatch artifacts and seals the completed root. It exits nonzero
+the declarative routing plan and seals the completed root. It exits nonzero
 without a deployable seal on any failure. Unsplit CLI behavior stays compatible;
 `--split` is invalid for static-only export in the first release. Export does not
 contact infrastructure, upload artifacts, create resources or activate a pointer.
@@ -695,8 +735,8 @@ SPLIT_OPAQUE_LOADER: page loader has a computed path; enumerate page IDs in spli
 SPLIT_MODULE_UNDECLARED: account uses identity; declare it on the page or group.
 SPLIT_SIZE_EXCEEDED: account 9200001 bytes > budget 9000000; largest inputs follow.
 SPLIT_RELEASE_MISMATCH: account expected <release>, received <other>; no fallback.
-SPLIT_ACTIVATION_UNSUPPORTED: native route updates are not one coherent config;
-  deploy the generated router or provide an inactive zone with one ingress switch.
+SPLIT_ACTIVATION_UNSUPPORTED: provider cannot express /account/:id exactly;
+  revise the plan or select a capable native target; no automatic router fallback.
 ```
 
 ## 7. Security and integrity boundary
@@ -704,7 +744,7 @@ SPLIT_ACTIVATION_UNSUPPORTED: native route updates are not one coherent config;
 `verifyExport(root, metadataPath, trustedChecksum)` is mandatory before resource
 creation/upload and again on any copied/staged export. Validate the split schema,
 strict path rules, full inventories, target size basis, client graph closure,
-module compatibility, route coverage and seal before executing router code.
+module compatibility, route coverage and seal before translating the routing plan.
 Reject traversal, symlinks, duplicate JSON keys, unsafe mounts, duplicate file
 records and unknown required protocol versions. The deployment tool establishes
 trust in the checksum through its own authorized artifact channel; recomputing a
@@ -718,7 +758,8 @@ network addresses through an HTTP target, user-supplied hostname overrides or
 redirect-based origin changes. Private local-test addresses require an explicit
 simulation mode unavailable in production. Fixed tables plus authenticated origin
 transport prevent SSRF and release/header spoofing. The public browser selector
-can choose only a retained complete release, never a group, path rewrite or URL.
+asserts release identity (or selects a retained release where native affinity is
+supported), never a group, path rewrite or URL.
 
 Preserve the current build-time/runtime config projection and client server-data
 callback stripping. Splitting must not copy server modules, config secrets,
@@ -738,16 +779,18 @@ capability assertions, with readback/probes required before real activation.
 | Phase | Shippable artifact and deployment-tool interface | Tests and risks |
 | --- | --- | --- |
 | 1. Plan and report | Config schema, matcher, route/page registry and membership analyzer; report command builds candidate group graphs for exact sizes but keeps deployment unsplit. Tool may consume report JSON only; it must not activate candidate units. | Unit tests for precedence, language intersection/witnesses, canonical paths, aliases/re-exports, static and literal lazy imports, computed-loader rejection; size thresholds at boundary ±1 byte; local unsplit fixture parity. Risk: arbitrary app routers require migration; strict errors must explain it. |
-| 2. Group output and integrity | Per-group SSR entries, stubs, shared client graph, output manifest and seal v2; tool can verify/stage an export but production split activation stays disabled until dispatch support. Reject composition-enabled split export pending phase 5. | Unit graph/manifest tests; local multi-process router simulation across two releases; HTML/JSON hydration and cross-group navigation with lazy CSS; body/cookie/redirect tests; tampered/missing/extra files, metadata, route edits and untrusted seal tests; final-size failures. Risk: eager exports, global state and plugin ordering defeat pruning unless checked in final graph. |
-| 3. Edge dispatch | Generated router, logical table and group handshake; capability schema defines single-pointer activation. Tool resolves immutable hostnames, provisions origin auth, records receipt/probes and owns flip/rollback. | E2E loopback router plus groups with two complete releases; reject N router -> N-1 group before hooks; interrupted staging cannot activate; CAS conflict; rollback, old tab/expiry, authenticated forwarded URL/IP, streaming/cancel, POST no replay, upgrade capability rejection, loops, timeout, cache leakage and tamper tests. Unit router-size and upstream-count budgets. Risk: runtime size/subrequest limits, origin latency and CDN caching assumptions. |
-| 4. Other adapters | Private binding router and function router; capability-gated native declarative plans. Tool supplies frozen service bindings or qualified versions, gateway/distribution config revisions, single router alias/config switch and runtime config receipt. | Unit event/header/cookie/binary conversions, binding tables and capability rejection; same multi-process protocol suite with binding/invoke mocks; weighted whole-router rollout/rollback and mismatch tests; buffered payload/size limits, env and asset-base parity. Risk: native route grammar and config propagation differ; streaming/upgrade support must be explicit. |
+| 2. Group output and integrity | Per-group SSR entries, stubs, shared client graph, output manifest and seal v2; tool can verify/stage an export but production split activation stays disabled until dispatch support. Reject composition-enabled split export pending phase 5. | Unit graph/manifest tests; local multi-process native-routing simulation across two releases; HTML/JSON hydration and cross-group navigation with lazy CSS; body/cookie/redirect tests; tampered/missing/extra files, metadata, route edits and untrusted seal tests; final-size failures. Risk: eager exports, global state and plugin ordering defeat pruning unless checked in final graph. |
+| 3. Routing plan emission + plan verification + local simulation of native routing | Versioned plan JSON, reference matcher/proxy used only in tests/dev, group release gating and receipt/readback/probe schemas. Tool can validate a plan and rehearse ordered activation/undo; production translators follow in phase 4. | Local multi-process old/new units; selector mismatch before any hook/cache, bounded document reload, mutation never replayed, expired tab, precedence/normalization witnesses, mixed-path propagation, intermediate membership changes, failed/ambiguous calls, reverse idempotent rollback and conflicting writers. Risk: simulation cannot establish provider propagation bounds. |
+| 4. Provider plan translators | Native edge rules, worker routes and distribution behaviours/gateway plans; tool creates frozen units, translates and checks limits, records receipts, applies updates and verifies public-host probes. No routing script/function. Optional hidden-zone strict mode requires an explicit capability check. | Translator/reference-matcher conformance, unsupported subset rejection, expanded limits, complete readback, public-host probe mocks, default-last and reverse rollback, one-call full config restoration, cache isolation, event/header/cookie/binary conversion, env/asset-base parity, stream/upgrade capability checks. Risk: provider details must be verified against docs before implementation; propagation requires repeated measurement. |
 | 5. Composition subsets | Validated snapshot shared across groups; subset factories, public client union, group provenance and seal integration. Tool verifies linked build IDs on every unit against the single sealed snapshot; it never resolves new pins at activation. | Unit dependency-set and client-only tests; e2e two pages using different pins plus one shared provider; same module ID in multiple groups, lazy evaluation before/after getInitProps, cross-group browser module loading, unsupported external rejection, snapshot/file tamper, undeclared dynamic lookup and linked-byte budget tests. Risk: coarse prebuilt module entries and shared provider initialization keep bundles large. |
+| 6. Optional router fallback | Explicit opt-in only for a provider without native path routing; consumes the same plan and uses one frozen router map/revision. No phase 1–5 dependency. | Transport/auth/loop/stream/cookie/cache conformance, failure and whole-map rollback, hop/subrequest/size budgets; extra invocation and failure surface require explicit owner acceptance. |
 
 Each phase's tests must pass locally before its flag is enabled. The simulation
 harness uses a stable ingress, separate group processes and immutable per-release
-tables; deliberately kill/replace a group during traffic and assert every response
-is from one complete release or is a clear failure. Include not-found, error and
-auth branches, multiple concurrent renders, static assets and old/new browser
+plans; deliberately kill/replace a group and propagate native rules independently
+during traffic. Assert every request executes within one complete release or fails
+before hooks, even while different paths return different releases. Include
+not-found, error and auth branches, multiple concurrent renders, static assets and old/new browser
 data requests. Test a rollback while a stream is open: that stream retains its
 original release. No success criterion relies solely on happy-path health checks.
 
@@ -755,30 +798,34 @@ The common deployment-tool interface is:
 
 1. Consume the root, expected seal, target capability policy and external runtime
    configuration references. Verify; reject unsupported target behavior.
-2. Create immutable units/assets and resolve the logical dispatch template.
-   Produce a deployment receipt binding all identities and hashes.
-3. Probe the staged whole release; verify receipt/readback, capability assertions
-   and asset mappings. Mark it ready only when every group passes.
-4. Conditionally flip one ingress reference; record previous/new receipt IDs.
-   Observe release/group metrics. Roll back using the previous receipt.
-5. Retain old routers, groups and assets until streams, browser retention and
-   rollback windows expire. Garbage-collect by whole release reachability, never
-   deleting a shared pinned asset still referenced by any retained release.
+2. Create immutable units/assets and resolve/translate the routing plan. Produce
+   a receipt binding the seal, plan, all identities, config revisions and hashes.
+3. Probe the staged whole release; validate grammar equivalence, every intermediate
+   ownership map, capacity limits, auth and cache policy. Mark ready only when
+   every unit and mapping passes. Snapshot the previous native configuration.
+4. Apply section 1's receipt-recorded ordered native writes and default-last flip,
+   or a verified complete-map update/optional strict-mode single field flip.
+   Read back every rule/default and probe all groups through the public hostname;
+   observe release metrics. Failure undoes recorded steps in reverse order (or
+   restores the previous full config), with readback and probes after rollback.
+5. Retain old groups, native configs/hidden zones and assets until streams, browser
+   retention and rollback windows expire. Garbage-collect by whole-release
+   reachability; preserve shared pinned assets referenced by any retained release.
 
-Hadars implements steps' artifact/schema/verification helpers and probes, not the
-provider API calls or the flip. A tool unable to demonstrate step 4's single
-coherent selector may stage output but must not claim atomic split activation.
+Hadars implements artifact/schema/verification helpers and probes, not provider
+API calls. Tools must declare whether activation uses sequential native updates,
+a coherent full-map update or optional strict mode; never describe sequential
+rules as an atomic whole-map switch. Router fallback requires explicit opt-in.
 
 ## 9. Owner decisions still needed
 
 | Question | Recommendation | Consequence |
 | --- | --- | --- |
-| Does atomic mean per-request coherence or globally simultaneous cutover? | Require per-request coherence, complete old/new release coexistence during propagation, and explicit browser affinity. | Implementable on distributed ingress; globally simultaneous revocation excludes targets without a stronger selector. |
+| Is a short per-request mixed-release window acceptable during rule propagation (with release gating) or is strict atomic mode required? | Accept cross-path old/new release overlap with mandatory per-request release gating and one browser document reload. Require strict mode only for owners who need a complete-map selector. | Different requests may reach different complete releases; no single request executes a mixed tuple. The measured about 0.2 s window needs repeated measurement. Strict hidden-zone mode adds a hop and still propagates geographically. |
 | Can split-owned pages adopt a declarative registry/outlet? | Yes; require it for strict split mode, with explicit additions for dynamic dependencies. | Verifiable membership; existing arbitrary routers remain supported in unsplit mode. |
-| How long must old tabs and rollback work? | Initially retain complete releases for 24 hours and at least the previous two releases; make longer windows configurable. | Storage cost is explicit; expired tabs reload, mutations are not replayed. |
+| How long must old tabs and rollback work? | Initially retain complete releases for 24 hours and at least the previous two releases; make longer windows configurable. Direct native routing reloads old tabs on mismatch unless native release affinity is available. | Storage cost is explicit; expired tabs reload, mutations are not replayed. |
 | Should client output split by server group? | No; one client graph with page chunks and shared vendors. | Reliable client navigation and one hydration contract; shared bootstrap may remain large. |
-| What size basis and headroom should be mandatory? | Uncompressed 9,000,000-byte edge budget plus adapter-specific package limits and a small router budget. | Fail before upload; actual provider/account limits remain external inputs. |
+| What size basis and headroom should be mandatory? | Uncompressed 9,000,000-byte edge budget plus adapter-specific package limits and a separate fallback budget only if explicitly enabled. | Fail before upload; actual provider/account limits remain external inputs. |
 | Are upgrades required initially? | Start with HTTP, explicit rejection for unsupported upgrades. | No false tunnel guarantee; add transport conformance tests before enabling. |
-| Should native infrastructure routing ship first? | Start with generated routers; native modes require exact grammar, authenticated release context and coherent config guarantees. | Extra invocation/hop buys an auditable release boundary; optimization follows evidence. |
 | When may composition-enabled splitting activate? | Only after phase 5; earlier phases explicitly reject it. | Avoid shipping an apparently complete split that still links every pin or mixes snapshots. |
 | Can public config mutate independently after activation? | Freeze behavior-affecting configuration by receipt/release and activate a complete revision. | Prevent hydration/cache divergence despite immutable code; operational tuning needs a defined safe policy. |
