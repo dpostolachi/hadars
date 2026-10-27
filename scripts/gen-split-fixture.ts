@@ -39,7 +39,7 @@ try {
         group.unit.file = `units/${group.name}/bunny.mjs`;
         // Adapter-neutral miniature units exercise the real runtime and production export completion.
         const result = await build({ stdin: { contents: `import { splitHandler } from './src/composition/splitRuntime.ts';
-            export default splitHandler(async () => new Response(${JSON.stringify(group.name)}), ${JSON.stringify({ release: RELEASE_PLACEHOLDER, group: group.name, shell: manifest.shell })});`, resolveDir: process.cwd(), sourcefile: 'fixture.ts' },
+            export default splitHandler(async () => new Response(${JSON.stringify('<!doctype html><html><head><script src="/index.js"></script></head><body>' + group.name + '</body></html>')}, { headers: { 'content-type': 'text/html' } }), ${JSON.stringify({ release: RELEASE_PLACEHOLDER, group: group.name, shell: manifest.shell })});`, resolveDir: process.cwd(), sourcefile: 'fixture.ts' },
             bundle: true, format: 'esm', target: 'es2022', minify: true, legalComments: 'none', write: false });
         write(join(destination, group.unit.file), result.outputFiles[0]!.contents);
     }

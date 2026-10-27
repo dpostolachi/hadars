@@ -11,7 +11,7 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 function write(file: string, data: string) { mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, data); }
 const spec = { mode: 'per-module', defaultGroup: 'main', mounts: { admin: ['/admin/**'], shop: ['/shop/**'] }, budgets: { unitBytes: 9_000_000 } };
 function config(split?: any, label = 'export') {
-    write(join(dir, 'hadars.config.ts'), `export default { entry: 'App.tsx', define: { __BUILD_LABEL__: ${JSON.stringify(JSON.stringify(label))} }, port: Number(process.env.PORT || 9090), composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'lock.json', buildsDir: 'builds' } }, ${split ? `split: ${JSON.stringify(split)},` : ''} fetch: () => new Response('hook'), onResponse: r => r };`);
+    write(join(dir, 'hadars.config.ts'), `export default { entry: 'App.tsx', define: { __BUILD_LABEL__: ${JSON.stringify(JSON.stringify(label))} }, port: Number(process.env.PORT || 9090), composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'lock.json', buildsDir: 'builds' } }, ${split ? `split: ${JSON.stringify(split)},` : ''} fetch: req => req.pathname.startsWith('/document') ? undefined : new Response('hook'), onResponse: r => r };`);
 }
 let invocation = 0;
 async function cli(...args: string[]) {
@@ -32,7 +32,7 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     for (const name of readdirSync(join(root, 'node_modules'))) if (name !== 'hadars') symlinkSync(join(root, 'node_modules', name), join(dir, 'node_modules', name), 'dir');
     symlinkSync(root, join(dir, 'node_modules/hadars'), 'dir');
     write(join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', target: 'ES2022', module: 'ESNext' } }));
-    write(join(dir, 'App.tsx'), `import React from 'react'; export default () => <main>{__BUILD_LABEL__}</main>;`);
+    write(join(dir, 'App.tsx'), `import React from 'react'; import { useServerData } from 'hadars'; export default () => { const data = useServerData(() => 'data'); return <main>{__BUILD_LABEL__}{data}</main>; };`);
     const targets = { client: { js: ['client/entry.js'], css: [] }, server: { js: ['server/entry.cjs'], css: [] } };
     const pins = ['shell', 'admin', 'shop'].map(name => {
         const source = join(dir, 'sources', name);
@@ -49,14 +49,18 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     const logs = await cli('export', 'bunny');
     console.log(logs.match(/Shared shell build:.*|Unit .*|Split units bundled.*/g)?.join('\n'));
     expect(logs.match(/Shared shell build:/g)?.length).toBe(1);
+    const clientScripts = readdirSync(join(dir, '.hadars/static')).filter(f => f.endsWith('.js'))
+        .map(f => readFileSync(join(dir, '.hadars/static', f), 'utf8')).join('\n');
+    expect(clientScripts.includes('hadars-release-reload')).toBe(true);
+    expect(clientScripts.includes('x-hadars-release-selector')).toBe(true);
     const metadata = '.hadars/static/composition-provenance.json';
     const manifestPath = join(dir, '.hadars/split-manifest.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(JSON.stringify(manifest)).not.toContain(dir);
     expect(manifest.shell).not.toBe(earlier.snapshot.shell);
     expect(manifest.snapshot).not.toBe(earlier.snapshotId);
-    const earlierClient = earlier.builds[earlier.snapshot.shell]!.manifest.targets.client.js[0]!;
-    expect(existsSync(join(dir, '.hadars/static', earlierClient.slice(7)))).toBe(false);
+    const earlierClients = earlier.builds[earlier.snapshot.shell]!.manifest.targets.client.js;
+    expect(earlierClients.some((file: string) => !existsSync(join(dir, '.hadars/static', file.slice(7))))).toBe(true);
     const finalLock = JSON.parse(readFileSync(join(dir, 'hadars.lock'), 'utf8'));
     expect(finalLock.snapshot.modules).toEqual(earlier.snapshot.modules);
     expect(finalLock.snapshotId).toBe(manifest.snapshot);
@@ -96,6 +100,16 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual({ release: manifest.releaseId, group: group.name, shell: manifest.shell });
         expect(response.headers.get('cache-control')).toBe('no-store');
+        const document = await handler(new Request('http://local/document'));
+        const html = await document.text();
+        expect(html.split('__HADARS_RELEASE__').length).toBe(2);
+        expect(html).toContain(JSON.stringify({ release: manifest.releaseId, group: group.name }));
+        expect(html.indexOf('__HADARS_RELEASE__')).toBeLessThan(html.indexOf('src='));
+        const data = await handler(new Request('http://local/document', { headers: {
+            Accept: 'application/json', 'x-hadars-release-selector': manifest.releaseId,
+        } }));
+        expect(data.status).toBe(200);
+        expect(JSON.stringify(await data.json())).toContain('data');
         const hook = await handler(new Request('http://local/'));
         expect(await hook.text()).toBe('hook');
         expect(hook.headers.get('x-hadars-group')).toBe(group.name);
@@ -123,7 +137,7 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
             expect(response.status).toBe(200);
             expect(await response.json()).toEqual({ release: 'dev-all', group: 'dev-all', shell: earlier.snapshot.shell });
             expect(response.headers.get('cache-control')).toBe('no-store');
-            expect(await (await fetch(base + '/admin/x')).text()).toBe('hook');
+            expect(await (await fetch(base + '/admin/x', { headers: { 'x-hadars-release-selector': 'invalid' } })).text()).toBe('hook');
             expect(await (await fetch(base + '/administrator')).text()).toBe('hook');
             expect(readFileSync(log, 'utf8')).toContain('[split] GET /admin/x -> admin');
             expect(readFileSync(log, 'utf8')).toContain('[split] GET /administrator -> main');

@@ -54,6 +54,9 @@ async function run() {
     }
   }
 
+  await Bun.build({ entrypoints: [resolve(root, 'src/utils/splitClientLoader.ts')],
+    target: 'node', format: 'cjs', outdir: distDir, naming: 'splitClientLoader.cjs' });
+
   // Ensure shebang is present on the CLI binary.
   const cliOut     = resolve(distDir, 'cli.js');
   const cliContent = readFileSync(cliOut, 'utf8');

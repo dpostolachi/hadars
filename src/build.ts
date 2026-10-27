@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { splitGroups, matchGroup } from './composition/split';
 import { readPublicEnv } from './utils/publicEnv';
 import { builtAssetMetadata, relocatePinnedBuilds, runtimeAssetBase, validateAssetBase } from './utils/assetBase';
@@ -1159,7 +1160,14 @@ export const build = async (options: HadarsRuntimeOptions) => {
             mode: 'production',
             swcPlugins: options.swcPlugins,
             define: options.define,
-            moduleRules: options.moduleRules,
+            moduleRules: options.split?.mode === 'per-module' ? [...(options.moduleRules ?? []), {
+                test: /\.[cm]?[jt]sx?$/,
+                enforce: 'pre',
+                // This loader recognizes the framework data runtime, including
+                // its distributed shared chunk, and leaves app sources alone.
+                include: (file: string) => { try { return realpathSync(file).startsWith(packageDir + pathMod.sep); } catch { return false; } },
+                use: [{ loader: pathMod.resolve(packageDir, 'splitClientLoader.cjs') }],
+            }] : options.moduleRules,
             plugins: options.plugins,
             postcssPlugins: options.postcssPlugins,
             optimization: options.optimization,

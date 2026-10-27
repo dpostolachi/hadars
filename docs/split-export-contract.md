@@ -4,7 +4,7 @@ This document describes the implemented per-module export, independently of any
 hosting service. The export working directory contains `units/`,
 `.hadars/split-manifest.json`, `.hadars/static/`, `shell/artifact/`,
 `shell/manifest.json`, and `hadars.lock`. No routing script, upload,
-activation, browser release gating, or detached signature verification is supplied.
+activation or detached signature verification is supplied. Browser release gating is implemented.
 The later proposal in split-deployment.md does not extend this contract.
 
 ## Manifest
@@ -242,7 +242,7 @@ Every generated unit wraps its application handler with the shared runtime.
 `GET /__hadars/release` (query permitted) returns 200 JSON
 `{release: releaseId, group: name, shell: shellId}`, content type
 `application/json`, and `Cache-Control: no-store`, before hooks, proxies or
-application caches. Other methods follow the application handler. Every returned
+application caches. Other methods follow the selector gate and application handler. Every returned
 response, including application hook/proxy/error responses, gets
 `x-hadars-release` and `x-hadars-group`. Other responses retain their cache policy;
 uncaught handler exceptions still propagate. Development uses `dev-all` for
@@ -268,6 +268,8 @@ The exact named split error codes are:
 | `SPLIT_BUDGET_INVALID` | missing/invalid manifest budget or invalid configured budget |
 | `SPLIT_SIZE_EXCEEDED` | unit exceeds budget |
 | `SPLIT_RELEASE_PLACEHOLDER` | bundle lacks exactly one placeholder |
+| `SPLIT_RELEASE_MISMATCH` | HTTP 409: selector differs from the embedded release |
+| `SPLIT_RELEASE_SELECTOR_INVALID` | HTTP 400: selector is not 16 lowercase hex characters |
 | `SPLIT_TARGET_UNSUPPORTED` | split requested for unsupported export target |
 
 Overlap errors are exactly `SPLIT_PATTERN_NESTED: <p1> (<g1>) and <p2> (<g2>)`
@@ -302,8 +304,7 @@ Generate from the repository root with `bun scripts/gen-split-fixture.ts`.
 The generator uses real build creation, lock assembly and pinned client export,
 bundles miniature adapter-neutral handlers with the real runtime, and calls
 `completeSplitExport`, the same release patching and sealing code used by the CLI.
-It deliberately omits the full application/adapter graph to keep each unit below
-1 KB. These scripts export a default Request-to-Response handler. The integration
+It deliberately omits the full application/adapter graph to keep units small. These scripts export a default Request-to-Response handler. The integration
 test separately covers full application and adapter bundles.
 
 The committed vector was generated with esbuild 0.27.4. There are no timestamps,
@@ -312,3 +313,59 @@ reproduces it byte-identically; an optional destination argument supports a clea
 comparison: `bun scripts/gen-split-fixture.ts /tmp/split-vector` followed by
 `diff -r test/fixtures/split-export /tmp/split-vector`. Dependency upgrades may
 change bundle bytes and must deliberately update the vector and its literals.
+
+
+## Browser release consistency
+
+Every split server-rendered HTML document embeds exactly one inline script before
+entry scripts: `globalThis.__HADARS_RELEASE__ = {"release":"<releaseId>","group":"<group>"}`.
+Executable JSON escapes `<`, U+2028 and U+2029 as in public environment injection.
+There is no separate client graph identity in the current export metadata, so
+none is invented here. A document request without a selector adopts its unit's
+release. Static assets must still be served from the sealed release inventory.
+
+The client sends `x-hadars-release-selector: <releaseId>` on live navigation data
+requests: `useServerData` fetches the current pathname plus query with
+`Accept: application/json`; `useGraphQL` uses that same path. Static-only exports
+instead fetch `index.json` sidecars and do not participate in this protocol.
+`getReleaseRequestHeaders()` from the `hadars/client` entry returns a plain header record
+for apps to merge into their own same-origin API requests. It returns `{}` when
+there is no split document identity. It does not wrap application fetches.
+
+Before any app hook, handler, cache lookup, proxy or render, the outer split unit
+wrapper checks a present selector on **all methods**:
+
+- Equal to the unit's embedded release: proceed. An absent selector also proceeds.
+- Different: HTTP 409, `Content-Type: application/json`, `Cache-Control: no-store`,
+  exactly `{"error":"SPLIT_RELEASE_MISMATCH","expected":"<unit release>","received":"<selector>","group":"<group>"}`.
+- Malformed (anything other than 16 lowercase hex characters): HTTP 400, the
+  same content type and cache policy, exactly
+  `{"error":"SPLIT_RELEASE_SELECTOR_INVALID"}`.
+
+These responses also carry `x-hadars-release` and `x-hadars-group`, as do all
+other unit responses. `GET /__hadars/release` remains answerable regardless of
+selector. A rejected POST never enters application code. The selector is only a
+consistency assertion compared to an embedded constant; it is neither a
+credential nor a destination, and cannot select an arbitrary origin.
+
+On a framework GET navigation data response with status 409 and error
+`SPLIT_RELEASE_MISMATCH`, the client performs one full document navigation to
+the target URL. It records `{target: <absolute URL>, timestamp: <milliseconds>}`
+in sessionStorage under `hadars-release-reload`. A second mismatch for the same
+target within 30 seconds throws `SplitReleaseMismatchError` exported from `hadars/client`, with
+`expected`, `received`, and `group`, and logs one clear console error. Storage
+failures use an in-memory guard for the current document. A real document
+navigation replaces the JS context and sets the newly served release identity;
+no stale selector is copied into that request. Framework non-GET requests always
+throw the typed error and are never replayed. Other 409 errors retain normal
+fetch behavior. Applications using the header helper handle their own errors.
+
+Dev/run and single-unit exports do not inject this global and ignore selectors.
+Their dev release semantics remain the existing probe values `dev-all` (not a
+16-hex production release); there is no browser release assertion in dev.
+The split client transform is enabled only for the split production compile;
+ordinary client and server request code remains unchanged.
+
+Changes to the runtime change unit bytes and release identity. Regenerate the
+conformance vector and its expected literals together. The platform's copied
+conformance vector must be refreshed from this version before comparing releases.

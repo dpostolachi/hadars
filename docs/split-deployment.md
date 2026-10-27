@@ -73,7 +73,7 @@ Every unit intercepts `GET /__hadars/release` before application hooks, caches
 and proxies. It returns 200 JSON `{release, group, shell}` with
 `Cache-Control: no-store`. Every response, including hook/proxy/error responses,
 receives `x-hadars-release` and `x-hadars-group` headers outside the adapter.
-Browser release gating is a later extension.
+Browser release gating is implemented; see the exact header, JSON and recovery protocol in [the contract](split-export-contract.md#browser-release-consistency).
 
 Release identity avoids circular hashing using the fixed 16-byte literal
 `SPLITRELEASE0000`, which occurs exactly once per generated unit. First bundle
@@ -156,18 +156,25 @@ window. Measure repeatedly before claiming propagation or mixed-release bounds.
 This window is acceptable ONLY with self-contained units and release gating:
 no request ever executes a mixed tuple. It is not an atomic whole-map update.
 
-HTML embeds its release ID and client graph ID. Framework data/navigation and
-mutation requests carry the existing browser release selector. Before **any**
-hook, cache lookup, proxy or render, a unit compares that selector to its embedded
-release ID and checks native destination/group context. A mismatch returns
-`409 SPLIT_RELEASE_MISMATCH` with `Cache-Control: no-store`; an expired selector
-returns `409 SPLIT_RELEASE_EXPIRED`. The browser performs one document reload
-using the release-selector protocol, clearing the stale selector for the fresh
-document; it never replays a mutation. Bound reload attempts to one per failed
-navigation; if propagation still causes a mismatch, show a clear retry error.
-A document request without a selector adopts the unit's release. In-flight
-requests keep their selected unit/release through completion. A public
-selector is a consistency assertion, never a destination address or credential.
+Split HTML embeds `globalThis.__HADARS_RELEASE__ = {release, group}` before entry
+scripts. No independent client graph ID currently exists in the export metadata.
+Framework live data/navigation requests carry `x-hadars-release-selector`.
+Before **any** hook, handler, cache lookup, proxy or render, a unit compares it
+to its embedded release: a mismatch returns `409 SPLIT_RELEASE_MISMATCH`, and a
+malformed selector returns `400 SPLIT_RELEASE_SELECTOR_INVALID`, both JSON and
+`Cache-Control: no-store`. The exact bodies and headers are in the implemented
+contract. The probe bypasses the check. There is no separate expired-selector
+status in this implementation.
+
+The browser navigates once to the target document on a navigation data mismatch.
+A sessionStorage `hadars-release-reload` marker records its absolute target URL
+and timestamp; a repeated mismatch for that target within 30 seconds throws
+`SplitReleaseMismatchError` and logs a clear retry error. Storage failures fall
+back to one in-memory guard. Non-GET framework requests are never replayed.
+A document without a selector adopts the unit's release. In-flight requests keep
+their selected unit/release through completion. A public selector is a consistency
+assertion, never a destination address or credential. Dev/run and single exports
+ignore selectors and do not embed a browser release identity.
 Native routing need not keep old tabs on old units: if it cannot select a retained
 release natively, old tabs reload. Retain old units/assets for in-flight work,
 rollback and any supported native release affinity. No silent cross-release retry.
@@ -735,7 +742,7 @@ on it. It is separate from the native hidden-zone strict-atomic trade-off.
 
 ## 5. Runtime semantics
 
-All dynamic requests enter one selected group. Authenticate release context first,
+All dynamic requests enter one selected group. Check the release assertion first,
 then apply that group's runtime config, `fetch`, proxy, cache and render lifecycle.
 Run the shared entry's `getInitProps` once per request in that group, then the
 normal render/finalize sequence. Group-specific initialization can branch on a proposed trusted `req.split = { releaseId, group }`. Common hooks

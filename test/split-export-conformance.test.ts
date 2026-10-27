@@ -44,6 +44,10 @@ test('committed conformance vector verifies every literal without regeneration',
         expect(probe.headers.get('cache-control')).toBe('no-store');
         expect(probe.headers.get('x-hadars-release')).toBe(expected.releaseId);
         expect(probe.headers.get('x-hadars-group')).toBe(unit.group);
+        const html = await (await handler(new Request('http://local/'))).text();
+        expect(html.split('__HADARS_RELEASE__').length).toBe(2);
+        expect(html.indexOf('__HADARS_RELEASE__')).toBeLessThan(html.indexOf('src="/index.js"'));
+
     }
     expect(splitReleaseId(manifest, normalized, expected.staticDigest)).toBe(expected.releaseId);
     expect(Object.keys(expected.paths).length).toBeGreaterThanOrEqual(30);
@@ -106,7 +110,7 @@ test('resealed policy changes keep release identity, while tiny budgets fail ver
             expect(manifest.releaseId).toBe(original.releaseId);
             expect(metadata.output.metadataSha256).not.toBe(original.metadataSha256);
             expect(() => verifyExport(dir, metadataPath, original.metadataSha256)).toThrow('Export metadata checksum mismatch');
-            if (budget === 1) expect(() => verifyExport(dir, metadataPath)).toThrow('SPLIT_SIZE_EXCEEDED: admin: 523 unit bytes > 1 budget bytes');
+            if (budget === 1) expect(() => verifyExport(dir, metadataPath)).toThrow(`SPLIT_SIZE_EXCEEDED: admin: ${original.units[0].size} unit bytes > 1 budget bytes`);
             else expect(verifyExport(dir, metadataPath).version).toBe(2);
         }
     } finally { rmSync(dir, { recursive: true, force: true }); }
