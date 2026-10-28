@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "snapshot": {
+    "shell": "e96ba89c588b35a2",
+    "modules": {
+      "admin": "c4000f483c0c4bb0",
+      "shop": "3f0418380eabedab"
+    },
+    "libraries": {},
+    "id": "snap_4b0555e011a63cb1"
+  },
+  "snapshotId": "snap_4b0555e011a63cb1",
+  "snapshotSha256": "325a144c9f3044fdef4e4e9d5ad3e50fafe3ea9fcdab5bdd44a365a754b2c256",
+  "builds": {
+    "e96ba89c588b35a2": {
+      "manifest": {
+        "kind": "shell",
+        "name": "shell",
+        "runtimeContract": "1",
+        "flavour": "production",
+        "targets": {
+          "client": {
+            "js": [
+              "client/index.js"
+            ],
+            "css": []
+          },
+          "server": {
+            "js": [
+              "server/index.ssr.js"
+            ],
+            "css": []
+          }
+        },
+        "exposes": [],
+        "shared": [],
+        "provides": [],
+        "requires": {},
+        "files": [
+          {
+            "path": "client/index.js",
+            "size": 31,
+            "sha256": "c70088b63f0a16eb439f7bb0546bebabc72b3bc7cb8246de2fa7d0a7e9abd43d"
+          },
+          {
+            "path": "client/out.html",
+            "size": 44,
+            "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27"
+          },
+          {
+            "path": "server/index.ssr.js",
+            "size": 27,
+            "sha256": "0f4cb4d839bac55f41d2555b3166b085a217277cf3e8854182440077fa2f0fd0"
+          }
+        ],
+        "buildId": "e96ba89c588b35a2"
+      },
+      "sha256": "5f59bff814c6f4a341003d71a210b7d9c2fecf2d81a2d6cd63cda37395163001"
+    },
+    "c4000f483c0c4bb0": {
+      "manifest": {
+        "kind": "module",
+        "name": "admin",
+        "runtimeContract": "1",
+        "flavour": "production",
+        "targets": {
+          "client": {
+            "js": [
+              "client/entry.js"
+            ],
+            "css": []
+          },
+          "server": {
+            "js": [
+              "server/entry.cjs"
+            ],
+            "css": []
+          }
+        },
+        "exposes": [
+          "page"
+        ],
+        "shared": [],
+        "provides": [],
+        "requires": {},
+        "files": [
+          {
+            "path": "client/entry.js",
+            "size": 31,
+            "sha256": "2ca89514a4557fb7c7a83aef3fefebdbf658506e4de2e6b1e595412dd845250f"
+          },
+          {
+            "path": "server/entry.cjs",
+            "size": 38,
+            "sha256": "a8cafa236ed81d1dcaab54ba4b555817e9ebd5198fa7990fcff4878280a1f54e"
+          }
+        ],
+        "buildId": "c4000f483c0c4bb0"
+      },
+      "sha256": "217358578f01ade2bc881f200588bfd3428a18b5784f9d42a4a64fdf8bcb9c7a"
+    },
+    "3f0418380eabedab": {
+      "manifest": {
+        "kind": "module",
+        "name": "shop",
+        "runtimeContract": "1",
+        "flavour": "production",
+        "targets": {
+          "client": {
+            "js": [
+              "client/entry.js"
+            ],
+            "css": []
+          },
+          "server": {
+            "js": [
+              "server/entry.cjs"
+            ],
+            "css": []
+          }
+        },
+        "exposes": [
+          "page"
+        ],
+        "shared": [],
+        "provides": [],
+        "requires": {},
+        "files": [
+          {
+            "path": "client/entry.js",
+            "size": 30,
+            "sha256": "3845a953747d0696a587a9a2efa591dd95dac310e27e0f9ddf0fb2deac77ee96"
+          },
+          {
+            "path": "server/entry.cjs",
+            "size": 37,
+            "sha256": "2a3cd5baea12eb61b3b09f40953c1c2201e1994bc93fa23ddc8a488474533e1e"
+          }
+        ],
+        "buildId": "3f0418380eabedab"
+      },
+      "sha256": "ac88d53926b9b975f6da2343ac14fbcaf5b4502fff4e1ae4f82b3463573548e8"
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "shell": "e96ba89c588b35a2",
+  "snapshot": "snap_4b0555e011a63cb1",
+  "shellInventory": [
+    {
+      "path": "shell/artifact/client/index.js",
+      "sha256": "c70088b63f0a16eb439f7bb0546bebabc72b3bc7cb8246de2fa7d0a7e9abd43d",
+      "size": 31
+    },
+    {
+      "path": "shell/artifact/client/out.html",
+      "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27",
+      "size": 44
+    },
+    {
+      "path": "shell/artifact/server/index.ssr.js",
+      "sha256": "0f4cb4d839bac55f41d2555b3166b085a217277cf3e8854182440077fa2f0fd0",
+      "size": 27
+    },
+    {
+      "path": "shell/manifest.json",
+      "sha256": "2e014b8e8e59c2bb64cf23c509b091ff85725e7ce053f72b27523b761c797c71",
+      "size": 857
+    },
+    {
+      "path": "hadars.lock",
+      "sha256": "2f02387249dc420376c8d88c5721d40410b5d2ff4af4b4cce8d486fdc77ae75a",
+      "size": 3768
+    }
+  ],
+  "releaseId": "7e2657ac26b83508",
+  "units": [
+    {
+      "group": "admin",
+      "path": "units/admin/bunny.mjs",
+      "sha256": "2185081c2f22551bb445433334a4d36cf1623ceed3ae808dccd55f7b2dd15272",
+      "size": 1900,
+      "normalizedSha256": "41bffdca6dc472c513c29dba20abb139d4fe901d04c60e47adf01e80e644922c"
+    },
+    {
+      "group": "shop",
+      "path": "units/shop/bunny.mjs",
+      "sha256": "a55ab7579c8b146b3e5596952a24838dd67bab4ee007e2a8579f9980aff18475",
+      "size": 1898,
+      "normalizedSha256": "67d321ab9e56a3ca8caafd816daa68b0ba1f04fe60780d043a115b46a35d610f"
+    },
+    {
+      "group": "main",
+      "path": "units/main/bunny.mjs",
+      "sha256": "92f68d385d6adc6215935c15d0ad8890ef2cefc32d4041f3122d5d9f29b7284b",
+      "size": 1898,
+      "normalizedSha256": "dd98fccd9f5999aeefef4a47b9cdc8898793b6491475d2171e90334fb0170400"
+    }
+  ],
+  "manifestSha256": "a069696e16116ee4f22089d8049fceb986442018d2097f1985d39c494302e91e",
+  "staticDigest": "cf1ea35389c4c1abfa67e23cc50bbfb11c095647bb6084fec56d7723be1aa8f6",
+  "metadataSha256": "9b2d4566ba9dce33cdeb9c7b41ee7bf8609d5d6791db975194837ec2c8c848b6",
+  "routingPlan": [
+    {
+      "group": "admin",
+      "patterns": [
+        "/admin/**",
+        "/control"
+      ]
+    },
+    {
+      "group": "shop",
+      "patterns": [
+        "/shop/**",
+        "/buy"
+      ]
+    },
+    {
+      "group": "main",
+      "patterns": []
+    }
+  ],
+  "paths": {
+    "/": "main",
+    "/admin": "admin",
+    "/admin/": "admin",
+    "/admin/a": "admin",
+    "/admin/a/b": "admin",
+    "/administrator": "main",
+    "/admin2": "main",
+    "/ADMIN": "main",
+    "//admin": "main",
+    "/%61dmin": "main",
+    "/admin%2Fx": "main",
+    "/admin/%2F": "admin",
+    "/admin//x": "admin",
+    "/admin/../shop": "admin",
+    "/admin?x=1#f": "admin",
+    "/shop": "shop",
+    "/shop/": "shop",
+    "/shop/item": "shop",
+    "/shopping": "main",
+    "/shop2": "main",
+    "/SHOP": "main",
+    "/shop%2Fx": "main",
+    "/shop/%2f": "shop",
+    "/shop//item": "shop",
+    "/control": "admin",
+    "/control/": "main",
+    "/control/x": "main",
+    "/controller": "main",
+    "/buy": "shop",
+    "/buy/": "main",
+    "/buyer": "main",
+    "/unknown": "main",
+    "/__hadars/release": "main",
+    "/a": "main",
+    "/shop#hash": "shop",
+    "/admin;param": "main"
+  }
+}

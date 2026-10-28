@@ -1,0 +1,121 @@
+{
+  "snapshot": "snap_4b0555e011a63cb1",
+  "shell": "e96ba89c588b35a2",
+  "modules": {
+    "admin": {
+      "buildId": "c4000f483c0c4bb0",
+      "clientOnly": false,
+      "server": [
+        {
+          "path": "server/entry.cjs",
+          "size": 38,
+          "sha256": "a8cafa236ed81d1dcaab54ba4b555817e9ebd5198fa7990fcff4878280a1f54e"
+        }
+      ],
+      "client": [
+        {
+          "path": "client/entry.js",
+          "size": 31,
+          "sha256": "2ca89514a4557fb7c7a83aef3fefebdbf658506e4de2e6b1e595412dd845250f"
+        }
+      ]
+    },
+    "shop": {
+      "buildId": "3f0418380eabedab",
+      "clientOnly": false,
+      "server": [
+        {
+          "path": "server/entry.cjs",
+          "size": 37,
+          "sha256": "2a3cd5baea12eb61b3b09f40953c1c2201e1994bc93fa23ddc8a488474533e1e"
+        }
+      ],
+      "client": [
+        {
+          "path": "client/entry.js",
+          "size": 30,
+          "sha256": "3845a953747d0696a587a9a2efa591dd95dac310e27e0f9ddf0fb2deac77ee96"
+        }
+      ]
+    }
+  },
+  "output": {
+    "version": 2,
+    "shell": [
+      {
+        "path": "shell/artifact/client/index.js",
+        "sha256": "c70088b63f0a16eb439f7bb0546bebabc72b3bc7cb8246de2fa7d0a7e9abd43d",
+        "size": 31
+      },
+      {
+        "path": "shell/artifact/client/out.html",
+        "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27",
+        "size": 44
+      },
+      {
+        "path": "shell/artifact/server/index.ssr.js",
+        "sha256": "0f4cb4d839bac55f41d2555b3166b085a217277cf3e8854182440077fa2f0fd0",
+        "size": 27
+      },
+      {
+        "path": "shell/manifest.json",
+        "sha256": "2e014b8e8e59c2bb64cf23c509b091ff85725e7ce053f72b27523b761c797c71",
+        "size": 857
+      },
+      {
+        "path": "hadars.lock",
+        "sha256": "2f02387249dc420376c8d88c5721d40410b5d2ff4af4b4cce8d486fdc77ae75a",
+        "size": 3768
+      }
+    ],
+    "units": [
+      {
+        "path": "units/admin/bunny.mjs",
+        "sha256": "2185081c2f22551bb445433334a4d36cf1623ceed3ae808dccd55f7b2dd15272",
+        "size": 1900
+      },
+      {
+        "path": "units/shop/bunny.mjs",
+        "sha256": "a55ab7579c8b146b3e5596952a24838dd67bab4ee007e2a8579f9980aff18475",
+        "size": 1898
+      },
+      {
+        "path": "units/main/bunny.mjs",
+        "sha256": "92f68d385d6adc6215935c15d0ad8890ef2cefc32d4041f3122d5d9f29b7284b",
+        "size": 1898
+      }
+    ],
+    "manifest": {
+      "path": ".hadars/split-manifest.json",
+      "sha256": "a069696e16116ee4f22089d8049fceb986442018d2097f1985d39c494302e91e",
+      "size": 1170
+    },
+    "static": {
+      "directory": ".hadars/static",
+      "files": [
+        {
+          "path": "_builds/3f0418380eabedab/client/entry.js",
+          "sha256": "3845a953747d0696a587a9a2efa591dd95dac310e27e0f9ddf0fb2deac77ee96",
+          "size": 30
+        },
+        {
+          "path": "_builds/c4000f483c0c4bb0/client/entry.js",
+          "sha256": "2ca89514a4557fb7c7a83aef3fefebdbf658506e4de2e6b1e595412dd845250f",
+          "size": 31
+        },
+        {
+          "path": "index.js",
+          "sha256": "c70088b63f0a16eb439f7bb0546bebabc72b3bc7cb8246de2fa7d0a7e9abd43d",
+          "size": 31
+        },
+        {
+          "path": "out.html",
+          "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27",
+          "size": 44
+        }
+      ],
+      "sha256": "cf1ea35389c4c1abfa67e23cc50bbfb11c095647bb6084fec56d7723be1aa8f6"
+    },
+    "metadataSha256": "9b2d4566ba9dce33cdeb9c7b41ee7bf8609d5d6791db975194837ec2c8c848b6"
+  }
+}
