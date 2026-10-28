@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { TargetManifest } from './constants';
 import type { BuildModuleOptions, ModuleBuildResult } from './moduleBuild';
 import { resolveModuleRequires, assertVersionContracts } from './versions';
+import type { ModuleTypes } from './moduleTypes';
 import { hash, canonical, computeBuildId } from './identity';
 
 export interface BuildManifest {
@@ -19,6 +20,10 @@ export interface BuildManifest {
     requires: Record<string, string>;
     files: Array<{ path: string; size: number; sha256: string }>;
     clientOnly?: boolean;
+    /** Paths the module owns; the split routing plan derives from them. */
+    mounts?: string[];
+    routes?: string;
+    uses?: string[];
     types?: string[];
     typeApi?: { declarationsSha256: string; exports: Record<string, Record<string, string>> };
 }
@@ -37,6 +42,9 @@ export interface CreateBuildOptions {
     runtimeContract?: '1' | '2';
     requires?: Record<string, string>;
     clientOnly?: boolean;
+    mounts?: string[];
+    routes?: string;
+    uses?: string[];
     types?: string[];
     typeApi?: BuildManifest['typeApi'];
 }
@@ -76,6 +84,8 @@ export function createBuild(opts: CreateBuildOptions) {
     if (contract === '2' && Array.isArray(opts.provides) && opts.provides.length) throw new Error('Contract 2 provides must map packages to versions');
     const content: Omit<BuildManifest, 'buildId'> = {
         ...(opts.clientOnly ? { clientOnly: true } : {}),
+        ...(opts.mounts?.length ? { mounts: opts.mounts } : {}), ...(opts.routes ? { routes: opts.routes } : {}),
+        ...(opts.uses?.length ? { uses: opts.uses } : {}),
         ...(opts.types ? { types: opts.types } : {}), ...(opts.typeApi ? { typeApi: opts.typeApi } : {}),
         kind: opts.kind, name: opts.name, runtimeContract: contract, flavour: opts.flavour ?? 'production',
         targets: opts.targets, exposes: opts.exposes ?? [], shared: opts.shared ?? [],
@@ -104,11 +114,18 @@ export function createBuild(opts: CreateBuildOptions) {
 }
 
 /** Convert buildModule's target-relative output into an immutable pin. Includes chunks and assets. */
-export function createModuleBuild(opts: BuildModuleOptions & { buildsDir: string; result: ModuleBuildResult; requires?: Record<string, string> }) {
+export function createModuleBuild(opts: BuildModuleOptions & { moduleTypes?: ModuleTypes; buildsDir: string; result: ModuleBuildResult; requires?: Record<string, string> }) {
     // The generated source barrel is not an artifact; collect only the two output trees.
     const staging = mkdtempSync(path.join(path.resolve(opts.outDir), '.pin-'));
     try {
         for (const target of ['client', 'server'] as const) for (const [p, body] of readBuildFiles(path.join(opts.outDir, target), target + '/')) {
+            mkdirSync(path.dirname(path.join(staging, p)), { recursive: true });
+            writeFileSync(path.join(staging, p), body);
+        }
+        // Declarations travel with the build so a consumer type-checks against the pinned version.
+        const declarations = path.join(opts.outDir, 'types');
+        const withTypes = opts.moduleTypes ? readBuildFiles(declarations, 'types/') : undefined;
+        for (const [p, body] of withTypes ?? []) {
             mkdirSync(path.dirname(path.join(staging, p)), { recursive: true });
             writeFileSync(path.join(staging, p), body);
         }
@@ -117,7 +134,8 @@ export function createModuleBuild(opts: BuildModuleOptions & { buildsDir: string
         });
         return createBuild({ sourceDir: staging, buildsDir: opts.buildsDir, kind: 'module', name: opts.composition.name,
             flavour: opts.mode === 'development' ? 'dev' : 'production', exposes: Object.keys(opts.composition.exposes),
-            clientOnly: opts.composition.clientOnly, shared: opts.composition.shared, requires: { ...resolveModuleRequires(opts), ...opts.requires }, targets: { client: prefix('client'), server: prefix('server') } });
+            clientOnly: opts.composition.clientOnly, mounts: opts.manifest?.mounts, routes: opts.manifest?.routes, uses: opts.manifest?.uses,
+            shared: opts.composition.shared, types: opts.moduleTypes?.types, typeApi: opts.moduleTypes?.typeApi, requires: { ...resolveModuleRequires(opts), ...opts.requires }, targets: { client: prefix('client'), server: prefix('server') } });
     } finally { rmSync(staging, { recursive: true, force: true }); }
 }
 

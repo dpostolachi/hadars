@@ -15,6 +15,10 @@ export interface PinnedBuild {
     name: string;
     kind: 'shell' | 'module' | 'library';
     clientOnly?: boolean;
+    /** From the module's manifest; the split routing plan derives from it. */
+    mounts?: string[];
+    routes?: string;
+    uses?: string[];
     server: { dir: string; manifest: TargetManifest };
     /** Safe to return as client props; contains no local paths. */
     client: { baseUrl: string; manifest: TargetManifest; files?: string[]; integrity?: Record<string, string> };

@@ -9,3 +9,5 @@ export { loadServerModule } from './loadServerModule';
 export type { LoadClientModuleOptions } from './loadModule';
 export { ModuleHead } from './ModuleHead';
 export type { PinnedBuildsOptions, PinnedBuild } from './pinnedTypes';
+export { defineManifest, validateManifest, orderManifests, manifestComposition } from './manifest';
+export type { HadarsManifest } from './manifest';

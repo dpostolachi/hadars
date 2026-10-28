@@ -3,6 +3,7 @@ import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { CompositionOptions, HadarsOptions } from '../types/hadars';
 
+import type { HadarsManifest } from './manifest';
 import { resolveModuleRequires } from './versions';
 
 import { SHARED_GLOBAL, MODULES_GLOBAL, DEFAULT_SHARED, type TargetManifest } from './constants';
@@ -11,6 +12,8 @@ type ModuleComposition = Extract<CompositionOptions, { role: 'module' }>;
 
 export interface BuildModuleOptions {
     composition: ModuleComposition;
+    /** The `hadars.manifest.ts` this build came from; its mounts, routes and uses enter the build identity. */
+    manifest?: HadarsManifest;
     /** Project root; `exposes` paths resolve against it. */
     cwd: string;
     outDir: string;

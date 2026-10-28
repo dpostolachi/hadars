@@ -86,6 +86,42 @@ Only return `build.client` through client props; the server descriptor contains 
 
 For custom server integrations, `resolvePinnedBuilds(options, dev?)` from `hadars/composition/build` performs the same validation and returns the same descriptors. Pinned filesystem loading is integrated with `dev`/`run`. The edge export embeds public client metadata and stages client assets as described below; static site export does not automatically assemble pinned files.
 
+## Module manifest
+
+A module describes itself in `hadars.manifest.ts` at its project root. Building, routing and typing all read it, so a shell does not repeat per-module configuration.
+
+```ts
+import { defineManifest } from 'hadars/composition';
+
+export default defineManifest({
+    name: 'admin',
+    exposes: { routes: 'src/routes.tsx', UserBadge: 'src/UserBadge.tsx' },
+    shared: ['design-system/components'],
+    requires: { react: '^19' },
+    mounts: ['/admin/**'],   // paths this module owns
+    routes: 'routes',        // the exposes entry holding its route table
+    uses: ['billing'],       // modules it embeds as components
+});
+```
+
+- `exposes`, `shared`, `requires`, `clientOnly` are the existing `composition` fields; `buildModuleFromManifest(dir, { outDir })` (from `hadars/composition/build`) builds the module they describe. `loadManifest(dir)` returns the validated manifest.
+- `mounts` use the split pattern grammar (`/x` or `/x/**`). When a shell's `split` has `mode: 'per-module'`, modules without an entry in `split.mounts` take the mounts from their pinned manifest; an explicit `split.mounts[name]` overrides it. Modules without mounts must still be `clientOnly`.
+- `routes` must name an `exposes` entry and requires `mounts`.
+- `uses` lists other modules this one embeds. The consumer still reaches them through `getModule` (the shell owns the instances); the list lets tooling check the graph. Pinning refuses a lock where a used module is missing, and `orderManifests(manifests)` rejects cycles and returns a dependency order.
+- `mounts`, `routes` and `uses` are part of the build identity when present. Builds that declare none keep their identity.
+
+### Declarations
+
+`emitModuleTypes({ manifest, cwd, outDir, tsConfig? })` emits `.d.ts` files for everything a module exposes under `<outDir>/types`, with an entry (`types/index.d.ts`) whose namespaces mirror `getModule(name)`. Pass the result to `createModuleBuild({ ..., moduleTypes })`: the declarations become part of the immutable build (`types`, `typeApi`), so a consumer type-checks against the pinned version rather than the module's sources.
+
+A shell writes one generated file from the builds it pins:
+
+```ts
+writeShellTypes('src/hadars-modules.d.ts', { admin: '.hadars/builds/<buildId>/types/index.d.ts' });
+```
+
+It declares the global `HadarsModules` interface, which types `getModule('admin')`. Unknown names still fall back to `getModule<T>(name)`.
+
 ## Integrity
 
 By default, hadars reads `integrity.json` beside `buildsDir`. Set `integrityFile` to use another path. The map is `{ "<buildId>/<artifact path>": "sha256-<base64>" }`; mapped hashes must agree with the manifest. A missing map is allowed.

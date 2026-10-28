@@ -18,8 +18,15 @@ export function registerModule(name: string, mod: unknown): void {
     state().loaders.delete(name);
 }
 
+declare global {
+    /** Filled by the generated `hadars-modules.d.ts`: module name -> its exposed namespaces. */
+    interface HadarsModules {}
+}
+
 /** Returns a registered module; throws if it was not loaded before rendering. Not a hook: it may be called anywhere. */
-export function getModule<T = any>(name: string): T {
+export function getModule<K extends keyof HadarsModules>(name: K): HadarsModules[K];
+export function getModule<T = any>(name: string): T;
+export function getModule(name: string): any {
     const { modules, loaders } = state();
     if (!modules.has(name) && loaders.has(name)) registerModule(name, loaders.get(name)!());
     if (!modules.has(name)) {

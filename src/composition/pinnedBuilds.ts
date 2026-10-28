@@ -72,6 +72,10 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
                     { kind: 'shared', package: pkg });
             }
             if (kind !== 'shell' && Object.keys(m.provides).length) fail(name, 'only a shell can provide shared packages');
+            if (m.mounts !== undefined && (!strings(m.mounts) || !m.mounts.length)) fail(name, 'invalid mounts');
+            if (m.uses !== undefined && !strings(m.uses)) fail(name, 'invalid uses');
+            if (m.routes !== undefined && (typeof m.routes !== 'string' || !m.exposes.includes(m.routes))) fail(name, 'routes must name an exposed namespace');
+            if (kind !== 'module' && (m.mounts || m.uses || m.routes)) fail(name, 'only a module can declare mounts, routes or uses');
             if (m.types !== undefined && !strings(m.types)) fail(name, 'invalid declaration list');
             if (m.typeApi !== undefined && (!record(m.typeApi) || typeof m.typeApi.declarationsSha256 !== 'string' || !record(m.typeApi.exports)
                 || !Object.values(m.typeApi.exports).every((v) => record(v) && Object.values(v).every((s) => typeof s === 'string')))) fail(name, 'invalid declaration API metadata');
@@ -105,7 +109,8 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             if (m.clientOnly !== undefined && typeof m.clientOnly !== 'boolean') fail(name, 'invalid clientOnly flag');
             if (kind === 'module' && ((!m.clientOnly && m.targets.server.js.length !== 1) || !m.targets.client.js.length)) throw new CompositionLinkError(name, 'expected one server entry and at least one client entry; declare clientOnly for a browser-only module');
             const baseUrl = publicBase.replace(/\/?$/, '/') + id + '/';
-            result[m.name] = { name: m.name, kind, ...(m.clientOnly ? { clientOnly: true } : {}), server: { dir, manifest: m.targets.server }, client: {
+            result[m.name] = { name: m.name, kind, ...(m.clientOnly ? { clientOnly: true } : {}),
+                ...(m.mounts ? { mounts: m.mounts } : {}), ...(m.routes ? { routes: m.routes } : {}), ...(m.uses ? { uses: m.uses } : {}), server: { dir, manifest: m.targets.server }, client: {
                 baseUrl, manifest: m.targets.client, files: m.files.map((f: any) => f.path).filter((f: string) => !serverEntries.has(f) && !f.endsWith('.d.ts') && (f.startsWith('client/') || [...m.targets.client.js, ...m.targets.client.css].includes(f))),
                 integrity: Object.fromEntries(m.files.filter((f: any) => integrity[`${id}/${f.path}`]).map((f: any) => [f.path, integrity[`${id}/${f.path}`]])),
             } };
@@ -115,6 +120,9 @@ export async function resolvePinnedBuilds(options: PinnedBuildsOptions, dev = fa
             if (e instanceof CompositionCompatibilityError) incompatible(name, e.message, e);
             fail(name, e.message);
         }
+    }
+    for (const build of Object.values(result)) for (const use of build.uses ?? []) {
+        if (result[use]?.kind !== 'module') fail(build.name, `uses "${use}", which is not a pinned module`);
     }
     if (dev) for (const [name, override] of Object.entries(options.overrides ?? {})) {
         if (result[name]?.kind !== 'module') fail(name, 'local override must name a pinned module');

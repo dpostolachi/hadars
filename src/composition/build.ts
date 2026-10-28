@@ -18,3 +18,8 @@ export type { ExportFile, ExportOutput } from './exportIntegrity';
 
 export { routingPlan, matchGroup, splitGroups } from './split';
 export type { SplitOptions, SplitManifest, SplitGroup } from './split';
+export { loadManifest } from './loadManifest';
+export { buildModuleFromManifest, moduleOptionsFromManifest } from './buildFromManifest';
+export type { ManifestBuildOptions } from './buildFromManifest';
+export { emitModuleTypes, writeShellTypes, shellTypesSource } from './moduleTypes';
+export type { ModuleTypes, ModuleTypesOptions } from './moduleTypes';

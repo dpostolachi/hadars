@@ -10,6 +10,9 @@ const sorted = (v: Record<string, string>) => Object.fromEntries(Object.entries(
 export function computeBuildId(m: Omit<BuildManifest, 'buildId'>): string {
     const identity = {
         ...(m.clientOnly ? { clientOnly: true } : {}),
+        ...(m.mounts?.length ? { mounts: [...m.mounts].sort() } : {}),
+        ...(m.routes ? { routes: m.routes } : {}),
+        ...(m.uses?.length ? { uses: [...m.uses].sort() } : {}),
         ...(m.types?.length ? { types: [...m.types].sort() } : {}),
         ...(m.typeApi ? { typeApi: { declarationsSha256: m.typeApi.declarationsSha256,
             exports: Object.fromEntries(Object.entries(m.typeApi.exports).sort().map(([ns, exports]) => [ns, Object.fromEntries(Object.entries(exports as object).sort())])) } } : {}),

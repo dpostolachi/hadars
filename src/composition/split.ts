@@ -3,7 +3,8 @@ import type { PinnedBuild } from './pinnedTypes';
 export type SplitOptions = { mode: 'single' } | {
     mode: 'per-module';
     defaultGroup: string;
-    mounts: Record<string, string[]>;
+    /** Overrides and additions; a pinned module's manifest `mounts` apply when absent here. */
+    mounts?: Record<string, string[]>;
     budgets?: { unitBytes: number };
 };
 export interface SplitGroup {
@@ -67,22 +68,27 @@ export function splitGroups(split: SplitOptions | undefined, builds?: Record<str
     if (!split || split.mode === 'single') return undefined;
     if (split.mode !== 'per-module') throw new Error('SPLIT_MODE_INVALID: expected single or per-module');
     if (!builds) throw new Error('SPLIT_PINNED_REQUIRED: per-module requires a pinned shell lock');
-    if (!split.mounts || typeof split.mounts !== 'object' || Array.isArray(split.mounts)) throw new Error('SPLIT_MOUNTS_INVALID: expected module patterns');
+    if (split.mounts !== undefined && (!split.mounts || typeof split.mounts !== 'object' || Array.isArray(split.mounts))) throw new Error('SPLIT_MOUNTS_INVALID: expected module patterns');
     if (split.budgets !== undefined) splitBudget(split.budgets);
     const modules = Object.values(builds).filter(b => b.kind === 'module');
-    for (const name of Object.keys(split.mounts)) {
+    // A module's own manifest owns its paths; explicit mounts override it.
+    const mounts: Record<string, string[]> = {
+        ...Object.fromEntries(modules.filter(b => b.mounts?.length).map(b => [b.name, b.mounts!])),
+        ...split.mounts,
+    };
+    for (const name of Object.keys(mounts)) {
         if (!modules.some(b => b.name === name)) throw new Error(`SPLIT_MODULE_UNKNOWN: ${name}`);
         if (name === split.defaultGroup) throw new Error(`SPLIT_DEFAULT_COLLISION: ${name} is also a mounted module`);
     }
-    for (const b of modules) if (!Object.hasOwn(split.mounts, b.name) && !b.clientOnly) throw new Error(`SPLIT_MODULE_UNMOUNTED: ${b.name}; mount it or declare the pinned module client-only`);
+    for (const b of modules) if (!Object.hasOwn(mounts, b.name) && !b.clientOnly) throw new Error(`SPLIT_MODULE_UNMOUNTED: ${b.name}; mount it or declare the pinned module client-only`);
     const unit = () => ({ file: '', sha256: '', size: 0 });
-    for (const [name, patterns] of Object.entries(split.mounts)) {
+    for (const [name, patterns] of Object.entries(mounts)) {
         if (!Array.isArray(patterns) || patterns.length === 0) throw new Error(`SPLIT_PATTERNS_INVALID: ${name}`);
         patterns.forEach(literalPrefix);
     }
     const groups = ordered([
         { name: split.defaultGroup, patterns: [], modules: [], unit: unit() },
-        ...Object.entries(split.mounts).map(([name, patterns]) => ({ name, patterns, modules: [name], unit: unit() })),
+        ...Object.entries(mounts).map(([name, patterns]) => ({ name, patterns, modules: [name], unit: unit() })),
     ], split.defaultGroup);
     validateRoutes({ defaultGroup: split.defaultGroup, groups });
     return groups;
