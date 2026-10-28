@@ -128,3 +128,17 @@ test('declarations from a shared source root stay inside the types directory', a
     expect(existsSync(join(root, 'pkg/src/a.d.ts'))).toBe(false);
     expect(readFileSync(join(out, 'types/index.d.ts'), 'utf8')).toContain('export * as a from "./pkg/src/a"');
 });
+
+test('declarations lay out from the common root when the tsconfig is in a sibling folder', async () => {
+    const { emitModuleTypes } = await import('../src/composition/build');
+    const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+    const root = join(tmp, 'sibling');
+    mkdirSync(join(root, 'shell/src'), { recursive: true }); mkdirSync(join(root, 'pkg/src'), { recursive: true });
+    writeFileSync(join(root, 'shell/tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', strict: true } }));
+    writeFileSync(join(root, 'shell/src/util.ts'), 'export const answer: number = 42;\n');
+    writeFileSync(join(root, 'pkg/src/a.ts'), `import { answer } from '../../shell/src/util';\nexport const doubled = answer * 2;\n`);
+    const out = join(tmp, 'sibling-out');
+    const types = emitModuleTypes({ manifest: { name: 'pkg', exposes: { a: 'src/a.ts' } }, cwd: join(root, 'pkg'), outDir: out, tsConfig: '../shell/tsconfig.json' });
+    expect(types.types).toEqual(['types/index.d.ts', 'types/pkg/src/a.d.ts', 'types/shell/src/util.d.ts']);
+    expect(existsSync(join(root, 'shell/src/util.d.ts'))).toBe(false);
+});

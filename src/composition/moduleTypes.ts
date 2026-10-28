@@ -47,7 +47,7 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
     }
     // Imports may leave the module's folder (a shared source root), so declarations are laid out from the common root.
     const root = opts.tsConfig ? path.dirname(path.resolve(cwd, opts.tsConfig)) : cwd;
-    const rootDir = path.relative(root, cwd).startsWith('..') ? cwd : root;
+    const rootDir = commonAncestor(root, cwd);
     const entries = Object.entries(manifest.exposes).map(([key, file]) => [key, path.resolve(cwd, file)] as const);
     const program = ts.createProgram([...entries.map(([, file]) => file), ...ambient], {
         jsx: ts.JsxEmit.ReactJSX, moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022,
@@ -122,4 +122,12 @@ export function writeShellTypes(file: string, entries: Record<string, string>): 
     mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
     writeFileSync(file, source);
     return true;
+}
+
+/** The deepest directory that contains both `a` and `b`. */
+function commonAncestor(a: string, b: string): string {
+    const left = a.split(path.sep), right = b.split(path.sep);
+    let shared = 0;
+    while (shared < left.length && shared < right.length && left[shared] === right[shared]) shared++;
+    return left.slice(0, shared).join(path.sep) || path.sep;
 }
