@@ -49,7 +49,7 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
         skipLibCheck: true, ...compilerOptions,
         // Overrides last: these decide where and what is emitted.
         declaration: true, emitDeclarationOnly: true, noEmit: false, outDir: typesDir, rootDir,
-        allowImportingTsExtensions: undefined, incremental: false, composite: false, declarationMap: false, sourceMap: false,
+        incremental: false, composite: false, declarationMap: false, sourceMap: false,
     });
     // A declaration must never land outside `<outDir>/types`, e.g. next to a shared source file.
     const emitted = program.emit(undefined, (file, text) => {
