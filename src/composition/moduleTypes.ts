@@ -62,10 +62,14 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
         mkdirSync(path.dirname(file), { recursive: true });
         writeFileSync(file, text);
     }, undefined, true);
-    // Declarations are emitted despite type errors; only an emit that produced nothing is fatal.
-    if (emitted.emitSkipped) {
+    // `emitSkipped` also reports declarations for unrelated files that could not be produced, so
+    // the contract is narrower: every exposed file must have its declaration.
+    const missing = entries.map(([, file]) => path.join(typesDir, path.relative(rootDir, file).replace(/\.[cm]?[jt]sx?$/, '.d.ts')))
+        .filter((out) => !existsSync(out));
+    if (missing.length) {
         const first = emitted.diagnostics.find((d) => d.category === ts.DiagnosticCategory.Error) ?? emitted.diagnostics[0];
-        throw new Error(`Cannot emit declarations for module "${manifest.name}": ${first ? ts.flattenDiagnosticMessageText(first.messageText, '\n') + (first.file ? ` (${first.file.fileName})` : '') : 'emit was skipped'}`);
+        throw new Error(`Cannot emit declarations for module "${manifest.name}": no declaration for ${missing.map((m) => path.relative(typesDir, m)).join(', ')}`
+            + (first ? `: ${ts.flattenDiagnosticMessageText(first.messageText, '\n')}` : ''));
     }
 
     const specifier = (file: string) => {
