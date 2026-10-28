@@ -111,3 +111,20 @@ test('declarations ride with the build, verify through the lock, and type the sh
         .map((d) => `${d.file!.fileName}: ${ts.flattenDiagnosticMessageText(d.messageText, '\n')}`);
     expect(problems).toEqual([]);
 }, 120_000);
+
+test('declarations from a shared source root stay inside the types directory', async () => {
+    const { emitModuleTypes } = await import('../src/composition/build');
+    const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
+    const root = join(tmp, 'mono');
+    mkdirSync(join(root, 'shared'), { recursive: true }); mkdirSync(join(root, 'pkg/src'), { recursive: true });
+    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', strict: true } }));
+    writeFileSync(join(root, 'shared/util.ts'), 'export const answer: number = 42;\n');
+    writeFileSync(join(root, 'pkg/src/a.ts'), `import { answer } from '../../shared/util';\nexport const doubled = answer * 2;\n`);
+    const out = join(tmp, 'mono-out');
+    const types = emitModuleTypes({ manifest: { name: 'pkg', exposes: { a: 'src/a.ts' } }, cwd: join(root, 'pkg'), outDir: out, tsConfig: '../tsconfig.json' });
+    expect(types.types).toEqual(['types/index.d.ts', 'types/pkg/src/a.d.ts', 'types/shared/util.d.ts']);
+    expect(types.typeApi.exports.a).toEqual({ doubled: 'number' });
+    expect(existsSync(join(root, 'shared/util.d.ts'))).toBe(false);
+    expect(existsSync(join(root, 'pkg/src/a.d.ts'))).toBe(false);
+    expect(readFileSync(join(out, 'types/index.d.ts'), 'utf8')).toContain('export * as a from "./pkg/src/a"');
+});

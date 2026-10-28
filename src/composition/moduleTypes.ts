@@ -40,15 +40,23 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
         if (read.error) throw new Error(`Cannot read ${file}: ${ts.flattenDiagnosticMessageText(read.error.messageText, '\n')}`);
         compilerOptions = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(file)).options;
     }
+    // Imports may leave the module's folder (a shared source root), so declarations are laid out from the common root.
+    const root = opts.tsConfig ? path.dirname(path.resolve(cwd, opts.tsConfig)) : cwd;
+    const rootDir = path.relative(root, cwd).startsWith('..') ? cwd : root;
     const entries = Object.entries(manifest.exposes).map(([key, file]) => [key, path.resolve(cwd, file)] as const);
     const program = ts.createProgram(entries.map(([, file]) => file), {
         jsx: ts.JsxEmit.ReactJSX, moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022,
         skipLibCheck: true, ...compilerOptions,
         // Overrides last: these decide where and what is emitted.
-        declaration: true, emitDeclarationOnly: true, noEmit: false, outDir: typesDir, rootDir: cwd,
+        declaration: true, emitDeclarationOnly: true, noEmit: false, outDir: typesDir, rootDir,
         allowImportingTsExtensions: undefined, incremental: false, composite: false, declarationMap: false, sourceMap: false,
     });
-    const emitted = program.emit(undefined, undefined, undefined, true);
+    // A declaration must never land outside `<outDir>/types`, e.g. next to a shared source file.
+    const emitted = program.emit(undefined, (file, text) => {
+        if (path.relative(typesDir, path.resolve(file)).startsWith('..')) throw new Error(`Refusing to write a declaration outside ${typesDir}: ${file}`);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, text);
+    }, undefined, true);
     const errors = ts.getPreEmitDiagnostics(program).filter((d) => d.category === ts.DiagnosticCategory.Error && d.file && !d.file.fileName.includes('node_modules'));
     // Declarations are emitted despite type errors; only an emit that produced nothing is fatal.
     if (emitted.emitSkipped && errors.length) {
@@ -57,7 +65,7 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
     }
 
     const specifier = (file: string) => {
-        const relative = path.relative(cwd, file).replace(/\.[cm]?[jt]sx?$/, '').split(path.sep).join('/');
+        const relative = path.relative(rootDir, file).replace(/\.[cm]?[jt]sx?$/, '').split(path.sep).join('/');
         return './' + relative;
     };
     writeFileSync(path.join(typesDir, 'index.d.ts'),
