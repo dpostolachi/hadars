@@ -34,17 +34,21 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
     mkdirSync(typesDir, { recursive: true });
 
     let compilerOptions: ts.CompilerOptions = {};
+    // Ambient declarations (global augmentations) of the project's tsconfig apply to every source file.
+    let ambient: string[] = [];
     if (opts.tsConfig) {
         const file = path.resolve(cwd, opts.tsConfig);
         const read = ts.readConfigFile(file, ts.sys.readFile);
         if (read.error) throw new Error(`Cannot read ${file}: ${ts.flattenDiagnosticMessageText(read.error.messageText, '\n')}`);
-        compilerOptions = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(file)).options;
+        const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(file));
+        compilerOptions = parsed.options;
+        ambient = parsed.fileNames.filter((f) => f.endsWith('.d.ts') && !f.includes('node_modules'));
     }
     // Imports may leave the module's folder (a shared source root), so declarations are laid out from the common root.
     const root = opts.tsConfig ? path.dirname(path.resolve(cwd, opts.tsConfig)) : cwd;
     const rootDir = path.relative(root, cwd).startsWith('..') ? cwd : root;
     const entries = Object.entries(manifest.exposes).map(([key, file]) => [key, path.resolve(cwd, file)] as const);
-    const program = ts.createProgram(entries.map(([, file]) => file), {
+    const program = ts.createProgram([...entries.map(([, file]) => file), ...ambient], {
         jsx: ts.JsxEmit.ReactJSX, moduleResolution: ts.ModuleResolutionKind.Bundler, module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022,
         skipLibCheck: true, ...compilerOptions,
         // Overrides last: these decide where and what is emitted.
@@ -57,11 +61,10 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
         mkdirSync(path.dirname(file), { recursive: true });
         writeFileSync(file, text);
     }, undefined, true);
-    const errors = ts.getPreEmitDiagnostics(program).filter((d) => d.category === ts.DiagnosticCategory.Error && d.file && !d.file.fileName.includes('node_modules'));
     // Declarations are emitted despite type errors; only an emit that produced nothing is fatal.
-    if (emitted.emitSkipped && errors.length) {
-        const first = errors[0]!;
-        throw new Error(`Cannot emit declarations for module "${manifest.name}": ${ts.flattenDiagnosticMessageText(first.messageText, '\n')} (${first.file!.fileName})`);
+    if (emitted.emitSkipped) {
+        const first = emitted.diagnostics.find((d) => d.category === ts.DiagnosticCategory.Error) ?? emitted.diagnostics[0];
+        throw new Error(`Cannot emit declarations for module "${manifest.name}": ${first ? ts.flattenDiagnosticMessageText(first.messageText, '\n') + (first.file ? ` (${first.file.fileName})` : '') : 'emit was skipped'}`);
     }
 
     const specifier = (file: string) => {
