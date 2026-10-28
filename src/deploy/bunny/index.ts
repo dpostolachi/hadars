@@ -11,6 +11,7 @@ export * from './artifact';
 export * from './client';
 export * from './output';
 export * from './split';
+export * from './linked';
 export * from './split-release';
 import { verifyOutput, outputHash, type OutputVerification } from './output';
 import { dnsHostname } from './zones';
