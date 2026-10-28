@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { build } from 'esbuild';
+import { exportScriptOptions } from '../src/utils/exportScript';
 import { createBuild, assembleLockfile } from '../src/composition/artifacts';
 import { assemblePinnedExport } from '../src/composition/exportBuilds';
 import { completeSplitExport, RELEASE_PLACEHOLDER } from '../src/composition/exportIntegrity';
@@ -39,8 +40,8 @@ try {
         group.unit.file = `units/${group.name}/bunny.mjs`;
         // Adapter-neutral miniature units exercise the real runtime and production export completion.
         const result = await build({ stdin: { contents: `import { splitHandler } from './src/composition/splitRuntime.ts';
-            export default splitHandler(async () => new Response(${JSON.stringify('<!doctype html><html><head><script src="/index.js"></script></head><body>' + group.name + '</body></html>')}, { headers: { 'content-type': 'text/html' } }), ${JSON.stringify({ release: RELEASE_PLACEHOLDER, group: group.name, shell: manifest.shell })});`, resolveDir: process.cwd(), sourcefile: 'fixture.ts' },
-            bundle: true, format: 'esm', target: 'es2022', minify: true, legalComments: 'none', write: false });
+            export default splitHandler(async () => new Response(${JSON.stringify('<!doctype html><html><head><script src="/index.js"></script></head><body><main>' + group.name + '</main></body></html>')}, { headers: { 'content-type': 'text/html' } }), ${JSON.stringify({ release: RELEASE_PLACEHOLDER, group: group.name, shell: manifest.shell })});`, resolveDir: process.cwd(), sourcefile: 'fixture.ts' },
+            bundle: true, format: 'esm', target: 'es2022', ...exportScriptOptions('1'), write: false });
         write(join(destination, group.unit.file), result.outputFiles[0]!.contents);
     }
     const output = completeSplitExport(destination, manifest, staticDir, {}, true);
@@ -51,5 +52,6 @@ try {
         normalizedSha256: hash(readFileSync(join(destination, g.unit.file), 'utf8').replace(manifest.releaseId, RELEASE_PLACEHOLDER)) })),
         manifestSha256: output.manifest.sha256, staticDigest: output.static.sha256, metadataSha256: output.metadataSha256,
         routingPlan: routingPlan(manifest), paths: Object.fromEntries(paths.map(p => [p, matchGroup(manifest, p)])) };
+    write(join(destination, 'README.md'), `# Split conformance fixture\n\nUnits use the production minifier with legal comments and source maps disabled.\nRegenerate from the repository root with \`bun scripts/gen-split-fixture.ts\`.\nThe generator pins production settings independently of the debugging environment.\nCommit all generated files and expected literals together. Two runs must be byte-identical.\nThe platform's copied vector must be refreshed after any change to these bytes.\n\nEach miniature unit renders its group inside a main element, probes its identity,\nand embeds exactly one release global before entry scripts.\n`);
     write(join(destination, 'expected.json'), JSON.stringify(expected, null, 2) + '\n');
 } finally { rmSync(scratch, { recursive: true, force: true }); }

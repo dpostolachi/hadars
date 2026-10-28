@@ -124,7 +124,10 @@ test('two live releases reject old data selectors and reload into the current do
     const script = await build({ stdin: { contents: `import { releaseFetch } from './src/utils/releaseClient'; globalThis.navigate = () => releaseFetch('/next', {headers: {Accept: 'application/json'}});`, resolveDir: root }, bundle: true, write: false, format: 'iife', platform: 'browser' });
     const html = '<!doctype html><html><head><script src="/client.js"></script></head><body>release document</body></html>';
     let dataRequests = 0, documents = 0;
-    const makeUnit = (release: string) => splitHandler(async request => {
+    const runtime = await build({ stdin: { contents: `export { splitHandler } from './src/composition/splitRuntime';`, resolveDir: root },
+        bundle: true, write: false, format: 'esm', platform: 'browser', minify: true, legalComments: 'none', sourcemap: false });
+    const { splitHandler: minifiedHandler } = await import('data:text/javascript;base64,' + Buffer.from(runtime.outputFiles[0]!.text).toString('base64'));
+    const makeUnit = (release: string) => minifiedHandler(async request => {
         if (request.headers.get('accept') === 'application/json') { dataRequests++; return Response.json({ serverData: {} }); }
         documents++;
         return new Response(html, { headers: { 'content-type': 'text/html' } });

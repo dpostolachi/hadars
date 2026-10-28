@@ -7,6 +7,17 @@ hosting service. The export working directory contains `units/`,
 activation or detached signature verification is supplied. Browser release gating is implemented.
 The later proposal in split-deployment.md does not extend this contract.
 
+## Script optimization
+
+Single scripts and split units are now minified in production (identifiers,
+whitespace and syntax), with `process.env.NODE_ENV` defined as `"production"`.
+Existing runtime defines are preserved. Legal comments and source maps are disabled.
+Set `HADARS_EXPORT_MINIFY=0` for a readable debugging export; this also omits the
+production environment define to restore legacy dependency selection. The shared
+application compile still uses production mode. This switch applies to every
+unit in an export and changes unit bytes, release identity and the seal.
+The platform's copied vector must be refreshed from the regenerated fixture.
+
 ## Manifest
 
 All fields below are required. No optional manifest fields are emitted. JSON
@@ -87,7 +98,7 @@ lock to deployment paths, and omits `output.shell`. It still computes and uses
 the final shell/snapshot identity. It removes a previous `shell/` output but does
 not delete a preexisting `hadars.lock`, which may be an input. Verification in
 this mode has only the original v2 guarantees, since pin files are absent.
-Single-unit exports keep the existing v1 output and byte behavior; emitting a
+Single-unit exports keep the existing v1 output schema; emitting a
 shell build for single-unit exports is not implemented.
 
 ## Routing grammar and native translation

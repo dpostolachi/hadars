@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { cpSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { verifyExport, RELEASE_PLACEHOLDER, splitReleaseId } from '../src/composition/exportIntegrity';
+import { verifyExport, completeSplitExport, RELEASE_PLACEHOLDER, splitReleaseId } from '../src/composition/exportIntegrity';
 import { canonical, hash } from '../src/composition/identity';
 import { matchGroup, routingPlan, splitBudget } from '../src/composition/split';
 const fixture = join(import.meta.dir, 'fixtures/split-export');
@@ -35,6 +35,8 @@ test('committed conformance vector verifies every literal without regeneration',
         expect(output.units[i]).toEqual({ path: unit.path, sha256: unit.sha256, size: unit.size });
         expect(hash(bytes)).toBe(unit.sha256);
         expect(bytes.length).toBe(unit.size);
+        expect(bytes.toString().split(expected.releaseId)).toHaveLength(2);
+        expect(bytes.toString()).not.toContain(RELEASE_PLACEHOLDER);
         const normalizedSha = hash(bytes.toString().replace(expected.releaseId, RELEASE_PLACEHOLDER));
         expect(normalizedSha).toBe(unit.normalizedSha256);
         normalized.push({ ...group, unit: { ...group.unit, sha256: normalizedSha } });
@@ -45,6 +47,7 @@ test('committed conformance vector verifies every literal without regeneration',
         expect(probe.headers.get('x-hadars-release')).toBe(expected.releaseId);
         expect(probe.headers.get('x-hadars-group')).toBe(unit.group);
         const html = await (await handler(new Request('http://local/'))).text();
+        expect(html).toContain(`<main>${unit.group}</main>`);
         expect(html.split('__HADARS_RELEASE__').length).toBe(2);
         expect(html.indexOf('__HADARS_RELEASE__')).toBeLessThan(html.indexOf('src="/index.js"'));
 
@@ -57,7 +60,7 @@ test('committed conformance vector verifies every literal without regeneration',
 function files(root: string): string[] {
     return readdirSync(root, { withFileTypes: true }).flatMap(e => e.isDirectory() ? files(join(root, e.name)).map(p => e.name + '/' + p) : [e.name]);
 }
-for (const file of files(fixture).filter(p => p !== 'expected.json')) test(`mutating committed file fails: ${file}`, () => {
+for (const file of files(fixture).filter(p => !['expected.json', 'README.md'].includes(p))) test(`mutating committed file fails: ${file}`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'split-mutation-'));
     try {
         cpSync(fixture, dir, { recursive: true });
@@ -142,5 +145,16 @@ for (const [name, mutate, error] of [
         cpSync(fixture, dir, { recursive: true });
         mutate(dir); reseal(dir);
         expect(() => verifyExport(dir, metadataPath)).toThrow(error);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const count of [0, 2]) test(`export rejects ${count} release placeholders after minification`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'split-placeholder-'));
+    try {
+        cpSync(fixture, dir, { recursive: true });
+        const manifest = json(dir, '.hadars/split-manifest.json');
+        const first = manifest.groups[0].unit.file;
+        writeFileSync(join(dir, first), read(dir, first).toString().replace(manifest.releaseId, RELEASE_PLACEHOLDER.repeat(count)));
+        expect(() => completeSplitExport(dir, manifest, join(dir, '.hadars/static'))).toThrow('SPLIT_RELEASE_PLACEHOLDER');
     } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -8,6 +8,7 @@ import { renderStaticSite } from './src/static'
 import { runSources } from './src/source/runner'
 import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './src/source/inference'
 import { runtimeConfigPlugin } from './src/utils/exportConfig'
+import { exportScriptOptions } from './src/utils/exportScript'
 import { checkLiveLock, isPidAlive, removeLock } from './src/utils/lock'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
@@ -540,10 +541,9 @@ async function bundleBunny(
             format: 'esm',
             target: ['es2022'],
             outfile: outputFile,
-            sourcemap: false,
             loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
             external: ['@rspack/*', '@bunny.net/edgescript-sdk'],
-            define: { 'global': 'globalThis', '__EDGE_RUNTIME__': 'true' },
+            ...exportScriptOptions(),
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — Deno's Node compat layer resolves these at runtime.
             plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],

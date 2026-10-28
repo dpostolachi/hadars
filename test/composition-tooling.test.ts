@@ -169,7 +169,7 @@ test('edge export runs a composed shell without pinned directories or a resolver
     expect(JSON.parse(provenance).modules.second).toMatchObject({ buildId: second.manifest.buildId, server: expect.arrayContaining([expect.objectContaining({ path: 'server/second.cjs', sha256: expect.any(String) })]) });
     expect(code).not.toContain('server/greeter.cjs');
     expect(readFileSync(join(f.dir, '.hadars/static/_builds', f.module.manifest.buildId, 'client/greeter.js'))).toEqual(readFileSync(join(f.module.dir, 'client/greeter.js')));
-    const sdk = code.match(/from "(@[^\"]+sdk)"/);
+    const sdk = code.match(/from\s*"(@[^\"]+sdk)"/);
     expect(sdk).not.toBeNull();
     writeFileSync(join(f.dir, 'sdk.mjs'), 'export const net = { http: { serve(handler) { globalThis.__hadarsPinnedExportHandler = handler; } } };');
     writeFileSync(output, code.replaceAll(sdk![1]!, './sdk.mjs'));

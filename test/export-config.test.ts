@@ -70,3 +70,25 @@ test('destructuring defaults retain their dependencies and helper functions', as
         export default { fetch() { return new Response(message()); } };`);
     expect(await config.fetch().text()).toBe('runtime');
 });
+
+test('script exports select production dependencies explicitly, with a readable legacy escape hatch', async () => {
+    const { build } = await import('esbuild');
+    const { exportScriptOptions } = await import('../src/utils/exportScript');
+    const production = exportScriptOptions('1');
+    const debug = exportScriptOptions('0');
+    // Disable compression independently to prove selection comes from the explicit define.
+    for (const options of [production, { ...production, minify: false }, debug]) {
+        const result = await build({ stdin: { contents: `
+            /*! @license fixture license */
+            export default process.env.NODE_ENV === 'production' ? 'production-marker' : 'development-marker';
+            export const runtime = [global, __EDGE_RUNTIME__];`, sourcefile: 'script.ts' },
+            bundle: true, write: false, platform: 'browser', format: 'esm', ...options });
+        const source = result.outputFiles[0]!.text;
+        expect(await evaluate(source)).toBe(options === debug ? 'development-marker' : 'production-marker');
+        if (options.minify) expect(source).not.toContain('development-marker');
+        expect(source).not.toContain('fixture license');
+        expect(source).not.toContain('sourceMappingURL');
+        expect(result.outputFiles).toHaveLength(1);
+        expect(source).toContain('globalThis');
+    }
+});

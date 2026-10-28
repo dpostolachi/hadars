@@ -28,33 +28,33 @@
       "size": 3768
     }
   ],
-  "releaseId": "7e2657ac26b83508",
+  "releaseId": "2da74b2c947ff312",
   "units": [
     {
       "group": "admin",
       "path": "units/admin/bunny.mjs",
-      "sha256": "2185081c2f22551bb445433334a4d36cf1623ceed3ae808dccd55f7b2dd15272",
-      "size": 1900,
-      "normalizedSha256": "41bffdca6dc472c513c29dba20abb139d4fe901d04c60e47adf01e80e644922c"
+      "sha256": "4ed7c1c53bb5957728f62e998f2c2d45065f71424349cfd4b141a811023fddc0",
+      "size": 1913,
+      "normalizedSha256": "f969f67e27c67d5f61c1fb15be4b321bac134d360df21fc227f205805ffd2a31"
     },
     {
       "group": "shop",
       "path": "units/shop/bunny.mjs",
-      "sha256": "a55ab7579c8b146b3e5596952a24838dd67bab4ee007e2a8579f9980aff18475",
-      "size": 1898,
-      "normalizedSha256": "67d321ab9e56a3ca8caafd816daa68b0ba1f04fe60780d043a115b46a35d610f"
+      "sha256": "7e534b9fc01edd99bbf8db72651d205384f7c696682cfe9f8061be915f66f6aa",
+      "size": 1911,
+      "normalizedSha256": "e672dd1b910a197a4690a7b8adba463ce5a17a8bdb24a9558cac7da0aedcf22b"
     },
     {
       "group": "main",
       "path": "units/main/bunny.mjs",
-      "sha256": "92f68d385d6adc6215935c15d0ad8890ef2cefc32d4041f3122d5d9f29b7284b",
-      "size": 1898,
-      "normalizedSha256": "dd98fccd9f5999aeefef4a47b9cdc8898793b6491475d2171e90334fb0170400"
+      "sha256": "35ee8abbe42e2f97e83c271149ecae327da0f6bef0ea39f049c83c1c701f7bee",
+      "size": 1911,
+      "normalizedSha256": "4e2be4cccec3140a1111a2a1f0f6446782cba13d28ca5ffcffe4b35ad67b692b"
     }
   ],
-  "manifestSha256": "a069696e16116ee4f22089d8049fceb986442018d2097f1985d39c494302e91e",
+  "manifestSha256": "03b287146067a028f633ea587b5394ce30fa5ec6812bbb3ef293ff2fc380ff0f",
   "staticDigest": "cf1ea35389c4c1abfa67e23cc50bbfb11c095647bb6084fec56d7723be1aa8f6",
-  "metadataSha256": "9b2d4566ba9dce33cdeb9c7b41ee7bf8609d5d6791db975194837ec2c8c848b6",
+  "metadataSha256": "6e218b8b185309cf02cbd33991f3745e5e4c87524fda32780cbfa2a1fb5654da",
   "routingPlan": [
     {
       "group": "admin",

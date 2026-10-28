@@ -14,11 +14,12 @@ function config(split?: any, label = 'export') {
     write(join(dir, 'hadars.config.ts'), `export default { entry: 'App.tsx', define: { __BUILD_LABEL__: ${JSON.stringify(JSON.stringify(label))} }, port: Number(process.env.PORT || 9090), composition: { role: 'shell', name: 'shell', pinned: { lockFile: 'lock.json', buildsDir: 'builds' } }, ${split ? `split: ${JSON.stringify(split)},` : ''} fetch: req => req.pathname.startsWith('/document') ? undefined : new Response('hook'), onResponse: r => r };`);
 }
 let invocation = 0;
-async function cli(...args: string[]) {
+async function cli(...args: string[]) { return runCli('1', ...args); }
+async function runCli(minify: string, ...args: string[]) {
     const log = join(dir, `cli-${invocation++}.log`);
     const fd = openSync(log, 'w');
     try {
-        const child = Bun.spawn(['node', '--import', join(dir, 'node-runtime.mjs'), join(root, 'dist/cli.js'), ...args], { cwd: dir, stdout: fd, stderr: fd });
+        const child = Bun.spawn(['node', '--import', join(dir, 'node-runtime.mjs'), join(root, 'dist/cli.js'), ...args], { cwd: dir, env: { ...process.env, HADARS_EXPORT_MINIFY: minify }, stdout: fd, stderr: fd });
         const code = await child.exited;
         const stdout = readFileSync(log, 'utf8');
         if (code) throw new Error(stdout);
@@ -89,8 +90,11 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
         expect(bytes.length).toBe(group.unit.size);
         for (const name of ['admin', 'shop']) expect(bytes.toString().includes(name.toUpperCase() + '_SERVER_MARKER')).toBe(group.name === name);
         expect(bytes.length).toBeLessThan(spec.budgets.unitBytes);
+        expect(bytes.toString()).not.toContain('react.development');
+        expect(bytes.toString()).not.toContain('react_stack_bottom_frame');
+        expect(bytes.toString()).not.toContain('sourceMappingURL');
         // Replace only the runtime-provided serve API; execute the complete generated unit.
-        const source = bytes.toString().replace(/import \* as (\w+) from "@bunny.net\/edgescript-sdk";/, 'const $1 = { net: { http: { serve: h => globalThis.__splitTestHandler = h } } };');
+        const source = bytes.toString().replace(/import\s*\*\s*as\s+(\w+)\s*from\s*"@bunny.net\/edgescript-sdk";/, 'const $1 = { net: { http: { serve: h => globalThis.__splitTestHandler = h } } };');
         const runnable = join(dir, `execute-${group.name}.mjs`);
         write(runnable, source);
         delete (globalThis as any).__HADARS_SERVER_MODULE_STATE__;
@@ -99,9 +103,16 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
         const response = await handler(new Request('http://local/__hadars/release'));
         expect(response.status).toBe(200);
         expect(await response.json()).toEqual({ release: manifest.releaseId, group: group.name, shell: manifest.shell });
+        const staleRelease = manifest.releaseId === '0000000000000000' ? '1111111111111111' : '0000000000000000';
+        const rejected = await handler(new Request('http://local/document', { method: 'POST', headers: { 'x-hadars-release-selector': staleRelease } }));
+        expect(rejected.status).toBe(409);
+        expect(rejected.headers.get('cache-control')).toBe('no-store');
+        expect(await rejected.json()).toEqual({ error: 'SPLIT_RELEASE_MISMATCH', expected: manifest.releaseId, received: staleRelease, group: group.name });
         expect(response.headers.get('cache-control')).toBe('no-store');
         const document = await handler(new Request('http://local/document'));
+        expect(document.status).toBe(200);
         const html = await document.text();
+        expect(html).toContain('<main>export<!-- -->data</main>');
         expect(html.split('__HADARS_RELEASE__').length).toBe(2);
         expect(html).toContain(JSON.stringify({ release: manifest.releaseId, group: group.name }));
         expect(html.indexOf('__HADARS_RELEASE__')).toBeLessThan(html.indexOf('src='));
@@ -115,6 +126,19 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
         expect(hook.headers.get('x-hadars-group')).toBe(group.name);
         expect(hook.headers.get('x-hadars-release')).toBe(manifest.releaseId);
     }
+    await runCli('0', 'export', 'bunny');
+    const debugManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    expect(debugManifest.releaseId).not.toBe(manifest.releaseId);
+    expect(verifyExport(dir, metadata).version).toBe(2);
+    for (const group of manifest.groups) {
+        const debug = readFileSync(join(dir, group.unit.file), 'utf8');
+        expect(group.unit.size).toBeLessThan(Buffer.byteLength(debug));
+        expect(debug).toContain('react.development');
+        expect(debug).not.toContain('sourceMappingURL');
+        console.log(`split ${group.name}: ${Buffer.byteLength(debug)} -> ${group.unit.size} bytes`);
+    }
+    await cli('export', 'bunny');
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).releaseId).toBe(manifest.releaseId);
     // Real listeners exercise the development/production probe before the configured hook.
     for (const mode of ['run', 'dev']) {
         const reservation = createServer();
@@ -198,7 +222,16 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     config({ mode: 'single' });
     await cli('export', 'bunny');
     expect(readFileSync(join(dir, 'bunny.mjs')).equals(single)).toBe(true);
-    // Independently bundle the pre-split shim and options as a byte-for-byte legacy regression.
+    expect(single.toString()).not.toContain('react.development');
+    expect(single.toString()).not.toContain('react_stack_bottom_frame');
+    expect(single.toString()).not.toContain('sourceMappingURL');
+    await runCli('0', 'export', 'bunny');
+    const debugSingle = readFileSync(join(dir, 'bunny.mjs'));
+    expect(single.length).toBeLessThan(debugSingle.length);
+    expect(debugSingle.toString()).toContain('react.development');
+    expect(verifyExport(dir, metadata).version).toBe(1);
+    console.log(`single: ${debugSingle.length} -> ${single.length} bytes`);
+    // Independently bundle the original options to verify the debug escape hatch.
     const legacyDriver = join(dir, 'legacy.mjs');
     write(legacyDriver, `
         import { build } from ${JSON.stringify(join(root, 'node_modules/esbuild/lib/main.js'))};
@@ -221,7 +254,7 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
             'BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml, pinnedClients: ' + JSON.stringify(clients) + ' }));',
         ].join('\\n') + '\\n');
         await build({ entryPoints: [shim], bundle: true, platform: 'browser', format: 'esm', target: ['es2022'],
-            outfile: cwd + '/legacy.mjs.out', sourcemap: false, loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
+            outfile: cwd + '/legacy.mjs.out', sourcemap: false, legalComments: 'none', loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
             external: ['@rspack/*', '@bunny.net/edgescript-sdk'], define: { global: 'globalThis', __EDGE_RUNTIME__: 'true' },
             plugins: [runtimeConfigPlugin(config), { name: 'node-builtins-external', setup(b) {
                 b.onResolve({ filter: /^(?:node:)?[a-z_][a-z0-9_\\/-]*$/ }, args => {
@@ -235,7 +268,7 @@ test('composed split export: isolation, final hashes, probes, budgets and comple
     try {
         const legacy = Bun.spawn(['node', legacyDriver], { cwd: dir, stdout: fd, stderr: fd });
         expect(await legacy.exited).toBe(0);
-        expect(readFileSync(join(dir, 'legacy.mjs.out')).equals(single)).toBe(true);
+        expect(readFileSync(join(dir, 'legacy.mjs.out')).equals(debugSingle)).toBe(true);
     } finally { closeSync(fd); }
     config({ ...spec, budgets: { unitBytes: 1 } });
     await expect(cli('export', 'bunny')).rejects.toThrow('SPLIT_SIZE_EXCEEDED');

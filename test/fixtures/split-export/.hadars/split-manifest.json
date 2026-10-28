@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "releaseId": "7e2657ac26b83508",
+  "releaseId": "2da74b2c947ff312",
   "mode": "per-module",
   "defaultGroup": "main",
   "shell": "e96ba89c588b35a2",
@@ -23,8 +23,8 @@
       ],
       "unit": {
         "file": "units/admin/bunny.mjs",
-        "sha256": "2185081c2f22551bb445433334a4d36cf1623ceed3ae808dccd55f7b2dd15272",
-        "size": 1900
+        "sha256": "4ed7c1c53bb5957728f62e998f2c2d45065f71424349cfd4b141a811023fddc0",
+        "size": 1913
       }
     },
     {
@@ -38,8 +38,8 @@
       ],
       "unit": {
         "file": "units/shop/bunny.mjs",
-        "sha256": "a55ab7579c8b146b3e5596952a24838dd67bab4ee007e2a8579f9980aff18475",
-        "size": 1898
+        "sha256": "7e534b9fc01edd99bbf8db72651d205384f7c696682cfe9f8061be915f66f6aa",
+        "size": 1911
       }
     },
     {
@@ -48,8 +48,8 @@
       "modules": [],
       "unit": {
         "file": "units/main/bunny.mjs",
-        "sha256": "92f68d385d6adc6215935c15d0ad8890ef2cefc32d4041f3122d5d9f29b7284b",
-        "size": 1898
+        "sha256": "35ee8abbe42e2f97e83c271149ecae327da0f6bef0ea39f049c83c1c701f7bee",
+        "size": 1911
       }
     }
   ]
