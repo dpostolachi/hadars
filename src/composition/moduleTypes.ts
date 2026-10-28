@@ -42,7 +42,8 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
         if (read.error) throw new Error(`Cannot read ${file}: ${ts.flattenDiagnosticMessageText(read.error.messageText, '\n')}`);
         const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(file));
         compilerOptions = parsed.options;
-        ambient = parsed.fileNames.filter((f) => f.endsWith('.d.ts') && !f.includes('node_modules'));
+        // The generated module map is itself built from these declarations; including it makes the emit circular.
+        ambient = parsed.fileNames.filter((f) => f.endsWith('.d.ts') && !f.includes('node_modules') && !/hadars-modules\.d\.ts$/.test(f));
     }
     // Imports may leave the module's folder (a shared source root), so declarations are laid out from the common root.
     const root = opts.tsConfig ? path.dirname(path.resolve(cwd, opts.tsConfig)) : cwd;
