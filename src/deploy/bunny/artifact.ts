@@ -1,5 +1,5 @@
 import type { Dirent } from 'node:fs';
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { access, lstat, readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Artifact, ArtifactFile } from './index';
 
@@ -10,7 +10,8 @@ export async function loadArtifact(directory: string): Promise<Artifact> {
         try { if ((await lstat(path)).isSymbolicLink()) throw new Error(`Artifact contains unsupported symlink ${path}`); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
-    const split = await Bun.file(join(root, '.hadars/split-manifest.json')).exists();
+    const exists = (path: string) => access(path).then(() => true, () => false);
+    const split = await exists(join(root, '.hadars/split-manifest.json'));
     if (split) {
         files.push({ role: 'manifest', path: '.hadars/split-manifest.json', bytes: new Uint8Array(await readFile(join(root, '.hadars/split-manifest.json'))) });
         let units: Dirent[] = [];
@@ -36,9 +37,9 @@ export async function loadArtifact(directory: string): Promise<Artifact> {
             for (const file of paths) files.push({ role: 'pin', path: file.slice(root.length + 1), bytes: new Uint8Array(await readFile(file)) });
         }
     }
-    const script = Bun.file(join(root, 'bunny.mjs'));
-    if (!split && !await script.exists()) throw new Error('Artifact directory needs bunny.mjs');
-    if (!split) files.push({ path: 'bunny.mjs', bytes: new Uint8Array(await script.arrayBuffer()) });
+    const scriptPath = join(root, 'bunny.mjs');
+    if (!split && !await exists(scriptPath)) throw new Error('Artifact directory needs bunny.mjs');
+    if (!split) files.push({ path: 'bunny.mjs', bytes: new Uint8Array(await readFile(scriptPath)) });
     const staticRoot = join(root, '.hadars/static');
     let entries: Dirent[];
     try { entries = await readdir(staticRoot, { recursive: true, withFileTypes: true }); }
@@ -47,7 +48,7 @@ export async function loadArtifact(directory: string): Promise<Artifact> {
         if (entry.isDirectory()) continue;
         if (!entry.isFile()) throw new Error('Artifact contains unsupported static entries');
         const file = join(entry.parentPath, entry.name);
-        files.push({ ...(split ? { role: 'static' as const } : {}), path: file.slice(staticRoot.length + 1), bytes: new Uint8Array(await Bun.file(file).arrayBuffer()) });
+        files.push({ ...(split ? { role: 'static' as const } : {}), path: file.slice(staticRoot.length + 1), bytes: new Uint8Array(await readFile(file)) });
     }
     let provenance;
     try { provenance = JSON.parse(await readFile(join(root, '.hadars/composition.json'), 'utf8')); }

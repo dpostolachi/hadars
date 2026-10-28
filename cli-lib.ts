@@ -962,11 +962,18 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | stop | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | stop | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql] | deploy <setup|bunny|rollback|gc>>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
   const cmd = argv[2]
+
+  if (cmd === 'deploy') {
+    const { deployCommand } = await import('./src/deploy/bunny/cli');
+    const code = await deployCommand(argv.slice(3));
+    if (code) process.exit(code);
+    return;
+  }
 
   if (cmd === 'composition') {
     const { createBuild, assembleLockfile, verifyLockfile } = await import('./src/composition/build');
