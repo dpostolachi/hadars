@@ -9,6 +9,15 @@ import pathMod from "node:path";
 import { existsSync } from "node:fs";
 
 const __dirname = process.cwd();
+
+/** `node_modules` of the project and of every parent folder, so a hoisted workspace install resolves from generated entries outside the project. */
+function ancestorNodeModules(dir: string): string[] {
+    const found: string[] = [];
+    for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+        found.push(path.join(current, 'node_modules'));
+        if (current === path.dirname(current)) return found;
+    }
+}
 const packageDir = pathMod.dirname(fileURLToPath(import.meta.url));
 const clientScriptPath = pathMod.resolve(packageDir, 'template.html');
 
@@ -49,7 +58,7 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
         },
         resolve: {
             modules: [
-                path.resolve(__dirname, 'node_modules'),
+                ...ancestorNodeModules(__dirname),
                 // 'node_modules' (relative) enables the standard upward-traversal
                 // resolution so rspack can find transitive deps (e.g. webpack-dev-server)
                 // that live in a parent node_modules when running from a sub-project.
