@@ -78,7 +78,7 @@ test('declarations ride with the build, verify through the lock, and type the sh
     const built = await build(dir, { outDir: out });
     const moduleTypes = emitModuleTypes({ manifest: built.options.manifest!, cwd: dir, outDir: out });
     expect(moduleTypes.types[0]).toBe('types/index.d.ts');
-    expect(moduleTypes.typeApi.exports.page).toMatchObject({ title: 'value' });
+    expect(moduleTypes.typeApi.exports.page).toMatchObject({ title: '"page"' });
 
     const buildsDir = join(tmp, 'typed-builds');
     const pin = createModuleBuild({ ...built.options, buildsDir, result: built, moduleTypes });

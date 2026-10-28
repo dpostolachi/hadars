@@ -70,7 +70,11 @@ export function emitModuleTypes(opts: ModuleTypesOptions): ModuleTypes {
         const names = symbol ? checker.getExportsOfModule(symbol) : [];
         return [key, sorted(names.map((s) => {
             const target = s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s;
-            return [s.name, target.flags & ts.SymbolFlags.Value ? 'value' : 'type'] as [string, string];
+            // The signature is what a consumer compiles against; registries compare it between versions.
+            const signature = target.flags & ts.SymbolFlags.Value
+                ? checker.typeToString(checker.getTypeOfSymbolAtLocation(target, source!), undefined, ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope)
+                : (target.declarations ?? []).map((d) => d.getText().replace(/\s+/g, ' ').trim()).join(' | ');
+            return [s.name, signature] as [string, string];
         }))] as [string, Record<string, string>];
     }));
 
