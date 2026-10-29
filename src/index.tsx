@@ -15,6 +15,7 @@ export type {
     HadarsDocumentNode,
 } from "./types/hadars";
 export { Head as HadarsHead, useServerData, useGraphQL, initServerDataCache } from './utils/Head';
+export { lazy } from './utils/lazyModules';
 export { HadarsImage } from './components/Image';
 export type { HadarsImageProps } from './components/Image';
 export {
