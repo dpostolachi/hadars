@@ -1,8 +1,7 @@
 import React from 'react';
 import { hydrateRoot } from 'react-dom/client';
 import type { HadarsEntryModule } from '../types/hadars';
-import { initServerDataCache } from 'hadars';
-import { MODULE_KEY_PREFIX, preloadModules } from './lazyModules';
+import { initServerDataCache, MODULE_KEY_PREFIX, preloadModules } from 'hadars';
 import * as _appMod from '$_MOD_PATH$';
 
 const appMod = _appMod as HadarsEntryModule<{}>;

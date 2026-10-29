@@ -16,6 +16,8 @@ export type {
 } from "./types/hadars";
 export { Head as HadarsHead, useServerData, useGraphQL, initServerDataCache } from './utils/Head';
 export { lazy } from './utils/lazyModules';
+/** @internal used by the generated client entry. */
+export { MODULE_KEY_PREFIX, preloadModules } from './utils/lazyModules';
 export { HadarsImage } from './components/Image';
 export type { HadarsImageProps } from './components/Image';
 export {
