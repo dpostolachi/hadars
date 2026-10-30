@@ -80,6 +80,9 @@ test('deploy command validates its arguments before any provider call', async ()
     expect(errors.at(-1)).toContain('--read-provider requires --dry-run');
     expect(await run(['rollback', '--env', 'dev', '--config', 'x.json', '--target-config', zones])).toBe(1);
     expect(errors.at(-1)).toContain('Rollback uses the original');
+    expect(await run(['bunny', dir, '--env', 'dev', '--to', '2', '--target-config', zones])).toBe(1);
+    expect(errors.at(-1)).toContain('--to belongs to hadars deploy rollback');
+    expect(await run(['rollback', '--env', 'dev', '--to', 'abc', '--target-config', zones])).toBe(1);
 });
 
 test('gc protection works from file-store records', async () => {
@@ -88,4 +91,22 @@ test('gc protection works from file-store records', async () => {
     const records = await store.listAll();
     const objects = [{ path: '_builds/aaaaaaaaaaaaaaaa/client/x.js', lastChanged: 0 }, { path: '_builds/bbbbbbbbbbbbbbbb/client/y.js', lastChanged: 0 }];
     expect(gcCandidates(records, [], 'demo', objects, 5, 10_000, 0)).toEqual(['_builds/bbbbbbbbbbbbbbbb/client/y.js']);
+});
+
+test('rollback --to restores a retained earlier revision, not just the previous one', async () => {
+    const f = await splitProvider();
+    const store = fileStore(state());
+    const deploy = () => deployEnvironment({ store, project: 'demo', environment: 'dev', target: f.target, artifact: f.fixture.artifact, config: f.config, probeTimeoutSeconds: 5, out: () => {} });
+    const back = (rollbackTo: number) => deployEnvironment({ store, project: 'demo', environment: 'dev', target: f.target, rollback: true, rollbackTo, probeTimeoutSeconds: 5, out: () => {} });
+    await deploy(); await deploy(); await deploy();
+    expect((await store.list('dev')).map(r => [r.revision, r.status])).toEqual([[3, 'live'], [2, 'superseded'], [1, 'superseded']]);
+
+    await expect(back(3)).rejects.toThrow('Revision 3 is already live');
+    await expect(back(9)).rejects.toThrow('Revision 9 cannot be restored in dev; retained revisions: 2, 1');
+
+    await back(1);
+    const after = await store.list('dev');
+    expect(after.find(r => r.status === 'live')!.revision).toBe(1);
+    expect(after.find(r => r.revision === 3)!.status).toBe('rolled_back');
+    expect(after.find(r => r.revision === 2)!.status).toBe('superseded');
 });

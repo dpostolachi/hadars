@@ -11,6 +11,7 @@ hadars deploy setup --project shop --env staging      # creates the storage zone
 hadars deploy bunny out --env staging --dry-run       # offline plan: files, sizes, runtime config, routing rules
 hadars deploy bunny out --env staging                 # stage, verify, activate
 hadars deploy rollback --env staging                  # back to the previous live deployment
+hadars deploy rollback --env staging --to 41     # back to a retained earlier revision
 hadars deploy gc --env staging --delete               # remove static files no retained deployment references
 ```
 

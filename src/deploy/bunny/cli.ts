@@ -7,7 +7,7 @@ export const DEPLOY_USAGE = `Usage:
   hadars deploy setup --project <name> --env <env> [--target-config deploy.target.json] [--fix-public-zone-settings]
   hadars deploy bunny <artifact-dir> --env <env> [--project <name>] [--revision N] [--config file] [--var NAME=VALUE]
         [--dry-run [--read-provider]] [--allow-unbound-output] [--no-auto-rollback] [--probe-timeout-seconds N] [--keep-failed-stage]
-  hadars deploy rollback --env <env> [--project <name>]
+  hadars deploy rollback --env <env> [--to <revision>] [--project <name>]
   hadars deploy gc [--env <env>] [--keep N] [--grace-seconds N] [--dry-run|--delete]
 Common: [--target-config deploy.target.json] [--state .hadars/deploy-state.json]
 Credentials come from the process environment: BUNNY_API_KEY (management) and BUNNY_STORAGE_KEY (storage zone).`;
@@ -56,7 +56,8 @@ export async function deployCommand(args: string[], io: { env?: Record<string, s
         if (!environment || (!rollback && (!directory || directory.startsWith('--')))) throw new Error(rollback ? 'Use hadars deploy rollback --env <env>' : 'Use hadars deploy bunny <artifact-dir> --env <env>');
         const dryRun = args.includes('--dry-run'), readProvider = args.includes('--read-provider');
         if (readProvider && !dryRun) throw new Error('--read-provider requires --dry-run');
-        const revisionText = flag(args, '--revision');
+        const revisionText = flag(args, '--revision'), toText = flag(args, '--to');
+        if (toText !== undefined && !rollback) throw new Error('--to belongs to hadars deploy rollback');
         const probeText = flag(args, '--probe-timeout-seconds') ?? env.HADARS_DEPLOY_PROBE_TIMEOUT ?? '120';
         const probe = integer(probeText, 'Probe timeout', 1);
         if (probe > 600) throw new Error('Probe timeout must be an integer from 1 to 600 seconds');
@@ -67,7 +68,7 @@ export async function deployCommand(args: string[], io: { env?: Record<string, s
         const target = projectBunny(zones, project, environment, env, dryRun && !readProvider, send, readProvider);
         io.configureTarget?.(target);
         await deployEnvironment({
-            store, project, environment, target, config, rollback, dryRun, readProvider, out,
+            store, project, environment, target, config, rollback, rollbackTo: toText === undefined ? undefined : integer(toText, '--to', 1), dryRun, readProvider, out,
             artifact: directory ? await loadArtifact(directory) : undefined,
             revision: revisionText === undefined ? undefined : integer(revisionText, '--revision', 1),
             probeTimeoutSeconds: probe, keepFailedStage: args.includes('--keep-failed-stage'),

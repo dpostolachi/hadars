@@ -15,6 +15,8 @@ export interface DeployOptions {
     /** Defaults to the next revision of the environment. Repeating a live revision re-checks it instead of redeploying. */
     revision?: number;
     rollback?: boolean;
+    /** Roll back to this retained revision instead of the previous live one. */
+    rollbackTo?: number;
     dryRun?: boolean;
     /** With dryRun: read provider state (GET only) so rule capacity and hostnames are real. */
     readProvider?: boolean;
@@ -58,7 +60,13 @@ const baseName = (r: DeploymentRecord) => r.staged!.split ? r.staged!.name.slice
 async function runDeploy(o: DeployOptions) {
     let records = await o.store.list(o.environment);
     let live = records.find(d => d.status === 'live');
-    const previous = o.rollback ? records.find(d => d.id === live?.previousDeploymentId) : undefined;
+    const restorable = (d: DeploymentRecord) => !!d.staged && d.target === 'bunny' && ['superseded', 'rolled_back'].includes(d.status);
+    const previous = !o.rollback ? undefined : o.rollbackTo === undefined ? records.find(d => d.id === live?.previousDeploymentId) : records.find(d => d.revision === o.rollbackTo && restorable(d));
+    if (o.rollback && o.rollbackTo !== undefined && live?.revision === o.rollbackTo) throw new Error(`Revision ${o.rollbackTo} is already live in ${o.environment}`);
+    if (o.rollback && o.rollbackTo !== undefined && !previous) {
+        const available = [...new Set(records.filter(restorable).map(d => d.revision))].sort((a, b) => b - a);
+        throw new Error(`Revision ${o.rollbackTo} cannot be restored in ${o.environment}; retained revisions: ${available.length ? available.join(', ') : 'none'}`);
+    }
     if (o.rollback && (!previous?.staged || previous.target !== 'bunny')) throw new Error('No previous live deployment is available for rollback');
     const revision = o.rollback ? previous!.revision : o.revision ?? Math.max(0, ...records.map(r => r.revision)) + 1;
     let plan: Plan | undefined;
