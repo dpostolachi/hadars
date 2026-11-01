@@ -100,6 +100,36 @@ test('failure before and after every live write/readback/purge restores prior st
     }
 });
 
+test('units stage together, yet journal writes never go backwards and a failed unit leaves every created script recorded', async () => {
+    const ok = await splitProvider();
+    const writes: number[] = [];
+    let running = 0, overlap = 0;
+    ok.target.beginAttempt();
+    ok.target.onAttempt = async attempt => {
+        running++; overlap = Math.max(overlap, running);
+        await new Promise(r => setTimeout(r, Math.random() * 5));
+        writes.push(attempt.resources.length);
+        running--;
+    };
+    const staged = await ok.target.stage(ok.plan(), ok.config);
+    expect(overlap).toBe(1);
+    expect(writes).toEqual([...writes].sort((a, b) => a - b));
+    expect(writes.at(-1)).toBe(staged.split!.groups.length);
+    expect(ok.target.attempt.resources.map(r => r.name).sort()).toEqual(staged.split!.groups.map(g => g.name).sort());
+
+    const sample = await splitProvider(); sample.mock.armFailure(-1);
+    await sample.target.stage(sample.plan(), sample.config);
+    const count = sample.mock.operationCount;
+    for (let step = 1; step <= count; step++) {
+        const f = await splitProvider(); f.mock.armFailure(step, false);
+        const last: number[] = [0];
+        f.target.beginAttempt();
+        f.target.onAttempt = async attempt => { last[0] = attempt.resources.length; };
+        await expect(f.target.stage(f.plan(), f.config)).rejects.toThrow();
+        // Whatever was created before the failure is in the last journal write, and nothing was written after the stage ended.
+        expect(last[0]).toBe(f.target.attempt.resources.length);
+    }
+});
 test('stage failures at every provider/storage/config/publish step never alter live state', async () => {
     const sample = await splitProvider(); sample.mock.armFailure(-1);
     await sample.target.stage(sample.plan(), sample.config);

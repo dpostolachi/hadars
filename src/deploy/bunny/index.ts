@@ -62,8 +62,17 @@ export class BunnyTarget implements DeployTarget {
     probeTimeoutSeconds = 120;
     attempt: StageAttempt = { resources: [] };
     onAttempt?: (attempt: StageAttempt) => Promise<void>;
-    beginAttempt() { this.attempt = { resources: [] }; }
-    private async journal() { await this.onAttempt?.(structuredClone(this.attempt)); }
+    beginAttempt() { this.attempt = { resources: [] }; this.journalChain = Promise.resolve(); }
+    private journalChain: Promise<void> = Promise.resolve();
+    /**
+     * Writes happen one at a time and each carries the attempt as it is when the write starts, so concurrent stages can never
+     * leave an older snapshot behind a newer one. When this resolves, a snapshot that includes the caller's change is recorded.
+     */
+    private journal() {
+        const write = this.journalChain.then(() => this.onAttempt?.(structuredClone(this.attempt)));
+        this.journalChain = write.catch(() => {});
+        return write;
+    }
     constructor(private readonly config: BunnyConfig, private readonly send: typeof fetch = fetch, client?: BunnyClient, private readonly pause: (ms?: number) => Promise<void> = (ms = 1000) => new Promise(resolve => setTimeout(resolve, ms))) {
         this.client = client ?? new Bunny(config.key, send);
         if (!/^\d+$/.test(config.publicZoneId) || !/^[a-z0-9-]+$/.test(config.storageZone)) throw new Error('Invalid Bunny zone configuration');
@@ -278,11 +287,13 @@ export class BunnyTarget implements DeployTarget {
         receipt(m, plan.project, plan.environment, plan.configSummary!.digest, placeholders, zone);
 
         // Assets finish before any immutable script exists: a collision or corrupt upload must leave nothing to clean up.
-        const assets = await this.uploadAssets(artifact), groups = [];
-        for (const [i, g] of m.groups.entries()) {
-            const unit = await this.stageScript(`${plan.name}-${g.name}`, plan.revision, codes[i]!, config, reuseOnly);
-            groups.push({ group: g.name, scriptId: unit.scriptId, hostname: unit.hostname, name: unit.name });
-        }
+        const assets = await this.uploadAssets(artifact);
+        // The units are independent scripts, so they are staged together. Every one runs to its end before a failure is reported
+        // (the first in group order), so cleanup sees every script this attempt created.
+        const settled = await Promise.allSettled(m.groups.map((g, i) => this.stageScript(`${plan.name}-${g.name}`, plan.revision, codes[i]!, config, reuseOnly)));
+        const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+        if (failed) throw failed.reason;
+        const groups = m.groups.map((g, i) => { const unit = (settled[i] as PromiseFulfilledResult<StagedRevision>).value; return { group: g.name, scriptId: unit.scriptId, hostname: unit.hostname, name: unit.name }; });
         const split = receipt(m, plan.project, plan.environment, plan.configSummary!.digest, groups, zone);
         const main = groups.find(g => g.group === m.defaultGroup)!;
         return { scriptId: main.scriptId, hostname: main.hostname, name: main.name, revision: plan.revision, split, assets };
