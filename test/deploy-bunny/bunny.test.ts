@@ -82,6 +82,35 @@ test('assets upload and read back; collisions and corrupt uploads refuse staging
     }
 });
 
+test('static objects transfer concurrently, and a failure names the first bad file in order', async () => {
+    const files = Array.from({ length: 40 }, (_, i) => ({ path: `a${String(i).padStart(2, '0')}.abcdef12.js`, bytes: new TextEncoder().encode(`asset ${i}`) }));
+    for (const bad of [undefined, 'a07.abcdef12.js', 'a31.abcdef12.js']) {
+        const assets = new Map<string, Uint8Array>();
+        let inFlight = 0, peak = 0, published = false;
+        const send = (async (url: any, init: any) => {
+            const path = new URL(String(url)).pathname.split('/').at(-1)!;
+            inFlight++; peak = Math.max(peak, inFlight);
+            await new Promise(r => setTimeout(r, 2));
+            inFlight--;
+            if ((init?.method ?? 'GET') === 'PUT') { assets.set(path, path === bad || path === 'a31.abcdef12.js' && bad === 'a07.abcdef12.js' ? new Uint8Array([1]) : new Uint8Array(init.body)); return new Response(); }
+            return assets.has(path) ? new Response(new Uint8Array(assets.get(path)!)) : new Response(null, { status: 404 });
+        }) as typeof fetch;
+        const client = { async request(method: string, path: string) { if (path === '/pullzone') return []; return path === '/compute/script' && method === 'GET' ? [] : path === '/compute/script' ? { Id: 9 } : { DefaultHostname: 'demo.bunny.run' }; }, async publish() { published = true; } };
+        const target = new BunnyTarget({ key: 'fake', publicZoneId: '99', storageZone: 'assets', storageKey: 'fake' }, send, client);
+        const input = revision(); input.artifact.files.push(...files);
+        if (!bad) {
+            const staged = await target.stage(target.plan(input));
+            expect(staged.assets).toEqual({ reused: 0, uploaded: 40 });
+            expect(assets.size).toBe(40);
+            expect(peak).toBeGreaterThan(1);
+            expect(peak).toBeLessThanOrEqual(12);
+        } else {
+            await expect(target.stage(target.plan(input))).rejects.toThrow(`Asset verification failed: ${bad}`);
+            expect(published).toBe(false);
+        }
+    }
+});
+
 test('retention owns config variants, preserves old live/previous, leaves lookalikes and foreign scripts', async () => {
     const { mockProvider } = await import('./helpers/mockProvider');
     const mock = mockProvider();

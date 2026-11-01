@@ -50,6 +50,9 @@ export interface BunnyConfig { key: string; publicZoneId: string; storageZone: s
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const safePath = (path: string) => path && !path.includes('\\') && !path.split('/').some(p => !p || p === '.' || p === '..');
 
+/** Parallel static-object transfers during staging. */
+const ASSET_CONCURRENCY = 12;
+
 export class BunnyTarget implements DeployTarget {
     readonly supportsRuntimeConfig = true;
     readonly maxArtifactBytes = 10_000_000;
@@ -119,7 +122,8 @@ export class BunnyTarget implements DeployTarget {
     }
     private async uploadAssets(artifact: Artifact) {
         const assets = { reused: 0, uploaded: 0 };
-        for (const file of staticLayout(artifact).files) {
+        const files = staticLayout(artifact).files;
+        const one = async (file: (typeof files)[number]) => {
             // Never overwrite an asset still referenced by a live or rollback script.
             const url = `https://storage.bunnycdn.com/${this.config.storageZone}/${file.path.split('/').map(encodeURIComponent).join('/')}`;
             const old = await this.send(url, { headers: { AccessKey: this.config.storageKey }, redirect: 'error', signal: AbortSignal.timeout(60_000) });
@@ -132,7 +136,19 @@ export class BunnyTarget implements DeployTarget {
             } else throw new Error(`Asset lookup failed (${old.status})`);
             const read = await storage('GET', this.config.storageZone, this.config.storageKey, file.path, undefined, this.send);
             if (hash(new Uint8Array(await read.arrayBuffer())) !== hash(file.bytes)) throw new Error(`Asset verification failed: ${file.path}`);
-        }
+        };
+        // Files are independent (each path is its own object), so they share a bounded pool. Every worker stops at its first failure,
+        // and the first error in file order is the one reported, so a failing deploy names the same file as a sequential one would.
+        const errors: Array<{ index: number; error: unknown }> = [];
+        let next = 0;
+        const worker = async () => {
+            while (!errors.length && next < files.length) {
+                const index = next++;
+                try { await one(files[index]!); } catch (error) { errors.push({ index, error }); }
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(ASSET_CONCURRENCY, files.length) }, worker));
+        if (errors.length) throw errors.sort((a, b) => a.index - b.index)[0]!.error;
         return assets;
     }
     private async stageScript(name: string, revision: number, code: string, config?: RuntimeConfig, reuseOnly = false): Promise<StagedRevision> {
@@ -261,6 +277,7 @@ export class BunnyTarget implements DeployTarget {
         const placeholders = m.groups.map(g => ({ group: g.name, scriptId: '0', hostname: 'plan.bunny.run', name: `${plan.name}-${g.name}` }));
         receipt(m, plan.project, plan.environment, plan.configSummary!.digest, placeholders, zone);
 
+        // Assets finish before any immutable script exists: a collision or corrupt upload must leave nothing to clean up.
         const assets = await this.uploadAssets(artifact), groups = [];
         for (const [i, g] of m.groups.entries()) {
             const unit = await this.stageScript(`${plan.name}-${g.name}`, plan.revision, codes[i]!, config, reuseOnly);
