@@ -77,7 +77,7 @@ test('assets upload and read back; collisions and corrupt uploads refuse staging
         } else {
             await target.stage(target.plan(input));
             expect(published).toBe(true);
-            expect(operations).toEqual(mode === 'upload' ? ['GET', 'PUT', 'GET'] : ['GET', 'GET']);
+            expect(operations).toEqual(mode === 'upload' ? ['GET', 'PUT', 'GET'] : ['GET']);
         }
     }
 });

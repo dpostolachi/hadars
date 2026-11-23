@@ -119,6 +119,9 @@ test('shared deploy preserves foreign objects, reports reuse/uploads and refuses
     const target = new BunnyTarget({ key: 'mock', storageKey: 'mock', storageZone: 'demo', publicZoneId: '1', sharedStorage: true }, mock.send, mock.client);
     const staged = await target.stage(target.plan(input));
     expect(staged.assets).toEqual({ reused: 1, uploaded: 1 });
+    // A reused object costs one lookup (the bytes are compared there); only a new object is read back after its write.
+    expect(mock.storageRequests.filter(r => r.method === 'GET' && r.url.endsWith('/app.abcdef12.js'))).toHaveLength(1);
+    expect(mock.storageRequests.filter(r => r.method === 'GET' && r.url.endsWith('/new.abcdef12.js'))).toHaveLength(2);
     for (const path of foreign) expect(mock.objects.get(`/demo/${path}`)).toEqual(bytes('foreign'));
     expect(mock.storageRequests.some(r => r.method === 'DELETE')).toBe(false);
     input.revision = 2; input.artifact.files[1].bytes = bytes('different');

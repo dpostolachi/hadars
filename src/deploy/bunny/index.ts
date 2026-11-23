@@ -137,12 +137,15 @@ export class BunnyTarget implements DeployTarget {
             const url = `https://storage.bunnycdn.com/${this.config.storageZone}/${file.path.split('/').map(encodeURIComponent).join('/')}`;
             const old = await this.send(url, { headers: { AccessKey: this.config.storageKey }, redirect: 'error', signal: AbortSignal.timeout(60_000) });
             if (old.ok) {
+                // The lookup already downloaded the stored bytes and matched them; a second read would repeat that check.
                 if (hash(new Uint8Array(await old.arrayBuffer())) !== hash(file.bytes)) throw new Error(`Static asset collision: ${file.path}; export content-addressed assets`);
                 assets.reused++;
-            } else if (old.status === 404) {
-                await storage('PUT', this.config.storageZone, this.config.storageKey, file.path, file.bytes, this.send);
-                assets.uploaded++;
-            } else throw new Error(`Asset lookup failed (${old.status})`);
+                return;
+            }
+            if (old.status !== 404) throw new Error(`Asset lookup failed (${old.status})`);
+            await storage('PUT', this.config.storageZone, this.config.storageKey, file.path, file.bytes, this.send);
+            assets.uploaded++;
+            // Only a new object needs reading back: the storage write itself is what is verified here.
             const read = await storage('GET', this.config.storageZone, this.config.storageKey, file.path, undefined, this.send);
             if (hash(new Uint8Array(await read.arrayBuffer())) !== hash(file.bytes)) throw new Error(`Asset verification failed: ${file.path}`);
         };
