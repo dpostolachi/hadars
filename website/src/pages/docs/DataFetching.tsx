@@ -180,7 +180,7 @@ const WeatherWidget: React.FC = () => {
         <section className="mb-10">
             <h2 className="text-xl font-semibold mb-3 text-gradient-soft">Live demo</h2>
             <p className="text-muted-foreground mb-4">Three independent components each calling <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code>:</p>
-            <div className="rounded-xl divide-y overflow-hidden" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.2)", boxShadow: "0 0 24px oklch(0.68 0.28 285 / 0.06)" }}>
+            <div className="rounded-xl divide-y overflow-hidden" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)", boxShadow: "0 8px 24px #0002" }}>
                 <React.Suspense fallback={
                     <div className="flex items-center gap-4 px-4 py-3">
                         <span className="text-sm text-muted-foreground w-48 shrink-0">Loading…</span>
@@ -197,8 +197,6 @@ const WeatherWidget: React.FC = () => {
                 see the batching behaviour — four keys resolved in a single request during client-side navigation.
             </p>
         </section>
-
-        <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: "1px solid oklch(0.68 0.28 285 / 0.15)" }}><p>hadars — MIT licence</p></footer>
     </>
 );
 

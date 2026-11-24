@@ -54,7 +54,7 @@ const I18nDemo: React.FC = () => (
             is instant, served from the in-memory cache.
         </p>
 
-        <div className="rounded-xl border p-6 max-w-lg" style={{ background: 'oklch(0.08 0.025 280)' }}>
+        <div className="rounded-xl border p-6 max-w-lg" style={{ background: 'var(--docs-panel)' }}>
             <LocaleProvider initialLocale="en" locales={LOCALES} defaultLocale="en">
                 <Greeting />
                 <LanguageSwitcher />

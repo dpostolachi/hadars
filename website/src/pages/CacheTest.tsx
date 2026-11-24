@@ -29,7 +29,7 @@ const CacheTest: React.FC<{ serverTime: string }> = ({ serverTime }) => {
             </p>
 
             <section className="mb-10">
-                <div className="rounded-xl divide-y overflow-hidden" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.2)", boxShadow: "0 0 24px oklch(0.68 0.28 285 / 0.06)" }}>
+                <div className="rounded-xl divide-y overflow-hidden" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)", boxShadow: "0 8px 24px #0002" }}>
                     <div className="flex items-center gap-4 px-4 py-3">
                         <span className="text-sm text-muted-foreground w-56 shrink-0">SSR timestamp <em>(frozen when cached)</em></span>
                         <span className="text-sm font-mono">{serverTime}</span>
@@ -48,8 +48,6 @@ const CacheTest: React.FC<{ serverTime: string }> = ({ serverTime }) => {
                     </div>
                 </div>
             </section>
-
-            <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: '1px solid oklch(0.68 0.28 285 / 0.15)' }}><p>hadars — MIT licence</p></footer>
         </>
     );
 };

@@ -223,11 +223,11 @@ export default {
             </p>
             <div
                 className="rounded-xl overflow-hidden divide-y mb-6"
-                style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
             >
                 <div
                     className="grid grid-cols-2 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{ background: 'oklch(0.12 0.04 280)', color: 'oklch(0.60 0.08 285)' }}
+                    style={{ background: 'var(--docs-panel-raised)', color: 'var(--docs-muted)' }}
                 >
                     <span>Query</span><span>Returns</span>
                 </div>
@@ -390,11 +390,11 @@ export default config;
             </p>
             <div
                 className="rounded-xl overflow-hidden divide-y mb-4"
-                style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
             >
                 <div
                     className="grid grid-cols-2 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{ background: 'oklch(0.12 0.04 280)', color: 'oklch(0.60 0.08 285)' }}
+                    style={{ background: 'var(--docs-panel-raised)', color: 'var(--docs-muted)' }}
                 >
                     <span>Property</span><span>Notes</span>
                 </div>
@@ -450,10 +450,6 @@ export default {
 } satisfies HadarsOptions;
             `}</Code>
         </section>
-
-        <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: "1px solid oklch(0.68 0.28 285 / 0.15)" }}>
-            <p>hadars — MIT licence</p>
-        </footer>
     </>
 );
 

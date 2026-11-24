@@ -30,11 +30,11 @@ const BunnyDeployment: React.FC = () => (
             </p>
             <div
                 className="rounded-xl overflow-hidden divide-y mb-4"
-                style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
             >
                 <div
                     className="grid grid-cols-2 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{ background: 'oklch(0.12 0.04 280)', color: 'oklch(0.60 0.08 285)' }}
+                    style={{ background: 'var(--docs-panel-raised)', color: 'var(--docs-muted)' }}
                 >
                     <span>Responsibility</span><span>Handled by</span>
                 </div>
@@ -171,11 +171,11 @@ BunnySDK.net.http.serve(createBunnyHandler(config, { ssrModule, outHtml }));
             `}</Code>
             <div
                 className="rounded-xl overflow-hidden divide-y mt-4"
-                style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
             >
                 <div
                     className="grid grid-cols-3 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{ background: 'oklch(0.12 0.04 280)', color: 'oklch(0.60 0.08 285)' }}
+                    style={{ background: 'var(--docs-panel-raised)', color: 'var(--docs-muted)' }}
                 >
                     <span>Parameter</span><span>Type</span><span>Description</span>
                 </div>
@@ -211,7 +211,7 @@ hadars export bunny && deno run -A bunny.mjs
             `}</Code>
         </section>
 
-        <div style={{ borderTop: '1px solid oklch(0.68 0.28 285 / 0.15)', paddingTop: '2rem', marginTop: '2rem' }}>
+        <div style={{ borderTop: '1px solid var(--docs-border)', paddingTop: '2rem', marginTop: '2rem' }}>
             <p className="text-sm text-muted-foreground">
                 Also deploying to AWS or Cloudflare?{' '}
                 <a href="/docs/deployment" className="text-primary underline underline-offset-2">Lambda / production server</a>

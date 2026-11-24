@@ -33,19 +33,19 @@ const SlimReact: React.FC = () => (
         <section className="mb-10">
             <h2 className="text-xl font-semibold mb-3 text-gradient-soft">How it works</h2>
             <div className="flex flex-col sm:flex-row items-stretch gap-2 mb-4">
-                <div className="flex-1 rounded-xl p-4 flex flex-col gap-1" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.15)" }}>
+                <div className="flex-1 rounded-xl p-4 flex flex-col gap-1" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)" }}>
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/20 text-primary text-xs font-bold mb-1">1</span>
                     <strong className="text-sm">render(element)</strong>
                     <span className="text-xs text-muted-foreground">Walks the React element tree recursively, calling function components and resolving JSX.</span>
                 </div>
                 <div className="text-muted-foreground flex items-center justify-center text-xl px-1">→</div>
-                <div className="flex-1 rounded-xl p-4 flex flex-col gap-1" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.15)" }}>
+                <div className="flex-1 rounded-xl p-4 flex flex-col gap-1" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)" }}>
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/20 text-primary text-xs font-bold mb-1">2</span>
                     <strong className="text-sm">Suspense loop</strong>
                     <span className="text-xs text-muted-foreground">Thrown Promises are caught, awaited, and the component is retried. Repeats until all data resolves.</span>
                 </div>
                 <div className="text-muted-foreground flex items-center justify-center text-xl px-1">→</div>
-                <div className="flex-1 rounded-xl p-4 flex flex-col gap-1" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.15)" }}>
+                <div className="flex-1 rounded-xl p-4 flex flex-col gap-1" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)" }}>
                     <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary/20 text-primary text-xs font-bold mb-1">3</span>
                     <strong className="text-sm">HTML string</strong>
                     <span className="text-xs text-muted-foreground">Returns the fully resolved HTML string, compatible with React's <code className="text-xs bg-muted px-1 rounded">hydrateRoot</code>.</span>
@@ -55,8 +55,8 @@ const SlimReact: React.FC = () => (
 
         <section className="mb-10">
             <h2 className="text-xl font-semibold mb-3 text-gradient-soft">Supported React features</h2>
-            <div className="rounded-xl overflow-hidden divide-y" style={{ background: "oklch(0.08 0.025 280)", border: "1px solid oklch(0.68 0.28 285 / 0.15)", boxShadow: "0 0 20px oklch(0.68 0.28 285 / 0.04)" }}>
-                <div className="grid grid-cols-3 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider" style={{ background: "oklch(0.12 0.04 280)", color: "oklch(0.60 0.08 285)" }}>
+            <div className="rounded-xl overflow-hidden divide-y" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)", boxShadow: "0 8px 24px #0002" }}>
+                <div className="grid grid-cols-3 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider" style={{ background: "var(--docs-panel-raised)", color: "var(--docs-muted)" }}>
                     <span>Feature</span><span>Status</span><span>Notes</span>
                 </div>
                 <div className="grid grid-cols-3 gap-4 px-4 py-3 text-sm">
@@ -137,8 +137,6 @@ const FormField = ({ label }) => {
                 the client hydrates without a flash of unstyled content.
             </p>
         </section>
-
-        <footer className="mt-16 pt-8 text-center text-sm text-muted-foreground" style={{ borderTop: "1px solid oklch(0.68 0.28 285 / 0.15)" }}><p>hadars — MIT licence</p></footer>
     </>
 );
 

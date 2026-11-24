@@ -17,7 +17,7 @@ const SideBySide: React.FC<{
             <div>
                 <div
                     className="rounded-t-md px-3 py-1.5 text-xs font-semibold flex items-center gap-2"
-                    style={{ background: 'oklch(0.12 0.04 280)', borderBottom: '1px solid oklch(0.68 0.28 285 / 0.1)' }}
+                    style={{ background: 'var(--docs-panel-raised)', borderBottom: '1px solid oklch(0.68 0.28 285 / 0.1)' }}
                 >
                     <span
                         className="inline-block w-2 h-2 rounded-full"
@@ -32,7 +32,7 @@ const SideBySide: React.FC<{
             <div>
                 <div
                     className="rounded-t-md px-3 py-1.5 text-xs font-semibold flex items-center gap-2"
-                    style={{ background: 'oklch(0.12 0.04 280)', borderBottom: '1px solid oklch(0.68 0.28 285 / 0.1)' }}
+                    style={{ background: 'var(--docs-panel-raised)', borderBottom: '1px solid oklch(0.68 0.28 285 / 0.1)' }}
                 >
                     <span
                         className="inline-block w-2 h-2 rounded-full"
@@ -108,11 +108,11 @@ const FromNextjs: React.FC = () => (
             </p>
             <div
                 className="rounded-xl overflow-hidden divide-y"
-                style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
             >
                 <div
                     className="grid grid-cols-3 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{ background: 'oklch(0.12 0.04 280)', color: 'oklch(0.60 0.08 285)' }}
+                    style={{ background: 'var(--docs-panel-raised)', color: 'var(--docs-muted)' }}
                 >
                     <span>Aspect</span><span>Next.js</span><span>hadars</span>
                 </div>
@@ -477,11 +477,11 @@ const HeavyChart = React.lazy(
             </p>
             <div
                 className="rounded-xl overflow-hidden divide-y"
-                style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
             >
                 <div
                     className="grid grid-cols-2 gap-4 px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                    style={{ background: 'oklch(0.12 0.04 280)', color: 'oklch(0.60 0.08 285)' }}
+                    style={{ background: 'var(--docs-panel-raised)', color: 'var(--docs-muted)' }}
                 >
                     <span>Next.js feature</span><span>hadars equivalent / alternative</span>
                 </div>
@@ -519,7 +519,7 @@ const HeavyChart = React.lazy(
                     <div
                         key={title}
                         className="rounded-xl p-4"
-                        style={{ background: 'oklch(0.08 0.025 280)', border: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+                        style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)' }}
                     >
                         <p className="text-sm font-semibold text-gradient-soft mb-1">{title}</p>
                         <p className="text-xs text-muted-foreground leading-relaxed">{desc}</p>
@@ -530,7 +530,7 @@ const HeavyChart = React.lazy(
 
         <footer
             className="mt-16 pt-8 text-center text-sm text-muted-foreground"
-            style={{ borderTop: '1px solid oklch(0.68 0.28 285 / 0.15)' }}
+            style={{ borderTop: '1px solid var(--docs-border)' }}
         >
             <p>hadars — MIT licence</p>
         </footer>
