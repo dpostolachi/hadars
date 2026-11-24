@@ -104,6 +104,8 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         window.scrollTo(0, 0);
     }, [location.pathname]);
 
+    if (location.pathname === '/') return <>{children}</>;
+
     return (
         <div className="flex min-h-screen bg-background text-foreground" style={{ position: 'relative' }}>
             <HadarsHead>

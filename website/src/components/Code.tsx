@@ -4,8 +4,10 @@ import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-jsx';
 import 'prismjs/components/prism-tsx';
 import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-toml';
+import 'prismjs/components/prism-graphql';
 
-type CodeLang = 'tsx' | 'typescript' | 'bash';
+type CodeLang = 'tsx' | 'typescript' | 'bash' | 'toml' | 'graphql';
 
 const Code: React.FC<{ children: string; lang?: CodeLang }> = ({ children, lang = 'tsx' }) => {
     const grammar = (Prism.languages[lang] ?? Prism.languages.plaintext)!;

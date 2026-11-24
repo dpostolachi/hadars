@@ -1,0 +1,27 @@
+PROVIDER MARKS
+
+AWS Lambda: official AWS Architecture Icons, July 2026 release.
+https://aws.amazon.com/architecture/icons/
+Archive: https://d1.awsstatic.com/onedam/marketing-channels/website/public/shared/architecture-icon-release/Icon-package_07312026.5846e92413caa21490223536cc97f1269e44fa92.zip
+File: Architecture-Service-Icons_07312026/Arch_Compute/64/Arch_AWS-Lambda_64.svg
+
+Cloudflare Workers: official productWorkers symbol from Cloudflare's website.
+https://workers.cloudflare.com/icons.svg
+Original paths and viewBox; rendered in Cloudflare orange (#F6821F).
+
+Bunny.net: official bunny.net brand logo, including the rabbit and wordmark.
+https://bunny.net/static/bunnynet-dark-d6a41260b1e4b665cb2dc413e3eb84ca.svg
+Displayed unchanged on a white backing to preserve legibility on dark themes.
+
+Provider marks belong to their respective owners and identify deployment
+compatibility. Their inclusion does not indicate endorsement.
+
+INTERFACE ICONS
+
+Remix Icon 4.9.0, original SVG symbols selected into a local sprite.
+https://remixicon.com/
+https://github.com/Remix-Design/RemixIcon
+Source sprite: https://cdn.jsdelivr.net/npm/remixicon@4.9.0/fonts/remixicon.symbol.svg
+License: REMIX-LICENSE.txt
+
+All assets are stored locally; no third-party asset requests are made by the homepage.
