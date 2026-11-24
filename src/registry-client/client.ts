@@ -35,6 +35,8 @@ export function createClient({ registryUrl, token, retryDelaysMs = [500, 1500, 4
                     res = await fetch(`${base}${path}`, {
                         method,
                         headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+                        // The token must never follow a redirect to another host.
+                        redirect: 'error',
                         body: body === undefined ? undefined : JSON.stringify(body),
                     });
                     text = await res.text();

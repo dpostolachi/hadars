@@ -297,7 +297,9 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
  * the key signs exactly that, and the move is applied against the revision the dry run saw.
  */
 async function signedMove(client: Client, team: string, environment: string, path: string, body: Record<string, unknown>, keyFile: string): Promise<any> {
-    const key = JSON.parse(await readFile(keyFile, 'utf8')) as { keyId?: string; privateKey?: string };
+    let key: { keyId?: string; privateKey?: string };
+    try { key = JSON.parse(await readFile(keyFile, 'utf8')); }
+    catch { throw new ApiError('invalid', `${keyFile} is not a readable signing key file.`); }
     if (!key.keyId || !key.privateKey) throw new ApiError('invalid', `${keyFile} is not a signing key file (expected keyId and privateKey).`);
     const proposed = await client.request('POST', path, { ...body, dryRun: true });
     if (!proposed.proposal) throw new ApiError('invalid', 'The registry did not describe the move; it may be older than this client.');

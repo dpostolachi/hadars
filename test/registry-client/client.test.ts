@@ -29,3 +29,12 @@ test('a write is never repeated', async () => {
     await expect(client().request('POST', '/v1/teams/acme/deployments', { id: 'x' })).rejects.toMatchObject({ code: 'unavailable' });
     expect(calls).toEqual(['POST']);
 });
+
+test('a request that the server redirects is refused, so the token never follows it', async () => {
+    const other = Bun.serve({ port: 0, fetch: () => Response.json({ ok: true }) });
+    const registry = Bun.serve({ port: 0, fetch: () => new Response(null, { status: 307, headers: { location: `http://127.0.0.1:${other.port}/v1/whoami` } }) });
+    try {
+        const client = createClient({ registryUrl: `http://127.0.0.1:${registry.port}`, token: 'secret-token', retryDelaysMs: [] });
+        await expect(client.request('GET', '/v1/whoami')).rejects.toThrow();
+    } finally { registry.stop(true); other.stop(true); }
+});

@@ -154,3 +154,9 @@ test('set --sign-key dry-runs the move, then applies it with a signature over th
         mock.stop(true);
     }
 });
+
+test('a signing key file that cannot be read gives a clear error, not a raw parse error', async () => {
+    const bad = join(dir, 'bad.json');
+    await writeFile(bad, 'not json');
+    await expect(registryCommand(['set', 'dev', 'shell@2', '--sign-key', bad], { out: () => {}, err: () => {}, cwd: dir })).rejects.toThrow('not a readable signing key file');
+});
