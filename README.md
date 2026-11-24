@@ -103,6 +103,8 @@ export default App;
 
 ## CLI
 
+Publishing, pulling and moving environments: see [docs/registry-client.md](docs/registry-client.md).
+
 ```bash
 # Scaffold a new project
 hadars new <project-name>
