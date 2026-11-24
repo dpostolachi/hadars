@@ -1,4 +1,5 @@
 import { writeFile, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { generateSigningKey, validateBuild, validateBuildPolicy } from '../registry-protocol';
@@ -10,6 +11,17 @@ import { login } from './login';
 import { pull, outdated } from './pull';
 import { readLock, readTrustedKeys, verifyLockSignature } from './lockfile';
 import { emitDeclarations } from './declarations';
+
+/** Public keys a project trusts, committed with the project: {"<keyId>": "<publicKey>"}. */
+export const TRUST_FILE = 'hadars.trust.json';
+
+/** The trusted keys for this command: --trusted-keys, then HADARS_TRUSTED_KEYS, then the project's trust file. */
+export function trustedKeysPath(args: string[], project: string, env: Record<string, string | undefined> = process.env): string | undefined {
+    const explicit = flag(args, '--trusted-keys') ?? env.HADARS_TRUSTED_KEYS;
+    if (explicit) return explicit;
+    const committed = path.join(project, TRUST_FILE);
+    return existsSync(committed) ? committed : undefined;
+}
 
 /** The hosted registry, used when a project has no lock file and no registry is named. */
 export const DEFAULT_REGISTRY = 'https://registry.hadars.xyz';
@@ -127,8 +139,8 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
     if (command === 'publish' || command === 'types') return publishCommand(args, io, () => resolveRegistry(args, lock));
 
     if (command === 'verify') {
-        const file = flag(args, '--trusted-keys') ?? process.env.HADARS_TRUSTED_KEYS;
-        if (!file) { err('Pass --trusted-keys <file> or set HADARS_TRUSTED_KEYS.'); return 2; }
+        const file = trustedKeysPath(args, project);
+        if (!file) { err(`Pass --trusted-keys <file>, set HADARS_TRUSTED_KEYS, or commit ${TRUST_FILE}.`); return 2; }
         if (!lock) { err('No hadars.lock here; run pull first.'); return 2; }
         // The lock is read from disk; verification needs no network and no registry token.
         out(`Verified: ${lock.channel} at ${lock.snapshotId} (version ${lock.channelVersion}) is signed by ${verifyLockSignature(lock, await readTrustedKeys(file))}.`);
@@ -191,9 +203,9 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
     }
     if (command === 'pull' || command === 'outdated') {
         // Checked before any request, so the token is not sent for a pull that cannot be verified.
-        const trusted = flag(args, '--trusted-keys') ?? process.env.HADARS_TRUSTED_KEYS;
+        const trusted = trustedKeysPath(args, project);
         if (command === 'pull' && !trusted && !args.includes('--allow-unsigned')) {
-            throw new ApiError('invalid', 'pull needs trusted keys: pass --trusted-keys <file> or set HADARS_TRUSTED_KEYS. Use --allow-unsigned only for channels that are not signed.');
+            throw new ApiError('invalid', `pull needs trusted keys: commit ${TRUST_FILE}, pass --trusted-keys <file> or set HADARS_TRUSTED_KEYS. Use --allow-unsigned only for channels that are not signed.`);
         }
         const t = await resolveTeam(client, flag(args, '--team') ?? process.env.HADARS_TEAM ?? lock?.team);
         if (command === 'pull') {

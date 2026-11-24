@@ -1,8 +1,8 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm, stat, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { registryCommand, REGISTRY_COMMANDS, resolveRegistry } from '../../src/registry-client/commands';
+import { registryCommand, REGISTRY_COMMANDS, resolveRegistry, trustedKeysPath, TRUST_FILE } from '../../src/registry-client/commands';
 import { ApiError } from '../../src/registry-client/client';
 
 // A small registry stand-in: records requests and answers the few routes these commands use.
@@ -115,4 +115,14 @@ test('signing keygen and verify do not need a registry', async () => {
     const out = io();
     expect(await registryCommand(['verify', '--trusted-keys', file], { out: () => {}, err: (l) => out.errors.push(l), cwd: dir })).toBe(2);
     expect(out.errors[0]).toContain('run pull first');
+});
+
+test('trusted keys come from the flag, then the environment, then the committed trust file', async () => {
+    const project = join(dir, 'app');
+    await mkdir(project, { recursive: true });
+    expect(trustedKeysPath([], project, {})).toBeUndefined();
+    await writeFile(join(project, TRUST_FILE), '{"sk_test": "pk"}\n');
+    expect(trustedKeysPath([], project, {})).toBe(join(project, TRUST_FILE));
+    expect(trustedKeysPath([], project, { HADARS_TRUSTED_KEYS: '/env/keys.json' })).toBe('/env/keys.json');
+    expect(trustedKeysPath(['--trusted-keys', '/flag/keys.json'], project, { HADARS_TRUSTED_KEYS: '/env/keys.json' })).toBe('/flag/keys.json');
 });
