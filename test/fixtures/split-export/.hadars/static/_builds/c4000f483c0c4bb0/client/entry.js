@@ -1,0 +1,1 @@
+globalThis.adminClient = true;

@@ -1,0 +1,42 @@
+{
+  "kind": "shell",
+  "name": "shell",
+  "runtimeContract": "1",
+  "flavour": "production",
+  "targets": {
+    "client": {
+      "js": [
+        "client/index.js"
+      ],
+      "css": []
+    },
+    "server": {
+      "js": [
+        "server/index.ssr.js"
+      ],
+      "css": []
+    }
+  },
+  "exposes": [],
+  "shared": [],
+  "provides": [],
+  "requires": {},
+  "files": [
+    {
+      "path": "client/index.js",
+      "size": 31,
+      "sha256": "c70088b63f0a16eb439f7bb0546bebabc72b3bc7cb8246de2fa7d0a7e9abd43d"
+    },
+    {
+      "path": "client/out.html",
+      "size": 44,
+      "sha256": "c1500b6e944d0b40eae36000b897e54b85c47d55a4efe853887ef0eabf4e5c27"
+    },
+    {
+      "path": "server/index.ssr.js",
+      "size": 27,
+      "sha256": "0f4cb4d839bac55f41d2555b3166b085a217277cf3e8854182440077fa2f0fd0"
+    }
+  ],
+  "buildId": "e96ba89c588b35a2"
+}

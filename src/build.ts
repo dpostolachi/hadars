@@ -1,3 +1,10 @@
+import { realpathSync } from 'node:fs';
+import { splitGroups, matchGroup } from './composition/split';
+import { readPublicEnv } from './utils/publicEnv';
+import { builtAssetMetadata, relocatePinnedBuilds, runtimeAssetBase, validateAssetBase } from './utils/assetBase';
+import { registerServerModules } from './composition/registerServerModules';
+import { cleanOutput } from './utils/cleanOutput';
+import { resolvePinnedBuilds, servePinnedAsset } from './composition/pinnedBuilds';
 import { createProxyHandler } from "./utils/proxyHandler";
 import { parseRequest } from "./utils/request";
 import { upgradeHandler } from "./utils/upgradeRequest";
@@ -22,6 +29,7 @@ import {
     buildSsrResponse, streamPrebuiltHtml, makePrecontentHtmlGetter,
     type CacheFetchHandler, createRenderCache,
 } from './utils/ssrHandler';
+import { shellDevSnippet } from './composition/shellDev';
 import { runSources } from './source/runner';
 import { buildSchemaExecutor } from './source/inference';
 import { createGraphiqlHandler, GRAPHQL_PATH } from './source/graphiql';
@@ -220,6 +228,9 @@ async function serializeRequest(req: any): Promise<SerializableRequest> {
         search: req.search,
         location: req.location,
         cookies: req.cookies,
+        pinnedBuilds: req.pinnedBuilds,
+        pinnedClients: req.pinnedClients,
+        publicEnv: readPublicEnv(),
     };
 }
 
@@ -285,7 +296,17 @@ const reactDefines = async (): Promise<Record<string, string>> => {
     };
 };
 
+function splitDevRequest(options: HadarsOptions, groups: ReturnType<typeof splitGroups>, builds: Record<string, import('./composition/pinnedTypes').PinnedBuild> | undefined, req: Request): Response | undefined {
+    if (!groups || options.split?.mode !== 'per-module') return;
+    const pathname = new URL(req.url).pathname;
+    console.log(`[split] ${req.method} ${pathname} -> ${matchGroup({ defaultGroup: options.split.defaultGroup, groups }, pathname)}`);
+    if (req.method === 'GET' && pathname === '/__hadars/release') return new Response(JSON.stringify({
+        release: 'dev-all', group: 'dev-all', shell: Object.values(builds ?? {}).find(b => b.kind === 'shell')?.server.dir.split(pathMod.sep).pop() ?? '',
+    }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+}
+
 const validateOptions = (options: HadarsRuntimeOptions) => {
+    if (options.split && !['single', 'per-module'].includes(options.split.mode)) throw new Error('SPLIT_MODE_INVALID: expected single or per-module');
     if (!options.entry) {
         throw new Error("Entry file is required");
     }
@@ -342,6 +363,9 @@ const resolveWorkerCmd = (packageDir: string): string[] => {
 export const dev = async (options: HadarsRuntimeOptions) => {
 
     validateOptions(options);
+    const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
+    const pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, true) : undefined;
+    const split = splitGroups(options.split, pinnedBuilds);
 
     const liveLock = await checkLiveLock(HadarsFolder);
     if (liveLock) {
@@ -352,8 +376,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         process.exit(1);
     }
 
-    // clean .hadars
-    await fs.rm(HadarsFolder, { recursive: true, force: true });
+    await cleanOutput(options);
     await fs.mkdir(SsrImportDir, { recursive: true });
 
     let { port = 9090, baseURL: configuredBaseURL = '' } = options;
@@ -408,6 +431,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         console.error("Failed to read client script from package dist, falling back to src", err);
         throw err;
     }
+    // A shell lets locally run modules hot-update through its refresh runtime.
+    if (options.composition?.role === 'shell') clientScript += shellDevSnippet();
 
     await ensureHadarsTmpDir();
     const tmpFilePath = pathMod.join(HADARS_TMP_DIR, `client-${Date.now()}.tsx`);
@@ -776,10 +801,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             } finally {
                 if (!clientResolved) {
                     clientResolved = true;
-                    resolve();
+                    if (stats.hasErrors()) reject(new Error('[hadars] Initial client compilation failed'));
+                    else resolve();
                 }
             }
         });
+        (clientCompiler as any).hooks.failed.tap('initial-build', reject);
         devServer.start().catch(reject);
     });
 
@@ -842,11 +869,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 }
             }
             if (!gotMarker) {
-                console.warn('SSR worker did not signal initial build completion within timeout');
+                throw new Error('[hadars] Initial SSR compilation failed: worker did not signal completion');
             }
         } catch (err) {
             console.error('Error reading SSR worker output', err);
             stdoutReader = null;
+            throw err;
         }
     })();
 
@@ -855,6 +883,13 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     // port is bound right away. Incoming requests await this promise before
     // processing, so they hold in-flight and all resolve together once ready.
     const readyPromise = Promise.all([clientBuildDone, ssrBuildDone]);
+
+    readyPromise.catch((err) => {
+        console.error('[hadars] Dev startup failed:', err);
+        cleanupChild();
+        cleanupLock();
+        process.exit(1);
+    });
 
     readyPromise.then(async () => {
         // Generate image variants once after the initial build so /_images/ URLs
@@ -950,6 +985,8 @@ export const dev = async (options: HadarsRuntimeOptions) => {
     };
 
     await serve(port, async (req, ctx) => {
+        const probe = splitDevRequest(options, split, pinnedBuilds, req);
+        if (probe) return probe;
         // Hold requests until both builds are ready. Once resolved this is a no-op.
         await readyPromise;
         // Then hold until the client compiler is idle, so the browser never connects
@@ -958,6 +995,12 @@ export const dev = async (options: HadarsRuntimeOptions) => {
         // Stop counting startup recompiles once we begin serving (debug only).
         (globalThis as any).__hadarsMarkPageServed?.();
         const request = parseRequest(req);
+        request.pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, true) : undefined;
+        request.pinnedClients = request.pinnedBuilds ? Object.fromEntries(Object.values(request.pinnedBuilds).filter((b) => b.kind === 'module').map((b) => [b.name, b.client])) : undefined;
+        if (request.pinnedBuilds) {
+            const asset = await servePinnedAsset(req, request.pinnedBuilds);
+            if (asset) return asset;
+        }
         if (handler) {
             const res = await handler(request);
             if (res) return res;
@@ -1012,6 +1055,7 @@ export const dev = async (options: HadarsRuntimeOptions) => {
                 getInitProps,
                 getFinalProps,
             } = cachedSsrModule!;
+            registerServerModules(request.pinnedBuilds);
 
             // Expose the executor globally so useGraphQL() in components can reach it.
             (globalThis as any).__hadarsGraphQL = devStaticCtx?.graphql;
@@ -1057,6 +1101,10 @@ export const dev = async (options: HadarsRuntimeOptions) => {
 
 export const build = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
+    if (options.split?.mode === 'per-module') {
+        const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
+        splitGroups(options.split, pinned ? await resolvePinnedBuilds(pinned) : undefined);
+    }
 
     const liveLock = await checkLiveLock(HadarsFolder);
     if (liveLock) {
@@ -1067,6 +1115,8 @@ export const build = async (options: HadarsRuntimeOptions) => {
         );
         process.exit(1);
     }
+
+    await cleanOutput(options);
 
     const entry = pathMod.resolve(__dirname, options.entry);
 
@@ -1110,7 +1160,14 @@ export const build = async (options: HadarsRuntimeOptions) => {
             mode: 'production',
             swcPlugins: options.swcPlugins,
             define: options.define,
-            moduleRules: options.moduleRules,
+            moduleRules: options.split?.mode === 'per-module' ? [...(options.moduleRules ?? []), {
+                test: /\.[cm]?[jt]sx?$/,
+                enforce: 'pre',
+                // This loader recognizes the framework data runtime, including
+                // its distributed shared chunk, and leaves app sources alone.
+                include: (file: string) => { try { return realpathSync(file).startsWith(packageDir + pathMod.sep); } catch { return false; } },
+                use: [{ loader: pathMod.resolve(packageDir, 'splitClientLoader.cjs') }],
+            }] : options.moduleRules,
             plugins: options.plugins,
             postcssPlugins: options.postcssPlugins,
             optimization: options.optimization,
@@ -1222,6 +1279,9 @@ async function warnLocaleParity(i18n: { defaultLocale: string; localesDir?: stri
 
 export const run = async (options: HadarsRuntimeOptions) => {
     validateOptions(options);
+    const pinned = options.composition?.role === 'shell' ? options.composition.pinned : undefined;
+    const pinnedBuilds = pinned ? await resolvePinnedBuilds(pinned, false) : undefined;
+    const split = splitGroups(options.split, pinnedBuilds);
 
     let { port = 9090, workers = 1 } = options;
     const clustered = isNode && workers > 1;
@@ -1281,9 +1341,10 @@ export const run = async (options: HadarsRuntimeOptions) => {
         console.log(`[hadars] SSR render pool: ${workers} worker threads`);
     }
 
-    const getPrecontentHtml = makePrecontentHtmlGetter(
-        fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8')
-    );
+    const outHtml = await fs.readFile(pathMod.join(__dirname, StaticPath, 'out.html'), 'utf-8');
+    const deploymentBuilds = relocatePinnedBuilds(pinnedBuilds, builtAssetMetadata(outHtml)?.base ?? '',
+        pinnedBuilds ? validateAssetBase(runtimeAssetBase()) : undefined);
+    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(outHtml));
     const projectStaticPath = pathMod.resolve(process.cwd(), 'static');
 
     // Hoist and pre-import the SSR module at startup so the first request does
@@ -1296,6 +1357,12 @@ export const run = async (options: HadarsRuntimeOptions) => {
 
     const runHandler: CacheFetchHandler = async (req, ctx) => {
         const request = parseRequest(req);
+        request.pinnedBuilds = deploymentBuilds;
+        request.pinnedClients = request.pinnedBuilds ? Object.fromEntries(Object.values(request.pinnedBuilds).filter((b) => b.kind === 'module').map((b) => [b.name, b.client])) : undefined;
+        if (request.pinnedBuilds) {
+            const asset = await servePinnedAsset(req, pinnedBuilds!);
+            if (asset) return asset;
+        }
         if (handler) {
             const res = await handler(request);
             if (res) return res;
@@ -1331,6 +1398,7 @@ export const run = async (options: HadarsRuntimeOptions) => {
                 getInitProps,
                 getFinalProps,
             } = await ssrModulePromise;
+            registerServerModules(request.pinnedBuilds);
 
             if (renderPool && request.headers.get('Accept') !== 'application/json') {
                 // Worker runs the full lifecycle — no non-serializable objects cross the thread boundary.
@@ -1372,9 +1440,14 @@ export const run = async (options: HadarsRuntimeOptions) => {
         }
     };
 
+    const cachedHandler = options.cache ? createRenderCache(options.cache, runHandler) : runHandler;
     await serve(
         port,
-        options.cache ? createRenderCache(options.cache, runHandler) : runHandler,
+        async (req, ctx) => {
+            const probe = splitDevRequest(options, split, pinnedBuilds, req);
+            if (probe) return probe;
+            return cachedHandler(req, ctx);
+        },
         options.websocket,
     );
 };

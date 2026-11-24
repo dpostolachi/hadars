@@ -102,6 +102,8 @@ export interface AppUnsuspend {
 }
 
 export interface AppContext {
+    /** @internal Public deployment values for the current render. */
+    publicEnv?: Record<string, string>;
     path?: string;
     head: AppHead;
     /** @internal Framework use only — use the useServerData() hook instead. */
@@ -119,7 +121,52 @@ export type LinkProps = LinkHTMLAttributes<HTMLLinkElement>;
 export type StyleProps = StyleHTMLAttributes<HTMLStyleElement>;
 export type ScriptProps = ScriptHTMLAttributes<HTMLScriptElement>;
 
+/**
+ * Composition role of this project. A `module` is built to be loaded into a
+ * host (see `buildModule` in `hadars/composition/build`); a `shell` is a normal
+ * hadars app that provides React and shared packages to modules and loads them.
+ *
+ * The host provides React and the packages listed in `shared` on
+ * `globalThis.__HADARS_SHARED__` (see `provideShared`); a module never bundles
+ * its own copy.
+ * @experimental
+ */
+export type CompositionOptions =
+    | {
+        role: 'module';
+        /** Explicitly skip server linking; this module renders only in the browser. */
+        clientOnly?: boolean;
+        /** Unique module name; also the key the client bundle registers under. */
+        name: string;
+        /** Namespace name -> source file, relative to the project root. A host reads `module[name].Export`. */
+        exposes: Record<string, string>;
+        /** Shared package version ranges required from the pinned shell. */
+        requires?: Record<string, string>;
+        /**
+         * Extra packages the host provides (React and its JSX runtimes are always
+         * shared). Importing one that the host does not provide fails at load time.
+         */
+        shared?: string[];
+    }
+    | {
+        role: 'shell';
+        /** Consume immutable builds without their source trees. */
+        pinned?: import('../composition/pinnedTypes').PinnedBuildsOptions;
+        name: string;
+        /** Packages this shell provides to modules, beyond React and its JSX runtimes. */
+        shared?: string[];
+    };
+
 export interface HadarsOptions {
+    /**
+     * @experimental Declares this project's role in a composition. Read by `hadars/composition`
+     * tooling and by `hadars dev`/`hadars run` for a shell; the CLI does not build modules yet.
+     */
+    composition?: CompositionOptions;
+    /** Export one server unit per mounted composition module. */
+    split?: import('../composition/split').SplitOptions;
+    /** Module staging/output directories to retain during dev/build cleanup, relative to cwd or absolute. */
+    moduleOutputDirs?: string[];
     port?: number;
     entry: string;
     baseURL?: string;
@@ -313,6 +360,11 @@ export interface HadarsOptions {
      * onError: (err, req) => console.error('[myapp]', req.method, req.url, err)
      */
     onError?: (err: Error, req: Request) => void | Promise<void>;
+    /** Bunny adapter: awaited after every response, including cache hits and SSR error responses.
+     * Return a replacement response or mutate its headers and return nothing.
+     * `startedAt` uses performance.now() and includes handler time.
+     */
+    onResponse?: (response: Response, request: Request, startedAt: number) => Response | void | Promise<Response | void>;
     /**
      * Build-time image variant generation. When set, `hadars build` and
      * `hadars export static` scan the project's `static/` directory and produce
@@ -386,6 +438,10 @@ export type SwcPluginItem =
 export type SwcPluginList = SwcPluginItem[];
 
 export interface HadarsRequest extends Request {
+    /** Public pinned client metadata, available in local and bundled shells. */
+    pinnedClients?: Record<string, import('../composition/pinnedTypes').PinnedBuild['client']>;
+    /** Resolved pinned builds, available in shell getInitProps during dev/run. */
+    pinnedBuilds?: Record<string, import('../composition/pinnedTypes').PinnedBuild>;
     pathname: string;
     search: string;
     location: string;

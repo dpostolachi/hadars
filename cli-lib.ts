@@ -7,6 +7,8 @@ import type { HadarsOptions, HadarsEntryModule } from './src/types/hadars'
 import { renderStaticSite } from './src/static'
 import { runSources } from './src/source/runner'
 import { buildSchemaExecutor, buildSchemaSDL, introspectExecutorSDL } from './src/source/inference'
+import { runtimeConfigPlugin } from './src/utils/exportConfig'
+import { exportScriptOptions } from './src/utils/exportScript'
 import { checkLiveLock, isPidAlive, removeLock } from './src/utils/lock'
 
 const SUPPORTED = ['hadars.config.js', 'hadars.config.mjs', 'hadars.config.cjs', 'hadars.config.ts']
@@ -248,6 +250,19 @@ async function exportStatic(
     console.log(`  npx serve ${outputDir}`)
 }
 
+async function prepareLinkedExport(config: HadarsOptions, cwd: string, subset?: { modules: string[]; onLinkedBytes: (bytes: number) => void }) {
+    const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
+    const file = join(cwd, `.hadars-linked-${Date.now()}.js`);
+    const runtime = resolve(dirname(fileURLToPath(import.meta.url)), 'composition/runtime.js');
+    const { assemblePinnedExport, finalizeExport } = await import('./src/composition/build');
+    const clients = pinned ? await assemblePinnedExport({ ...pinned,
+        lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
+        integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined,
+    }, resolve(cwd, '.hadars/static'), { file, runtime, ...subset }) : undefined;
+    return { clients, file, import: pinned ? `import ${JSON.stringify(file)};` : '',
+        finalize: (entry: string) => { if (pinned) finalizeExport(cwd, entry, resolve(cwd, '.hadars/static')); } };
+}
+
 // ── hadars export cloudflare ─────────────────────────────────────────────────
 
 async function bundleCloudflare(
@@ -271,16 +286,19 @@ async function bundleCloudflare(
         process.exit(1)
     }
 
+    const linked = await prepareLinkedExport(config, cwd);
+
     // Resolve cloudflare.js from the dist/ directory (sibling of cli.js).
     const cloudflareModule = resolve(dirname(fileURLToPath(import.meta.url)), 'cloudflare.js')
     const shimPath = join(cwd, `.hadars-cloudflare-shim-${Date.now()}.ts`)
     const shim = [
+        linked.import,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createCloudflareHandler } from ${JSON.stringify(cloudflareModule)};`,
         `import config from ${JSON.stringify(configPath)};`,
         `export default createCloudflareHandler(config as any, { ssrModule: ssrModule as any, outHtml });`,
-    ].join('\n') + '\n'
+    ].join('\n').replace('outHtml }', `outHtml, pinnedClients: ${JSON.stringify(linked.clients)} }`) + '\n'
     await writeFile(shimPath, shim, 'utf-8')
 
     try {
@@ -301,11 +319,12 @@ async function bundleCloudflare(
             external: ['@rspack/*'],
             // Cloudflare Workers supports the Web Crypto API natively; suppress
             // esbuild's attempt to polyfill node:crypto.
-            define: { 'global': 'globalThis' },
+            define: { 'global': 'globalThis', '__EDGE_RUNTIME__': 'true' },
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — resolved at runtime by Cloudflare's `nodejs_compat` flag.
-            plugins: [nodeBuiltinsExternalPlugin()],
+            plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
+        linked.finalize(outputFile);
         console.log(`Cloudflare Worker bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
         console.log(`  1. Ensure wrangler.toml points to the output file:`)
@@ -319,6 +338,7 @@ async function bundleCloudflare(
         console.log(`     and all other requests to the Worker.`)
         console.log(`  4. Deploy: wrangler deploy`)
     } finally {
+        await unlink(linked.file).catch(() => {})
         await unlink(shimPath).catch(() => {})
     }
 }
@@ -348,6 +368,8 @@ async function bundleLambda(
         process.exit(1)
     }
 
+    const linked = await prepareLinkedExport(config, cwd);
+
     // 3. Write a temporary entry shim that statically imports the SSR module
     //    and the HTML template so esbuild can inline both.
     // Write the shim inside cwd so esbuild's module resolution finds local
@@ -357,6 +379,7 @@ async function bundleLambda(
     const lambdaModule = resolve(dirname(fileURLToPath(import.meta.url)), 'lambda.js')
     const shimPath = join(cwd, `.hadars-lambda-shim-${Date.now()}.ts`)
     const shim = [
+        linked.import,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createLambdaHandler } from ${JSON.stringify(lambdaModule)};`,
@@ -383,7 +406,9 @@ async function bundleLambda(
             // Everything else (React, hadars runtime, etc.) is bundled in to
             // produce a truly self-contained single-file deployment.
             external: ['@rspack/*'],
+            plugins: [runtimeConfigPlugin(configPath)],
         })
+        linked.finalize(outputFile);
         console.log(`Lambda bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
         console.log(`  1. Create a staging directory with just this file:`)
@@ -393,8 +418,51 @@ async function bundleLambda(
         console.log(`  4. Upload .hadars/static/ assets to S3 and serve via CloudFront`)
         console.log(`     (the Lambda handler does not serve static JS/CSS — route those to S3)`)
     } finally {
+        await unlink(linked.file).catch(() => {})
         await unlink(shimPath).catch(() => {})
     }
+}
+
+async function bundleSplit(config: HadarsOptions, configPath: string, cwd: string, emitShell = true): Promise<void> {
+    const started = performance.now();
+    const { resolvePinnedBuilds, splitGroups } = await import('./src/composition/build');
+    const { completeSplitExport } = await import('./src/composition/exportIntegrity');
+    const pinned = config.composition?.role === 'shell' ? config.composition.pinned : undefined;
+    if (!pinned) throw new Error('SPLIT_PINNED_REQUIRED: per-module requires a pinned shell lock');
+    const resolved = { ...pinned, lockFile: resolve(cwd, pinned.lockFile), buildsDir: resolve(cwd, pinned.buildsDir),
+        integrityFile: pinned.integrityFile ? resolve(cwd, pinned.integrityFile) : undefined };
+    const groups = splitGroups(config.split, await resolvePinnedBuilds(resolved))!;
+    const { pinExportShell } = await import('./src/composition/exportShell');
+    const { lock, lockFile } = pinExportShell(cwd, JSON.parse(await readFile(resolved.lockFile, 'utf8')), resolved.buildsDir, emitShell);
+    config = { ...config, composition: { ...config.composition!, role: 'shell', pinned: { ...resolved, lockFile, integrityFile: undefined } } } as HadarsOptions;
+    // A failed re-export must not leave a stale deployable seal or stale units.
+    const { rm } = await import('node:fs/promises');
+    await rm(join(cwd, 'units'), { recursive: true, force: true });
+    await rm(join(cwd, '.hadars/split-manifest.json'), { force: true });
+    const manifest: import('./src/composition/split').SplitManifest = {
+        version: 1, releaseId: '', mode: 'per-module', defaultGroup: (config.split as any).defaultGroup,
+        shell: lock.snapshot.shell, snapshot: lock.snapshotId, probe: { path: '/__hadars/release' },
+        budgets: { unitBytes: config.split?.mode === 'per-module' ? config.split.budgets?.unitBytes ?? 9_000_000 : 9_000_000 }, groups,
+    };
+    const linkedSizes: Record<string, number> = {};
+    const linkedModules: Record<string, unknown> = {};
+    for (const group of groups) {
+        let linkedBytes = 0;
+        group.unit.file = `units/${group.name}/bunny.mjs`;
+        const entry = join(cwd, group.unit.file);
+        await mkdir(dirname(entry), { recursive: true });
+        await bundleBunny(config, configPath, entry, cwd, { modules: group.modules, group: group.name,
+            shell: manifest.shell, onLinkedBytes: bytes => { linkedBytes += bytes; } });
+        linkedSizes[group.name] = linkedBytes;
+        const provenance = JSON.parse(await readFile(join(cwd, '.hadars/static/composition-provenance.json'), 'utf8'));
+        for (const name of group.modules) linkedModules[name] = provenance.modules[name];
+    }
+    const provenanceFile = join(cwd, '.hadars/static/composition-provenance.json');
+    const provenance = JSON.parse(await readFile(provenanceFile, 'utf8'));
+    Object.assign(provenance.modules, linkedModules);
+    await writeFile(provenanceFile, JSON.stringify(provenance, null, 2));
+    completeSplitExport(cwd, manifest, join(cwd, '.hadars/static'), linkedSizes, emitShell);
+    console.log(`Split units bundled and sealed: ${(performance.now() - started).toFixed(0)} ms; release ${manifest.releaseId}`);
 }
 
 // ── hadars export bunny ──────────────────────────────────────────────────────
@@ -404,10 +472,19 @@ async function bundleBunny(
     configPath: string,
     outputFile: string,
     cwd: string,
+    splitUnit?: { modules: string[]; group: string; shell: string; onLinkedBytes: (bytes: number) => void },
+    emitShell = true,
 ): Promise<void> {
-    // 1. Ensure the hadars production build is up to date.
-    console.log('Building hadars project...')
-    await Hadars.build({ ...config, mode: 'production' })
+    // Compile once; group exports reuse both compiled graphs.
+    if (!splitUnit) {
+        console.log('Building hadars project...')
+        const started = performance.now();
+        await Hadars.build({ ...config, mode: 'production' });
+        if (config.split?.mode === 'per-module') {
+            console.log(`Shared shell build: ${(performance.now() - started).toFixed(0)} ms (one compilation for all groups)`);
+            return bundleSplit(config, configPath, cwd, emitShell);
+        }
+    }
 
     // 2. Resolve paths.
     const ssrBundle = resolve(cwd, '.hadars', 'index.ssr.js')
@@ -422,6 +499,9 @@ async function bundleBunny(
         process.exit(1)
     }
 
+    const linked = await prepareLinkedExport(config, cwd, splitUnit);
+    const pinnedClients = linked.clients;
+
     // 3. Write a temporary entry shim.
     //    The shim imports the SSR module + HTML template statically so esbuild
     //    can inline both, then calls BunnySDK.net.http.serve with the handler.
@@ -429,13 +509,17 @@ async function bundleBunny(
     //    external so it is never bundled.
     const bunnyModule = resolve(dirname(fileURLToPath(import.meta.url)), 'bunny.js')
     const shimPath = join(cwd, `.hadars-bunny-shim-${Date.now()}.ts`)
+    const splitRuntime = resolve(dirname(fileURLToPath(import.meta.url)), 'composition/splitRuntime.js');
+    const { RELEASE_PLACEHOLDER } = await import('./src/composition/exportIntegrity');
     const shim = [
+        ...(splitUnit ? [`import { splitHandler } from ${JSON.stringify(splitRuntime)};`] : []),
+        linked.import,
         `import * as BunnySDK from "@bunny.net/edgescript-sdk";`,
         `import * as ssrModule from ${JSON.stringify(ssrBundle)};`,
         `import outHtml from ${JSON.stringify(outHtml)};`,
         `import { createBunnyHandler } from ${JSON.stringify(bunnyModule)};`,
         `import config from ${JSON.stringify(configPath)};`,
-        `BunnySDK.net.http.serve(createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml }));`,
+        `BunnySDK.net.http.serve(${splitUnit ? "splitHandler(" : ""}createBunnyHandler(config as any, { ssrModule: ssrModule as any, outHtml, pinnedClients: ${JSON.stringify(pinnedClients)} })${splitUnit ? ", " + JSON.stringify({ release: RELEASE_PLACEHOLDER, group: splitUnit.group, shell: splitUnit.shell }) + ")" : ""});`,
     ].join('\n') + '\n'
     await writeFile(shimPath, shim, 'utf-8')
 
@@ -457,14 +541,15 @@ async function bundleBunny(
             format: 'esm',
             target: ['es2022'],
             outfile: outputFile,
-            sourcemap: false,
             loader: { '.html': 'text', '.tsx': 'tsx', '.ts': 'ts' },
             external: ['@rspack/*', '@bunny.net/edgescript-sdk'],
-            define: { 'global': 'globalThis' },
+            ...exportScriptOptions(),
             // Redirect Node built-ins (bare or `node:`-prefixed) to `node:`-prefixed
             // externals — Deno's Node compat layer resolves these at runtime.
-            plugins: [nodeBuiltinsExternalPlugin()],
+            plugins: [runtimeConfigPlugin(configPath), nodeBuiltinsExternalPlugin()],
         })
+        if (splitUnit) return;
+        linked.finalize(outputFile);
         console.log(`Bunny Edge Script bundle written to ${outputFile}`)
         console.log(`\nDeploy instructions:`)
         console.log(`  1. In the bunny.net dashboard, go to Edge Platform > Scripting`)
@@ -477,6 +562,7 @@ async function bundleBunny(
         console.log(`\nFor local testing with Deno:`)
         console.log(`  deno run -A ${outputFile}`)
     } finally {
+        await unlink(linked.file).catch(() => {})
         await unlink(shimPath).catch(() => {})
     }
 }
@@ -876,11 +962,55 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
-  console.log('Usage: hadars <new <name> | dev | build | run | stop | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql]>')
+  console.log('Usage: hadars <new <name> | dev | build | run | stop | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql] | deploy <setup|bunny|rollback|gc>>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
   const cmd = argv[2]
+
+  if (cmd === 'deploy') {
+    const { deployCommand } = await import('./src/deploy/bunny/cli');
+    const code = await deployCommand(argv.slice(3));
+    if (code) process.exit(code);
+    return;
+  }
+
+  if (cmd === 'composition') {
+    const { createBuild, assembleLockfile, verifyLockfile } = await import('./src/composition/build');
+    const action = argv[3];
+    const input = argv[4];
+    const output = argv[5];
+    if (action === 'routing-plan') {
+      if (!input) throw new Error('Usage: composition routing-plan directory');
+      const { routingPlan } = await import('./src/composition/build');
+      console.log(JSON.stringify(routingPlan(JSON.parse(await readFile(resolve(cwd, input, '.hadars/split-manifest.json'), 'utf8'))), null, 2));
+      return;
+    }
+    if (action === 'verify-export') {
+      if (!input || !output) throw new Error('Usage: composition verify-export directory metadata.json [expected-checksum]');
+      const { verifyExport } = await import('./src/composition/build');
+      verifyExport(resolve(cwd, input), output, argv[6]);
+      console.log('Export verified');
+      return;
+    }
+    if (!input || !output) throw new Error('Usage: hadars composition <build spec.json manifest.json | lock spec.json lock.json | verify lock.json buildsDir>');
+    if (action === 'verify') {
+      await verifyLockfile({ lockFile: resolve(cwd, input), buildsDir: resolve(cwd, output) });
+      console.log('Composition verified');
+    } else if (action === 'build') {
+      const spec = JSON.parse(await readFile(resolve(cwd, input), 'utf8'));
+      const result = createBuild({ ...spec, sourceDir: resolve(cwd, spec.sourceDir), buildsDir: resolve(cwd, spec.buildsDir) });
+      await writeFile(resolve(cwd, output), JSON.stringify(result.manifest, null, 4) + '\n');
+    } else if (action === 'lock') {
+      const spec = JSON.parse(await readFile(resolve(cwd, input), 'utf8'));
+      const manifest = async (file: string) => JSON.parse(await readFile(resolve(cwd, file), 'utf8'));
+      const shell = await manifest(spec.shell);
+      const modules = await Promise.all((spec.modules ?? []).map(manifest));
+      const libraries = await Promise.all((spec.libraries ?? []).map(manifest));
+      await writeFile(resolve(cwd, output), JSON.stringify(assembleLockfile({ shell, modules, libraries }), null, 4) + '\n');
+    } else throw new Error(`Unknown composition command: ${action}`);
+    return;
+  }
 
   if (cmd === 'new') {
     const name = argv[3]
@@ -929,6 +1059,7 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
             process.exit(0)
         case 'export': {
             const subCmd = argv[3]
+            if (cfg.split?.mode === 'per-module' && subCmd !== 'bunny') throw new Error('SPLIT_TARGET_UNSUPPORTED: per-module export requires the edge-script target');
             if (subCmd === 'lambda') {
                 const outputFile = resolve(cwd, argv[4] ?? 'lambda.mjs')
                 await bundleLambda(cfg, configPath, outputFile, cwd)
@@ -938,8 +1069,8 @@ export async function runCli(argv: string[], cwd = process.cwd()): Promise<void>
                 await bundleCloudflare(cfg, configPath, outputFile, cwd)
                 process.exit(0)
             } else if (subCmd === 'bunny') {
-                const outputFile = resolve(cwd, argv[4] ?? 'bunny.mjs')
-                await bundleBunny(cfg, configPath, outputFile, cwd)
+                const outputFile = resolve(cwd, argv[4]?.startsWith('--') ? 'bunny.mjs' : argv[4] ?? 'bunny.mjs')
+                await bundleBunny(cfg, configPath, outputFile, cwd, undefined, !argv.includes('--no-emit-shell'))
                 process.exit(0)
             } else if (subCmd === 'static') {
                 const outDirArg = argv[4] ?? 'out'

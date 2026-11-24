@@ -26,7 +26,9 @@
  *   BunnySDK.net.http.serve(createBunnyHandler(config, { ssrModule, outHtml }));
  */
 
+import { deploymentPinnedClients, runtimeAssetBase } from './utils/assetBase';
 import React from 'react';
+import type { PinnedBuild } from './composition/runtime';
 import { parseRequest } from './utils/request';
 import { createProxyHandler } from './utils/proxyHandler';
 import { getReactResponse } from './utils/response';
@@ -48,6 +50,8 @@ export interface BunnyBundled {
      * string when `hadars export bunny` runs.
      */
     outHtml: string;
+    /** Validated public client descriptors embedded at export time. */
+    pinnedClients?: Record<string, PinnedBuild['client']>;
 }
 
 // ── Handler factory ───────────────────────────────────────────────────────────
@@ -77,10 +81,12 @@ export function createBunnyHandler(
     const fetchHandler      = options.fetch;
     const handleProxy       = createProxyHandler(options);
     const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml));
+    const pinnedClients = deploymentPinnedClients(bundled.pinnedClients, bundled.outHtml, runtimeAssetBase());
     const { ssrModule }     = bundled;
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
+        request.pinnedClients = pinnedClients;
 
         if (fetchHandler) {
             const res = await fetchHandler(request);
@@ -132,6 +138,8 @@ export function createBunnyHandler(
         : (req: Request) => runHandler(req);
 
     return async (request: Request): Promise<Response> => {
-        return (await finalHandler(request, undefined)) ?? new Response('Not Found', { status: 404 });
+        const startedAt = performance.now();
+        const response = (await finalHandler(request, undefined)) ?? new Response('Not Found', { status: 404 });
+        return (await options.onResponse?.(response, request, startedAt)) ?? response;
     };
 }

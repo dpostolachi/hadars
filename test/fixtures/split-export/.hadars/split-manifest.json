@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "releaseId": "2da74b2c947ff312",
+  "mode": "per-module",
+  "defaultGroup": "main",
+  "shell": "e96ba89c588b35a2",
+  "snapshot": "snap_4b0555e011a63cb1",
+  "probe": {
+    "path": "/__hadars/release"
+  },
+  "budgets": {
+    "unitBytes": 9000000
+  },
+  "groups": [
+    {
+      "name": "admin",
+      "patterns": [
+        "/admin/**",
+        "/control"
+      ],
+      "modules": [
+        "admin"
+      ],
+      "unit": {
+        "file": "units/admin/bunny.mjs",
+        "sha256": "4ed7c1c53bb5957728f62e998f2c2d45065f71424349cfd4b141a811023fddc0",
+        "size": 1913
+      }
+    },
+    {
+      "name": "shop",
+      "patterns": [
+        "/shop/**",
+        "/buy"
+      ],
+      "modules": [
+        "shop"
+      ],
+      "unit": {
+        "file": "units/shop/bunny.mjs",
+        "sha256": "7e534b9fc01edd99bbf8db72651d205384f7c696682cfe9f8061be915f66f6aa",
+        "size": 1911
+      }
+    },
+    {
+      "name": "main",
+      "patterns": [],
+      "modules": [],
+      "unit": {
+        "file": "units/main/bunny.mjs",
+        "sha256": "35ee8abbe42e2f97e83c271149ecae327da0f6bef0ea39f049c83c1c701f7bee",
+        "size": 1911
+      }
+    }
+  ]
+}

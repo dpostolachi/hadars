@@ -56,6 +56,15 @@ jobs:
         run: npm install --ignore-scripts
         working-directory: test/fixtures/hmr-app
 
+      - name: Install composition fixture dependencies
+        run: npm install --ignore-scripts
+        working-directory: test/fixtures/composition-shell
+
+      - name: Pin composition fixture React 18
+        if: matrix.react-version == '18'
+        run: npm install react@^18.3.0 react-dom@^18.3.0 --legacy-peer-deps --ignore-scripts
+        working-directory: test/fixtures/composition-shell
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
@@ -97,14 +106,8 @@ jobs:
           cat /tmp/hadars-server.log
           exit 1
 
-      - name: Run unit tests
-        run: bun test test/render-compare.test.tsx test/i18n.test.ts test/i18n-runtime.test.ts test/i18n-parity.test.ts test/i18n-lang-attribute.test.tsx test/i18n-render.test.tsx
-
-      - name: Run SSR tests
-        run: bun test --timeout 60000 test/ssr.test.ts test/lambda.test.ts
-
-      - name: Run client HMR e2e test
-        run: bun test --timeout 60000 test/hmr.e2e.test.ts
+      - name: Run full test suite
+        run: bun run test
 
       - name: Stop website server
         if: always()

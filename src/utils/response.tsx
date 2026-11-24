@@ -1,8 +1,10 @@
+import { readPublicEnv, type PublicEnv } from './publicEnv';
 import type React from "react";
 import type { AppHead, HadarsRequest, HadarsEntryBase, HadarsEntryModule, HadarsProps, AppContext, HadarsStaticContext } from "../types/hadars";
 import { renderToString, renderPreflight, createElement } from '../slim-react/index';
 
 interface ReactResponseOptions {
+    publicEnv?: PublicEnv;
     document: {
         body: React.FC<HadarsProps<object>>;
         head?: () => Promise<React.ReactNode>;
@@ -85,6 +87,7 @@ export const getReactResponse = async (
     const { getInitProps, getFinalProps } = opts.document;
 
     const context: AppContext = {
+        publicEnv: opts.publicEnv ?? readPublicEnv(),
         // `document.lang` seeds the default — LocaleProvider (if the app uses
         // one) overrides this per-request via setServerLang() during render.
         head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200, lang: opts.document.lang ?? 'en' },

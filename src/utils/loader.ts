@@ -36,6 +36,37 @@
  *   const user = useServerData('user', () => db.getUser(req.userId));
  */
 
+
+import path from 'node:path';
+
+/**
+ * Stable id for a loadModule() target, identical in the server and browser
+ * builds: relative specifiers are resolved against the importing file and made
+ * project-relative, everything else (aliases, bare specifiers) is kept as-is.
+ */
+function moduleId(resourcePath: string, specifier: string): string {
+    if (!specifier.startsWith('.')) return specifier;
+    return path.relative(process.cwd(), path.resolve(path.dirname(resourcePath), specifier)).split(path.sep).join('/');
+}
+
+function loadModuleReplacement(isServer: boolean, resourcePath: string, quote: string, specifier: string): string {
+    const id = JSON.stringify(moduleId(resourcePath, specifier));
+    const target = `${quote}${specifier}${quote}`;
+    return isServer
+        ? `globalThis.__hadarsLoadModule(${id}, () => Promise.resolve(require(${target})))`
+        : `globalThis.__hadarsLoadModule(${id}, () => import(${target}))`;
+}
+
+/** Browser builds register each chunk loader at module scope so the entry can
+ *  fetch the chunks the server render used before it hydrates. */
+function registrationFooter(registered: Map<string, string>): string {
+    let out = '';
+    for (const [id, target] of registered) {
+        out += `\n;globalThis.__hadarsRegisterModule?.(${JSON.stringify(id)}, () => import(${target}));`;
+    }
+    return out;
+}
+
 export default function loader(this: any, source: string): string {
     // Prefer the explicit `server` option injected by rspack.ts over the legacy
     // `this.target` heuristic (which is unreliable when `target` is not set in
@@ -90,6 +121,7 @@ function swcTransform(this: any, swc: any, source: string, isServer: boolean, re
     const fileOffset = ast.span.start - countLeadingNonCodeBytes(source);
 
     const replacements: Array<{ start: number; end: number; replacement: string }> = [];
+    const registered = new Map<string, string>();
 
     walkAst(ast, (node: any) => {
         if (node.type !== 'CallExpression') return;
@@ -155,9 +187,8 @@ function swcTransform(this: any, swc: any, source: string, isServer: boolean, re
             );
             return;
         }
-        const replacement = isServer
-            ? `Promise.resolve(require(${quoteChar}${modulePath}${quoteChar}))`
-            : `import(${quoteChar}${modulePath}${quoteChar})`;
+        const replacement = loadModuleReplacement(isServer, resourcePath, quoteChar, modulePath);
+        registered.set(moduleId(resourcePath, modulePath), `${quoteChar}${modulePath}${quoteChar}`);
 
         // Normalise to 0-based local byte offsets for Buffer.slice
         replacements.push({ start: node.span.start - fileOffset, end: node.span.end - fileOffset, replacement });
@@ -172,7 +203,7 @@ function swcTransform(this: any, swc: any, source: string, isServer: boolean, re
     for (const { start, end, replacement } of replacements) {
         result = Buffer.concat([result.slice(0, start), Buffer.from(replacement, 'utf8'), result.slice(end)]);
     }
-    return result.toString('utf8');
+    return result.toString('utf8') + (isServer ? '' : registrationFooter(registered));
 }
 
 // Minimal recursive AST walker — visits every node depth-first.
@@ -312,11 +343,11 @@ function stripUseServerDataFns(source: string): string {
 }
 
 function regexTransform(this: any, source: string, isServer: boolean, resourcePath: string): string {
-    let transformed = source.replace(LOAD_MODULE_RE, (_match, quote, modulePath) =>
-        isServer
-            ? `Promise.resolve(require(${quote}${modulePath}${quote}))`
-            : `import(${quote}${modulePath}${quote})`
-    );
+    const registered = new Map<string, string>();
+    let transformed = source.replace(LOAD_MODULE_RE, (_match, quote, modulePath) => {
+        registered.set(moduleId(resourcePath, modulePath), `${quote}${modulePath}${quote}`);
+        return loadModuleReplacement(isServer, resourcePath, quote, modulePath);
+    });
 
     // Strip server-only fn arguments from useServerData on client builds.
     if (!isServer) {
@@ -336,5 +367,5 @@ function regexTransform(this: any, source: string, isServer: boolean, resourcePa
         );
     }
 
-    return transformed;
+    return isServer ? transformed : transformed + registrationFooter(registered);
 }

@@ -1,3 +1,5 @@
+import { readPublicEnv } from './utils/publicEnv';
+import { registerServerModules } from './composition/registerServerModules';
 /**
  * SSR render worker — runs in a node:worker_threads thread.
  *
@@ -33,13 +35,16 @@ export type SerializableRequest = {
     search: string;
     location: string;
     cookies: Record<string, string>;
+    publicEnv?: Record<string, string>;
+    pinnedBuilds?: import('./types/hadars').HadarsRequest['pinnedBuilds'];
+    pinnedClients?: import('./types/hadars').HadarsRequest['pinnedClients'];
 };
 
 function deserializeRequest(s: SerializableRequest): any {
     const init: RequestInit = { method: s.method, headers: new Headers(s.headers) };
     if (s.body) init.body = s.body.buffer as ArrayBuffer;
     const req = new Request(s.url, init);
-    Object.assign(req, { pathname: s.pathname, search: s.search, location: s.location, cookies: s.cookies });
+    Object.assign(req, { pathname: s.pathname, search: s.search, location: s.location, cookies: s.cookies, pinnedBuilds: s.pinnedBuilds, pinnedClients: s.pinnedClients });
     return req;
 }
 
@@ -50,8 +55,10 @@ async function runFullLifecycle(serialReq: SerializableRequest) {
     const { getInitProps, getFinalProps } = _ssrMod;
 
     const parsedReq = deserializeRequest(serialReq);
+    registerServerModules(serialReq.pinnedBuilds);
 
     const context: any = {
+        publicEnv: serialReq.publicEnv ?? readPublicEnv(),
         head: { title: 'Hadars App', meta: {}, link: {}, style: {}, script: {}, status: 200 },
     };
 

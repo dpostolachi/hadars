@@ -1,3 +1,5 @@
+import { readPublicEnv, publicEnvJson, type PublicEnv } from './publicEnv';
+import { ASSET_BASE_MARKER, builtAssetMetadata, runtimeAssetBase, validateAssetBase, relocateAssetUrl } from './assetBase';
 import { parseRequest } from './request';
 import { buildHeadHtml, escAttr } from './response';
 import type { AppHead, HadarsOptions } from '../types/hadars';
@@ -130,7 +132,7 @@ export async function buildSsrHtml(
  * post-content segments and caches the result. Call the returned function with
  * the per-request headHtml to produce the full HTML prefix and suffix.
  */
-export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
+export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>, getAssetBase: () => unknown = runtimeAssetBase, getPublicValues: () => PublicEnv = readPublicEnv) => {
     let preHead: string | null = null;
     let postHead: string | null = null;
     let postContent: string | null = null;
@@ -139,6 +141,22 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     // process's idle time before the first request arrives.  This way the
     // first real request finds preHead !== null and takes the sync path.
     const primed = htmlFilePromise.then(html => {
+        const metadata = builtAssetMetadata(html);
+        const base = validateAssetBase(getAssetBase());
+        if (metadata) {
+            const builtBase = metadata.base.replace(/\/+$/, '');
+            const assetUrls = new Set(metadata.files.map(file => (builtBase || '') + '/' + file));
+            html = html.replace(ASSET_BASE_MARKER, '');
+            if (base !== undefined) {
+                // Only the built template is rewritten; request head and application markup are untouched.
+                html = html.replace(/\b(src|href)="([^"]*)"/g, (_, attr, url) =>
+                    assetUrls.has(url.replace(/&amp;/g, '&'))
+                        ? `${attr}="${escAttr(relocateAssetUrl(url.replace(/&amp;/g, '&'), builtBase, base))}"`
+                        : `${attr}="${url}"`);
+                const script = `<script>globalThis.__HADARS_ASSET_BASE_URL__=${JSON.stringify(base).replace(/</g, '\\u003c')}</script>`;
+                html = html.replace(/<head\b[^>]*>/i, match => match + script);
+            }
+        }
         const headEnd = html.indexOf(HEAD_MARKER);
         const contentStart = html.indexOf(BODY_MARKER);
         // Both markers are required.  Without this check `indexOf` returns -1 and
@@ -176,12 +194,18 @@ export const makePrecontentHtmlGetter = (htmlFilePromise: Promise<string>) => {
     // Returns synchronously once the template has been loaded and parsed
     // (every request after the first).  Callers can check `instanceof Promise`
     // to take a zero-await hot path.
+    const assemble = (headHtml: string): [string, string] => {
+        const values = getPublicValues();
+        const script = `<script>globalThis.__HADARS_PUBLIC_ENV__=${publicEnvJson(values)}</script>`;
+        const prefix = (preHead! + headHtml + postHead!).replace(/<head\b[^>]*>/i, match => match + script);
+        return [prefix, postContent!];
+    };
     return (headHtml: string): [string, string] | Promise<[string, string]> => {
         if (preHead !== null) {
             // Hot path — sync return, no Promise allocation.
-            return [preHead + headHtml + postHead!, postContent!];
+            return assemble(headHtml);
         }
-        return primed.then(() => [preHead! + headHtml + postHead!, postContent!]);
+        return primed.then(() => assemble(headHtml));
     };
 };
 
@@ -220,25 +244,35 @@ async function transformStream(
 }
 
 // Use the Web Streams CompressionStream when available (Bun, Deno, Node ≥ 18).
-// Fall back to node:zlib on older Node versions.
+// Edge exports replace this flag at build time, removing the native fallback.
+// An undefined flag preserves the fallback for ordinary server/library builds.
+declare const __EDGE_RUNTIME__: boolean;
 let _zlibGzip: ((d: Uint8Array) => Promise<Uint8Array>) | null = null;
 let _zlibGunzip: ((d: Uint8Array) => Promise<Uint8Array>) | null = null;
 
 async function zlibGzip(d: Uint8Array): Promise<Uint8Array> {
-    if (!_zlibGzip) {
-        const zlib = await import('node:zlib');
-        const { promisify } = await import('node:util');
-        _zlibGzip = promisify(zlib.gzip) as (d: Uint8Array) => Promise<Uint8Array>;
+    if (typeof __EDGE_RUNTIME__ !== 'undefined' && __EDGE_RUNTIME__) {
+        throw new Error('Gzip compression requires CompressionStream in this edge runtime');
+    } else {
+        if (!_zlibGzip) {
+            const zlib = await import('node:zlib');
+            const { promisify } = await import('node:util');
+            _zlibGzip = promisify(zlib.gzip) as (d: Uint8Array) => Promise<Uint8Array>;
+        }
+        return _zlibGzip(d);
     }
-    return _zlibGzip(d);
 }
 async function zlibGunzip(d: Uint8Array): Promise<Uint8Array> {
-    if (!_zlibGunzip) {
-        const zlib = await import('node:zlib');
-        const { promisify } = await import('node:util');
-        _zlibGunzip = promisify(zlib.gunzip) as (d: Uint8Array) => Promise<Uint8Array>;
+    if (typeof __EDGE_RUNTIME__ !== 'undefined' && __EDGE_RUNTIME__) {
+        throw new Error('Gzip decompression requires DecompressionStream in this edge runtime');
+    } else {
+        if (!_zlibGunzip) {
+            const zlib = await import('node:zlib');
+            const { promisify } = await import('node:util');
+            _zlibGunzip = promisify(zlib.gunzip) as (d: Uint8Array) => Promise<Uint8Array>;
+        }
+        return _zlibGunzip(d);
     }
-    return _zlibGunzip(d);
 }
 
 export const gzipCompress = (d: Uint8Array): Promise<Uint8Array> =>

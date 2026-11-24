@@ -1,4 +1,5 @@
 import rspack from "@rspack/core";
+import { RuntimeAssetsPlugin } from "./runtimeAssetsPlugin";
 import type { Configuration, RuleSetLoaderWithOptions, RuleSetRule } from "@rspack/core";
 import ReactRefreshPlugin from '@rspack/plugin-react-refresh';
 import path from 'node:path';
@@ -8,6 +9,15 @@ import pathMod from "node:path";
 import { existsSync } from "node:fs";
 
 const __dirname = process.cwd();
+
+/** `node_modules` of the project and of every parent folder, so a hoisted workspace install resolves from generated entries outside the project. */
+function ancestorNodeModules(dir: string): string[] {
+    const found: string[] = [];
+    for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+        found.push(path.join(current, 'node_modules'));
+        if (current === path.dirname(current)) return found;
+    }
+}
 const packageDir = pathMod.dirname(fileURLToPath(import.meta.url));
 const clientScriptPath = pathMod.resolve(packageDir, 'template.html');
 
@@ -48,7 +58,7 @@ const getConfigBase = (mode: "development" | "production", isServerBuild = false
         },
         resolve: {
             modules: [
-                path.resolve(__dirname, 'node_modules'),
+                ...ancestorNodeModules(__dirname),
                 // 'node_modules' (relative) enables the standard upward-traversal
                 // resolution so rspack can find transitive deps (e.g. webpack-dev-server)
                 // that live in a parent node_modules when running from a sub-project.
@@ -448,6 +458,7 @@ const buildCompilerConfig = (
         ...(isServerBuild ? { externalsPresets: { node: true } } : {}),
         ...(optimization !== undefined ? { optimization } : {}),
         plugins: [
+            !isServerBuild && opts.mode === 'production' && new RuntimeAssetsPlugin(base || ''),
             !isServerBuild && new rspack.HtmlRspackPlugin({
                 publicPath: base || '/',
                 template: opts.htmlTemplate
@@ -621,7 +632,8 @@ export const compileEntry = async (entry: string, opts: EntryOptions & { watch?:
 
                 if (first) {
                     first = false;
-                    resolve(stats);
+                    if (stats?.hasErrors()) reject(new Error(`Initial compilation failed:\n${stats.toString({ errors: true })}`));
+                    else resolve(stats);
                 } else {
                     try {
                         opts.onChange && opts.onChange(stats);

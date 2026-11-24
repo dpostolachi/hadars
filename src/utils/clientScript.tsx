@@ -1,7 +1,7 @@
 import React from 'react';
 import { hydrateRoot } from 'react-dom/client';
 import type { HadarsEntryModule } from '../types/hadars';
-import { initServerDataCache } from 'hadars';
+import { initServerDataCache, MODULE_KEY_PREFIX, preloadModules } from 'hadars';
 import * as _appMod from '$_MOD_PATH$';
 
 const appMod = _appMod as HadarsEntryModule<{}>;
@@ -34,9 +34,19 @@ const main = async () => {
     // Seed the useServerData client cache from server-resolved values before
     // hydration so that hooks return the same data on the first render.
     if (props.__serverData && typeof props.__serverData === 'object') {
-        initServerDataCache(props.__serverData as Record<string, unknown>);
+        // Keys written by loadModule() during SSR name the chunks the HTML used.
+        const preload: string[] = [];
+        const data: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(props.__serverData as Record<string, unknown>)) {
+            if (key.startsWith(MODULE_KEY_PREFIX)) preload.push(key.slice(MODULE_KEY_PREFIX.length));
+            else data[key] = value;
+        }
+        initServerDataCache(data);
         const { __serverData: _, ...rest } = props;
         props = rest;
+        // Hydrating before these chunks arrive would suspend the tree and let the
+        // server HTML flash out; wait so lazy() renders synchronously.
+        await preloadModules(preload);
     }
 
     const { location } = props;

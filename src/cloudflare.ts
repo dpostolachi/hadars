@@ -1,3 +1,4 @@
+import { readPublicEnv, publicEnvJson, type PublicEnv } from './utils/publicEnv';
 /**
  * Cloudflare Workers adapter for hadars.
  *
@@ -20,6 +21,7 @@
  *   compatibility_flags = ["nodejs_compat"]
  */
 
+import { deploymentPinnedClients, runtimeAssetBase } from './utils/assetBase';
 import React from 'react';
 import { parseRequest } from './utils/request';
 import { createProxyHandler } from './utils/proxyHandler';
@@ -42,6 +44,8 @@ export interface CloudflareBundled {
      * string when `hadars export cloudflare` runs.
      */
     outHtml: string;
+    /** Public pinned asset descriptors embedded at export. */
+    pinnedClients?: Record<string, import('./composition/pinnedTypes').PinnedBuild['client']>;
 }
 
 /**
@@ -70,17 +74,43 @@ export interface CloudflareHandler {
  * import config from './hadars.config';
  * export default createCloudflareHandler(config, { ssrModule, outHtml });
  */
-export function createCloudflareHandler(
+export function createCloudflareHandler(options: HadarsOptions, bundled: CloudflareBundled): CloudflareHandler {
+    // Isolate template and response caches by deployment binding, without mutating process globals.
+    const handlers = new Map<unknown, Map<string, CloudflareHandler>>();
+    return { fetch(request, env, ctx) {
+        const bindings = (env ?? {}) as Record<string, unknown>;
+        const value = runtimeAssetBase(bindings);
+        const publicValues = readPublicEnv(bindings);
+        const key = publicEnvJson(publicValues);
+        let environments = handlers.get(value);
+        if (!environments) {
+            environments = new Map();
+            handlers.set(value, environments);
+        }
+        let handler = environments.get(key);
+        if (!handler) {
+            handler = createEnvironmentHandler(options, bundled, value, publicValues);
+            environments.set(key, handler);
+        }
+        return handler.fetch(request, env, ctx);
+    } };
+}
+
+function createEnvironmentHandler(
     options: HadarsOptions,
     bundled: CloudflareBundled,
+    assetBase: unknown,
+    publicValues: PublicEnv,
 ): CloudflareHandler {
     const fetchHandler     = options.fetch;
     const handleProxy      = createProxyHandler(options);
-    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml));
+    const getPrecontentHtml = makePrecontentHtmlGetter(Promise.resolve(bundled.outHtml), () => assetBase, () => publicValues);
+    const pinnedClients = deploymentPinnedClients(bundled.pinnedClients, bundled.outHtml, assetBase);
     const { ssrModule }    = bundled;
 
     const runHandler = async (req: Request): Promise<Response> => {
         const request = parseRequest(req);
+        request.pinnedClients = pinnedClients;
 
         if (fetchHandler) {
             const res = await fetchHandler(request);
@@ -95,6 +125,7 @@ export function createCloudflareHandler(
 
             const isDataOnly = request.headers.get('Accept') === 'application/json';
             const { head, status, getAppBody, finalize } = await getReactResponse(request, {
+                publicEnv: publicValues,
                 document: {
                     body: Component as React.FC<HadarsProps<object>>,
                     lang: 'en',
