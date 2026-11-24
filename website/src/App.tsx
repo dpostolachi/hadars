@@ -48,9 +48,10 @@ const AppRoutes: React.FC<PageProps> = (props) => (
             <Route path="/docs/registry-signing" element={<RegistrySigning />} />
             <Route path="/docs/swc-plugins" element={<SwcPlugins />} />
             <Route path="/docs/i18n" element={<I18n />} />
-            <Route path="/cache-test" element={<CacheTest serverTime={props.serverTime} />} />
+            <Route path="/cache-test" element={<CacheTest />} />
             <Route path="/data-demo" element={<DataDemo />} />
             <Route path="/i18n-demo" element={<I18nDemo />} />
+            <Route path="/ro/i18n-demo" element={<I18nDemo />} />
         </Routes>
     </Layout>
 );

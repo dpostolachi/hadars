@@ -1,177 +1,223 @@
-import React from 'react';
-import { HadarsHead } from 'hadars';
-import { useServerData } from 'hadars';
-import { getHadarsRepoInfo, timeAgo } from '../lib/githubRepo';
+import React from "react";
+import { HadarsHead, useServerData } from "hadars";
+import Code from "../components/Code";
+import RemixIcon from "../components/RemixIcon";
+import { readDemoCard } from "../lib/demo-data";
+import {
+  decodeDataCards,
+  type DataCards,
+  type DataCardKind,
+  type DataCard,
+} from "../lib/demo-protocol";
+import "../styles/demos.css";
 
-// Four independent components, each pulling a different field off this repo's
-// own GitHub metadata. getHadarsRepoInfo() caches/dedupes the underlying
-// requests (see lib/githubRepo.ts) so four rows don't mean four GitHub calls.
-
-const DemoCommitRow: React.FC = () => {
-    const val = useServerData(
-        () => getHadarsRepoInfo().then(r => `${r.latestCommitSha ?? 'unknown'} · ${timeAgo(r.latestCommitDate)}`),
-        { cache: false },
-    );
-    return (
-        <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Latest commit</span>
-            <span className="text-sm font-mono">{val ?? '—'}</span>
-        </div>
-    );
+const Override = React.createContext<DataCards | null>(null);
+const labels: Record<DataCardKind, string> = {
+  release: "Latest release",
+  branch: "Default branch",
+  commit: "Latest commit",
+  message: "Commit message",
 };
-
-const DemoCommitMessageRow: React.FC = () => {
-    const val = useServerData(
-        () => getHadarsRepoInfo().then(r => r.latestCommitMessage ?? 'unknown'),
-        { cache: false },
-    );
-    return (
-        <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Commit message</span>
-            <span className="text-sm font-mono truncate">{val ?? '—'}</span>
-        </div>
-    );
-};
-
-const DemoBranchRow: React.FC = () => {
-    const val = useServerData(
-        () => getHadarsRepoInfo().then(r => r.defaultBranch),
-        { cache: false },
-    );
-    return (
-        <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Default branch</span>
-            <span className="text-sm font-mono">{val ?? '—'}</span>
-        </div>
-    );
-};
-
-const DemoReleaseRow: React.FC = () => {
-    const val = useServerData(
-        () => getHadarsRepoInfo().then(r => r.latestRelease ?? 'unreleased'),
-        { cache: false },
-    );
-    return (
-        <div className="flex items-center gap-4 px-4 py-3">
-            <span className="text-sm text-muted-foreground w-48 shrink-0">Latest release</span>
-            <span className="text-sm font-mono">{val ?? '—'}</span>
-        </div>
-    );
-};
-
-// fn-stripping demo: the fetch URL and token below are server-only.
-// The hadars rspack loader replaces `fn` with `()=>undefined` in the client
-// bundle — so the secret endpoint and credentials never appear in browser JS.
-// To verify after `hadars build`: search the .hadars/static/ JS files for the
-// string "validate-token" — it will only be found in index.ssr.js (server),
-// never in the client chunks.
-const ServerOnlySecretRow: React.FC = () => {
-    useServerData<{ user: string; role: string }>(async () => {
-            // Everything inside this callback is stripped from the browser bundle.
-            const TOKEN = 'Bearer ey_super_secret_internal_token';
-            const url = 'https://internal-auth.internal/validate-token';
-            const data = await fetch(url, { headers: { Authorization: TOKEN } })
-                .then(r => r.json() as Promise<{ user: string; role: string }>)
-                .catch(() => null);
-            return data ?? { user: 'demo', role: 'viewer' };
-        }, { cache: false },
-    );
-    return null;
-};
-
-// ── fetch interceptor installed at module load time ───────────────────────────
-// useServerData fires its fetch via queueMicrotask, which runs before any
-// useEffect can install an interceptor. Installing here ensures we catch it.
-
-let _fetchCount = 0;
-let _lastFetchTime: string | null = null;
-const _listeners = new Set<() => void>();
-
-if (typeof window !== 'undefined') {
-    const _orig = window.fetch;
-    window.fetch = (async (...args: Parameters<typeof fetch>) => {
-        const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
-        const headers = args[1]?.headers as Record<string, string> | undefined;
-        const accept = headers?.['Accept'] ?? (args[0] instanceof Request ? args[0].headers.get('Accept') : null);
-        if (accept === 'application/json' && url.includes('/data-demo')) {
-            _fetchCount += 1;
-            _lastFetchTime = new Date().toLocaleTimeString();
-            _listeners.forEach(fn => fn());
-        }
-        return _orig.apply(window, args);
-    }) as typeof fetch;
+function Card({
+  initial,
+  kind,
+}: {
+  initial: DataCard | undefined;
+  kind: DataCardKind;
+}) {
+  const override = React.useContext(Override),
+    value = override?.[kind] ?? initial;
+  return (
+    <div className={`demo-data-card demo-data-${kind}`}>
+      <span>{labels[kind]}</span>
+      <strong>{value?.value ?? "Unavailable"}</strong>
+      <small>
+        {kind === "commit" && value?.detail
+          ? new Date(value.detail).toISOString().slice(0, 10)
+          : kind === "message"
+            ? value?.detail
+            : (value?.detail ?? "GitHub metadata could not be loaded.")}
+      </small>
+    </div>
+  );
+}
+function ReleaseCard() {
+  const data = useServerData(() => readDemoCard("release"), { cache: false });
+  return <Card initial={data} kind="release" />;
+}
+function BranchCard() {
+  const data = useServerData(() => readDemoCard("branch"), { cache: false });
+  return <Card initial={data} kind="branch" />;
+}
+function CommitCard() {
+  const data = useServerData(() => readDemoCard("commit"), { cache: false });
+  return <Card initial={data} kind="commit" />;
+}
+function MessageCard() {
+  const data = useServerData(() => readDemoCard("message"), { cache: false });
+  return <Card initial={data} kind="message" />;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+export default function DataDemo() {
+  const [cards, setCards] = React.useState<DataCards | null>(null),
+    [busy, setBusy] = React.useState(false),
+    [ready, setReady] = React.useState(false);
+  const [requests, setRequests] = React.useState(0),
+    [result, setResult] = React.useState<{
+      duration: number;
+      bytes: number;
+      payload: unknown;
+    } | null>(null),
+    [error, setError] = React.useState("");
+  const lock = React.useRef(false);
+  React.useEffect(() => {
+    setReady(true);
+  }, []);
+  const run = async () => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError("");
+    setRequests((n) => n + 1);
+    const start = performance.now();
+    try {
+      const response = await fetch("/data-demo", {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error();
+      const text = await response.text(),
+        payload = JSON.parse(text),
+        next = decodeDataCards(payload);
+      setCards(next);
+      setResult({
+        duration: Math.round(performance.now() - start),
+        bytes: new TextEncoder().encode(text).byteLength,
+        payload,
+      });
+    } catch {
+      setError("The server data request failed. Try again.");
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <HadarsHead status={200}>
+        <title>Server data batching — hadars</title>
+        <meta
+          name="description"
+          content="Inspect one real Hadars request that returns data for four independent React components."
+        />
+      </HadarsHead>
+      <h1>Server data batching</h1>
+      <p>
+        Four components load their own repository data on the server. Inspect a
+        single browser request that brings all four results back together.
+      </p>
+      <section
+        className="demo-workbench"
+        aria-labelledby="data-workbench-title"
+      >
+        <div className="demo-toolbar">
+          <div>
+            <span className="demo-eyebrow">LIVE GITHUB REPOSITORY</span>
+            <h2 id="data-workbench-title">dpostolachi / hadars</h2>
+          </div>
+          <button
+            className="demo-button"
+            onClick={run}
+            disabled={!ready || busy}
+          >
+            <RemixIcon name="refresh-line" />
+            {busy ? "Fetching…" : "Fetch server data"}
+          </button>
+        </div>
+        <Override.Provider value={cards}>
+          <div className="demo-data-grid">
+            <React.Suspense
+              fallback={
+                <div className="demo-empty">Loading repository data…</div>
+              }
+            >
+              <ReleaseCard />
+              <BranchCard />
+              <CommitCard />
+              <MessageCard />
+            </React.Suspense>
+          </div>
+        </Override.Provider>
+        <div className="demo-request-summary" role="status">
+          <div>
+            <span>Requests sent here</span>
+            <strong>{requests}</strong>
+          </div>
+          <div>
+            <span>Values per successful response</span>
+            <strong>{result ? "4" : "—"}</strong>
+          </div>
+          <div>
+            <span>Round trip</span>
+            <strong>{result ? `${result.duration} ms` : "—"}</strong>
+          </div>
+          <div>
+            <span>Response size</span>
+            <strong>
+              {result ? `${result.bytes.toLocaleString("en-GB")} B` : "—"}
+            </strong>
+          </div>
+        </div>
+        {error && (
+          <p className="demo-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="demo-payload">
+          <div className="demo-section-label">
+            <h3>Response inspector</h3>
+            <span>GET /data-demo · application/json</span>
+          </div>
+          {result ? (
+            <pre tabIndex={0} aria-label="Actual server data response">
+              <code>{JSON.stringify(result.payload, null, 2)}</code>
+            </pre>
+          ) : (
+            <div className="demo-empty">
+              The cards load through useServerData. Run a request to inspect a
+              fresh server response.
+            </div>
+          )}
+        </div>
+        <div className="demo-footnote">
+          This is live repository metadata. It is cached for 60 seconds to
+          respect GitHub’s rate limits, so repeated requests can return the same
+          values. Unavailable fields are shown explicitly.
+        </div>
+      </section>
+      <section className="demo-explanation">
+        <h2>Independent components. One response.</h2>
+        <p>
+          Each card calls <code>useServerData</code> separately. Hadars resolves
+          the loaders on the server and returns their values as one map. The
+          browser can update all four components from that one response.
+        </p>
+        <Code lang="tsx">{`function ReleaseCard() {
+    const release = useServerData(() => readRelease());
+    return <Release version={release} />;
+}
 
-const DataDemo: React.FC = () => {
-    const [fetchCount, setFetchCount] = React.useState(_fetchCount);
-    const [lastFetchTime, setLastFetchTime] = React.useState(_lastFetchTime);
-
-    React.useEffect(() => {
-        // Sync in case the fetch fired (via microtask) before this effect ran
-        setFetchCount(_fetchCount);
-        setLastFetchTime(_lastFetchTime);
-
-        const notify = () => {
-            setFetchCount(_fetchCount);
-            setLastFetchTime(_lastFetchTime);
-        };
-        _listeners.add(notify);
-        return () => { _listeners.delete(notify); };
-    }, []);
-
-    return (
-        <>
-            <HadarsHead status={200}>
-                <title>Data fetch demo — hadars</title>
-                <meta name="description" content="Demo: four independent useServerData calls batched into a single request during client-side navigation." />
-                <meta name="robots" content="noindex" />
-            </HadarsHead>
-
-            <h1 className="text-3xl font-bold mb-3 text-gradient">Batched useServerData</h1>
-            <p className="text-lg text-muted-foreground mb-8 max-w-2xl">
-                Four independent components each call <code className="text-sm bg-muted px-1.5 py-0.5 rounded">useServerData</code>.
-                During client-side navigation a single <code className="text-sm bg-muted px-1.5 py-0.5 rounded">GET /data-demo</code> with{' '}
-                <code className="text-sm bg-muted px-1.5 py-0.5 rounded">Accept: application/json</code> fetches all four values in one request.
-            </p>
-
-            <section className="mb-10">
-                <h2 className="text-xl font-semibold mb-3 text-gradient-soft">Server data (four keys, one request)</h2>
-                <div className="rounded-xl divide-y overflow-hidden" style={{ background: "var(--docs-panel)", border: "1px solid var(--docs-border)", boxShadow: "0 8px 24px #0002" }}>
-                    <React.Suspense fallback={
-                        <div className="flex items-center gap-4 px-4 py-3">
-                            <span className="text-sm text-muted-foreground w-48 shrink-0">Loading…</span>
-                            <span className="text-sm text-muted-foreground">fetching all four keys in one batched request</span>
-                        </div>
-                    }>
-                        <ServerOnlySecretRow />
-                        <DemoCommitRow />
-                        <DemoCommitMessageRow />
-                        <DemoBranchRow />
-                        <DemoReleaseRow />
-                    </React.Suspense>
-                </div>
-
-                <div className="rounded-xl divide-y overflow-hidden mt-4" style={{ background: 'var(--docs-panel)', border: '1px solid var(--docs-border)', boxShadow: '0 8px 24px #0002' }}>
-                    <div className="flex items-start gap-4 px-4 py-3">
-                        <span className="text-sm text-muted-foreground w-48 shrink-0">Batched requests fired</span>
-                        <span className={`text-sm font-mono ${fetchCount > 0 ? 'text-emerald-400' : 'text-muted-foreground'}`}>
-                            {fetchCount === 0
-                                ? 'none yet — SSR-seeded, no fetch on first load'
-                                : `${fetchCount} (last at ${lastFetchTime}) — one request per navigation ✓`}
-                        </span>
-                    </div>
-                    <div className="flex items-start gap-4 px-4 py-3">
-                        <span className="text-sm text-muted-foreground w-48 shrink-0">How to test</span>
-                        <span className="text-sm text-muted-foreground">
-                            Navigate away then back here via the sidebar. The counter increments by 1 each time — one batched request per navigation.
-                        </span>
-                    </div>
-                </div>
-            </section>
-        </>
-    );
-};
-
-export default DataDemo;
+function BranchCard() {
+    const branch = useServerData(() => readBranch());
+    return <Branch name={branch} />;
+}`}</Code>
+        <div className="demo-source-links">
+          <a href="/docs/data">Read the data fetching guide</a>
+          <a href="https://github.com/dpostolachi/hadars/blob/main/website/src/pages/DataDemo.tsx">
+            View demo source
+          </a>
+        </div>
+      </section>
+    </>
+  );
+}

@@ -6,7 +6,14 @@ type IconName =
   | "github-line"
   | "arrow-down-s-line"
   | "file-copy-line"
-  | "check-line";
+  | "check-line"
+  | "refresh-line"
+  | "information-line"
+  | "subtract-line"
+  | "add-line"
+  | "global-line"
+  | "database-2-line"
+  | "time-line";
 export default function RemixIcon({
   name,
   className = "",

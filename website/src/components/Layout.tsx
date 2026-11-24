@@ -44,9 +44,9 @@ const NAV = [
   {
     label: "Demos",
     links: [
-      { to: "/cache-test", label: "Cache Demo" },
-      { to: "/data-demo", label: "Data Fetch Demo" },
-      { to: "/i18n-demo", label: "i18n Demo" },
+      { to: "/cache-test", label: "Response caching" },
+      { to: "/data-demo", label: "Server data batching" },
+      { to: "/i18n-demo", label: "Languages & formatting" },
     ],
   },
 ];
@@ -56,6 +56,7 @@ const pages = NAV.flatMap((group) =>
 );
 
 function NavContent({ onNavigate }: { onNavigate?: () => void }) {
+  const pathname = useLocation().pathname;
   return (
     <>
       {NAV.map((group) => (
@@ -64,7 +65,11 @@ function NavContent({ onNavigate }: { onNavigate?: () => void }) {
           {group.links.map(({ to, label }) => (
             <NavLink
               key={to}
-              to={to}
+              to={
+                to === "/i18n-demo" && pathname === "/ro/i18n-demo"
+                  ? "/ro/i18n-demo"
+                  : to
+              }
               end={to === "/"}
               onClick={onNavigate}
               className={({ isActive }) =>
@@ -89,7 +94,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     window.scrollTo(0, 0);
   }, [location.pathname]);
   if (location.pathname === "/") return <>{children}</>;
-  const currentIndex = pages.findIndex((page) => page.to === location.pathname);
+  const currentIndex = pages.findIndex(
+    (page) =>
+      page.to === location.pathname.replace(/^\/ro(?=\/i18n-demo$)/, ""),
+  );
   const current = pages[currentIndex],
     previous = pages[currentIndex - 1],
     next = pages[currentIndex + 1];

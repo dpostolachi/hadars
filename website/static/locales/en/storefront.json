@@ -1,0 +1,16 @@
+{
+    "sampleLabel": "Sample storefront",
+    "sampleCaption": "An interactive product example",
+    "category": "Workspace essentials",
+    "productName": "Orbit desk lamp",
+    "productDescription": "Adjustable light for a considered workspace. Change the quantity to try plural forms and totals in another language.",
+    "unitPrice": "per lamp",
+    "quantity": "Quantity",
+    "decrease": "Decrease quantity",
+    "increase": "Increase quantity",
+    "total": "Order total",
+    "itemsOne": "{count} item",
+    "itemsFew": "{count} items",
+    "itemsOther": "{count} items",
+    "demoNotice": "Demo only. No order will be placed."
+}

@@ -1,0 +1,16 @@
+{
+    "sampleLabel": "Magazin demonstrativ",
+    "sampleCaption": "Un exemplu interactiv de produs",
+    "category": "Pentru biroul tău",
+    "productName": "Lampă de birou Orbit",
+    "productDescription": "Lumină reglabilă pentru un birou bine organizat. Schimbă cantitatea pentru a vedea formele de plural și totalul în altă limbă.",
+    "unitPrice": "pe lampă",
+    "quantity": "Cantitate",
+    "decrease": "Micșorează cantitatea",
+    "increase": "Mărește cantitatea",
+    "total": "Totalul comenzii",
+    "itemsOne": "{count} produs",
+    "itemsFew": "{count} produse",
+    "itemsOther": "{count} de produse",
+    "demoNotice": "Doar un exemplu. Nu se va plasa nicio comandă."
+}

@@ -134,10 +134,9 @@ test('useServerData loader: fn argument is stripped from client bundles', async 
     const staticDir = join(WEBSITE_DIR, '.hadars', 'static');
     const ssrBundle = join(WEBSITE_DIR, '.hadars', 'index.ssr.js');
 
-    // Sensitive strings must be present in the SSR bundle (fn runs server-side).
+    // A loader-only marker must remain in the SSR bundle and be stripped from browser code.
     const ssrContent = await readFile(ssrBundle, 'utf8');
-    expect(ssrContent).toContain('validate-token');
-    expect(ssrContent).toContain('ey_super_secret');
+    expect(ssrContent).toContain('hadars-server-data-demo-loader');
 
     // The same strings must NOT appear in any client chunk.
     const files = await readdir(staticDir);
@@ -150,37 +149,41 @@ test('useServerData loader: fn argument is stripped from client bundles', async 
 
     for (const chunk of jsChunks) {
         const content = await readFile(join(staticDir, chunk), 'utf8');
-        expect(content).not.toContain('validate-token');
-        expect(content).not.toContain('ey_super_secret');
+        expect(content).not.toContain('hadars-server-data-demo-loader');
     }
 });
 
 // ── cache tests ───────────────────────────────────────────────────────────────
 
-async function getCachePage(): Promise<{ res: Response; html: string; serverTime: string }> {
+async function getCachePage(): Promise<{ res: Response; html: string; serverTime: string; renderId: string; renderedAt: number }> {
     const res  = await fetch(BASE_URL + '/cache-test');
     const html = await res.text();
     const m    = html.match(/<script id="hadars" type="application\/json"[^>]*>([\s\S]*?)<\/script>/);
     const props = m ? (JSON.parse(m[1] ?? '{}').hadars?.props ?? {}) : {};
-    return { res, html, serverTime: props.serverTime ?? '' };
+    const snapshot = Object.values(props.__serverData ?? {}).find((value: any) => value?.kind === 'cache-render') as any;
+    return { res, html, serverTime: props.serverTime ?? '', renderId: snapshot?.renderId ?? '', renderedAt: snapshot?.renderedAt ?? 0 };
 }
 
 test('cache: GET /cache-test returns 200 with correct title', async () => {
     const { res, html } = await getCachePage();
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
-    expect(html).toContain('<title>Cache test — hadars</title>');
+    expect(html).toContain('<title>Response caching — hadars</title>');
 });
 
-test('cache: repeated requests to /cache-test return the same serverTime (cache hit)', async () => {
-    const { serverTime: first } = await getCachePage();
-    expect(first).toBeTruthy();
+test('cache: repeated requests reuse the same render identity and timestamp', async () => {
+    const first = await getCachePage();
+    expect(first.serverTime).toBeTruthy();
+    expect(first.renderId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.renderedAt).toBeGreaterThan(0);
 
     // Small pause so the background gzip+store task completes before the second request.
     await new Promise(r => setTimeout(r, 50));
 
-    const { serverTime: second } = await getCachePage();
-    expect(second).toBe(first);
+    const second = await getCachePage();
+    expect(second.serverTime).toBe(first.serverTime);
+    expect(second.renderId).toBe(first.renderId);
+    expect(second.renderedAt).toBe(first.renderedAt);
 });
 
 test('cache: cached /cache-test response is served pre-compressed with gzip', async () => {
