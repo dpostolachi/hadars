@@ -19,7 +19,7 @@ export interface Client {
 
 /** Opt-in timing of every registry call (names and numbers only), for finding slow steps in CI. */
 const trace = (method: string, path: string, status: number | string, began: number) => {
-    if (process.env.HADARS_PLATFORM_TRACE === '1') process.stderr.write(`trace +${Math.round(performance.now())}ms ${method} ${path.split('?')[0]} ${status} ${Math.round(performance.now() - began)}ms\n`);
+    if (process.env.HADARS_TRACE === '1') process.stderr.write(`trace +${Math.round(performance.now())}ms ${method} ${path.split('?')[0]} ${status} ${Math.round(performance.now() - began)}ms\n`);
 };
 
 export function createClient({ registryUrl, token, retryDelaysMs = [500, 1500, 4000] }: ClientOptions): Client {
@@ -66,5 +66,5 @@ export async function resolveTeam(client: Client, explicit?: string): Promise<st
     if (me.kind === 'service') return me.team.id;
     if (me.teams.length === 1) return me.teams[0].id;
     if (me.teams.length === 0) throw new ApiError('invalid', 'You are not in any team yet. Create one with `team create <id>`.');
-    throw new ApiError('invalid', `You are in several teams (${me.teams.map((t: { id: string }) => t.id).join(', ')}). Pass --team or set HADARS_PLATFORM_TEAM.`);
+    throw new ApiError('invalid', `You are in several teams (${me.teams.map((t: { id: string }) => t.id).join(', ')}). Pass --team or set HADARS_TEAM.`);
 }

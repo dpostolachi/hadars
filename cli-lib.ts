@@ -3,6 +3,8 @@ import { mkdir, writeFile, unlink, readFile } from 'node:fs/promises'
 import { resolve, join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as Hadars from './src/build'
+import { REGISTRY_COMMANDS, REGISTRY_USAGE, registryCommand } from './src/registry-client/commands'
+import { ApiError } from './src/registry-client/client'
 import type { HadarsOptions, HadarsEntryModule } from './src/types/hadars'
 import { renderStaticSite } from './src/static'
 import { runSources } from './src/source/runner'
@@ -962,11 +964,24 @@ Done! Next steps:
 // ── CLI entry ─────────────────────────────────────────────────────────────────
 
 function usage(): void {
+  console.log(REGISTRY_USAGE)
   console.log('Usage: hadars <new <name> | dev | build | run | stop | export lambda [output.mjs] | export cloudflare [output.mjs] | export bunny [output.mjs] | export static [outDir] | export schema [schema.graphql] | deploy <setup|bunny|rollback|gc>>')
 }
 
 export async function runCli(argv: string[], cwd = process.cwd()): Promise<void> {
   const cmd = argv[2]
+
+  if (cmd && (REGISTRY_COMMANDS as readonly string[]).includes(cmd)) {
+    try {
+      const code = await registryCommand(argv.slice(2), { out: console.log, err: console.error, cwd })
+      if (code) process.exit(code)
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error
+      console.error(error.message)
+      process.exit(1)
+    }
+    return
+  }
 
   if (cmd === 'deploy') {
     const { deployCommand } = await import('./src/deploy/bunny/cli');
