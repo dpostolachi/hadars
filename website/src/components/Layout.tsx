@@ -35,6 +35,13 @@ const NAV = [
     ],
   },
   {
+    label: "Registry",
+    links: [
+      { to: "/docs/registry-environments", label: "Environments & Revisions" },
+      { to: "/docs/registry-signing", label: "Signing & Trusted Pulls" },
+    ],
+  },
+  {
     label: "Demos",
     links: [
       { to: "/cache-test", label: "Cache Demo" },
