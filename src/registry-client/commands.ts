@@ -2,7 +2,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { generateSigningKey, validateBuild, validateBuildPolicy } from '../registry-protocol';
+import { channelMoveStatement, generateSigningKey, signStatement, validateBuild, validateBuildPolicy } from '../registry-protocol';
 import { ApiError, createClient, resolveTeam, type Client } from './client';
 import { createBuildManifest, readNativeManifest, type ModuleConfig } from './manifest';
 import { gitMetadata } from './version-metadata';
@@ -177,7 +177,7 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
     if (!token) { err('Set HADARS_TOKEN.'); return 2; }
     const client = createClient({ registryUrl: registry, token });
     const team = () => resolveTeam(client, flag(args, '--team') ?? process.env.HADARS_TEAM);
-    const envArgs = () => positional(args.slice(1), ['--registry', '--team', '--project', '--only', '--expected-revision', '--from', '--set', '--ttl', '--query', '--kind']);
+    const envArgs = () => positional(args.slice(1), ['--registry', '--team', '--project', '--only', '--expected-revision', '--from', '--set', '--ttl', '--query', '--kind', '--sign-key']);
     const revision = () => {
         const value = flag(args, '--expected-revision');
         if (value !== undefined && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) throw new ApiError('invalid', 'expected revision must be a nonnegative integer');
@@ -232,8 +232,14 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
         const parsed = specs.map((spec) => { const at = spec.lastIndexOf('@'); if (at < 1 || !spec.slice(at + 1)) throw new ApiError('invalid', usage); return { package: spec.slice(0, at), version: spec.slice(at + 1) }; });
         if (!env || parsed.length === 0) throw new ApiError('invalid', usage);
         const root = `${await envRoot()}/environments/${encodeURIComponent(env)}`;
-        if (parsed.length === 1) showEnvironment(await client.request('POST', `${root}/set`, { ...parsed[0], kind: flag(args, '--kind'), expectedRevision: revision() }));
-        else showEnvironment(await client.request('POST', `${root}/set-many`, { packages: parsed.map((p) => ({ ...p, kind: flag(args, '--kind') })), expectedRevision: revision() }));
+        const signKey = flag(args, '--sign-key');
+        if (parsed.length === 1) {
+            const body = { ...parsed[0], kind: flag(args, '--kind'), expectedRevision: revision() };
+            showEnvironment(signKey ? await signedMove(client, await team(), env, `${root}/set`, body, signKey) : await client.request('POST', `${root}/set`, body));
+        } else {
+            const body = { packages: parsed.map((p) => ({ ...p, kind: flag(args, '--kind') })), expectedRevision: revision() };
+            showEnvironment(signKey ? await signedMove(client, await team(), env, `${root}/set-many`, body, signKey) : await client.request('POST', `${root}/set-many`, body));
+        }
         return 0;
     }
     if (command === 'history' || command === 'go-back') {
@@ -252,7 +258,10 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
     if (command === 'promote') {
         const [from, to] = envArgs();
         if (!from || !to) throw new ApiError('invalid', 'Use promote <from> <to> [--only a,b]');
-        showEnvironment(await client.request('POST', `${await envRoot()}/environments/${encodeURIComponent(to)}/promote`, { from, only: flag(args, '--only')?.split(','), expectedRevision: revision() }));
+        const body = { from, only: flag(args, '--only')?.split(','), expectedRevision: revision() };
+        const path = `${await envRoot()}/environments/${encodeURIComponent(to)}/promote`;
+        const signKey = flag(args, '--sign-key');
+        showEnvironment(signKey ? await signedMove(client, await team(), to, path, body, signKey) : await client.request('POST', path, body));
         return 0;
     }
     if (command === 'preview') {
@@ -281,6 +290,20 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
         return 0;
     }
     throw new ApiError('invalid', `Unknown registry command: ${command}`);
+}
+
+/**
+ * A signed environment move. The registry works out the snapshot and version the move would create (a dry run),
+ * the key signs exactly that, and the move is applied against the revision the dry run saw.
+ */
+async function signedMove(client: Client, team: string, environment: string, path: string, body: Record<string, unknown>, keyFile: string): Promise<any> {
+    const key = JSON.parse(await readFile(keyFile, 'utf8')) as { keyId?: string; privateKey?: string };
+    if (!key.keyId || !key.privateKey) throw new ApiError('invalid', `${keyFile} is not a signing key file (expected keyId and privateKey).`);
+    const proposed = await client.request('POST', path, { ...body, dryRun: true });
+    if (!proposed.proposal) throw new ApiError('invalid', 'The registry did not describe the move; it may be older than this client.');
+    const { snapshotId, version } = proposed.proposal as { snapshotId: string; version: number };
+    const signature = signStatement(key.privateKey, channelMoveStatement(team, environment, version, snapshotId));
+    return client.request('POST', path, { ...body, expectedRevision: version - 1, signature: { keyId: key.keyId, signature } });
 }
 
 async function publishCommand(args: string[], io: RegistryIO, registryFor: () => string): Promise<number> {

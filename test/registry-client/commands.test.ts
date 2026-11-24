@@ -126,3 +126,31 @@ test('trusted keys come from the flag, then the environment, then the committed 
     expect(trustedKeysPath([], project, { HADARS_TRUSTED_KEYS: '/env/keys.json' })).toBe('/env/keys.json');
     expect(trustedKeysPath(['--trusted-keys', '/flag/keys.json'], project, { HADARS_TRUSTED_KEYS: '/env/keys.json' })).toBe('/flag/keys.json');
 });
+
+test('set --sign-key dry-runs the move, then applies it with a signature over the proposal', async () => {
+    const { generateSigningKey, channelMoveStatement, verifyStatement } = await import('../../src/registry-protocol');
+    const key = generateSigningKey();
+    const keyFile = join(dir, 'sign.json');
+    await writeFile(keyFile, JSON.stringify({ keyId: key.keyId, publicKey: key.publicKey, privateKey: key.privateKey }));
+    const seen: any[] = [];
+    const mock = Bun.serve({ port: 0, async fetch(req) {
+        const body: any = await req.json();
+        seen.push(body);
+        if (body.dryRun) return Response.json({ conflict: false, current: null, advisories: [], proposal: { snapshotId: 'snap_test', version: 3 } });
+        return Response.json({ conflict: false, current: { name: 'dev', revision: 3, changes: [{ name: 'shell' }] }, advisories: [] });
+    } });
+    try {
+        process.env.HADARS_REGISTRY = `http://127.0.0.1:${mock.port}`;
+        const out = io();
+        const code = await registryCommand(['set', 'dev', 'shell@2', '--sign-key', keyFile], { out: (l) => out.lines.push(l), err: () => {}, cwd: dir });
+        expect(code).toBe(0);
+        expect(seen.map((b) => !!b.dryRun)).toEqual([true, false]);
+        const applied = seen[1];
+        expect(applied.expectedRevision).toBe(2);
+        expect(applied.signature.keyId).toBe(key.keyId);
+        expect(verifyStatement(key.publicKey, channelMoveStatement('acme', 'dev', 3, 'snap_test'), applied.signature.signature)).toBe(true);
+        expect(out.lines.join('\n')).toContain('dev revision 3');
+    } finally {
+        mock.stop(true);
+    }
+});
