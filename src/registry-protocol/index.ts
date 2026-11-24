@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Range, intersects, minVersion, satisfies, valid, validRange } from 'semver';
 
-/** Records from docs/registry-mvp-plan.md, "Core records". */
+/** Core records: manifests, snapshots, channels and environments. */
 
 /** Team IDs appear in storage keys and URLs, so they are restricted to a safe alphabet. */
 export const TEAM_ID = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
