@@ -11,6 +11,14 @@ function configPath(file: string) {
     if (path.split('/').some(p => p.startsWith('.env'))) throw new Error('Target config cannot be an environment file');
     return path;
 }
+/** HADARS_BUNNY_ASSET_CONCURRENCY: parallel static transfers during staging (1-32, default 12). */
+export function assetConcurrencyFrom(env: Record<string, string | undefined>): number | undefined {
+    const text = env.HADARS_BUNNY_ASSET_CONCURRENCY;
+    if (text === undefined || text === '') return undefined;
+    if (!/^\d+$/.test(text)) throw new Error('HADARS_BUNNY_ASSET_CONCURRENCY must be an integer from 1 to 32');
+    return Number(text);
+}
+
 export async function loadProjectZones(file = 'deploy.target.json'): Promise<ProjectZones> {
     let value: unknown;
     try { value = JSON.parse(await readFile(configPath(file), 'utf8')); } catch { throw new Error('Could not read deploy.target.json project zone configuration'); }
@@ -40,7 +48,7 @@ export function projectBunny(zones: ProjectZones, project: string, environment: 
         if (readProvider && (method !== 'GET' || new URL(input instanceof Request ? input.url : String(input)).origin !== 'https://api.bunny.net')) throw new Error('Read-provider dry-run permits only GET management requests');
         return send(input, init);
     }) as typeof fetch;
-    return new BunnyTarget({ key: dryRun ? '' : need(env, 'BUNNY_API_KEY'), storageKey: dryRun || readProvider ? '' : need(env, 'BUNNY_STORAGE_KEY'), storageZone: zones.storageZone.name, sharedStorage: zones.storageZone.sharedStorage, publicZoneId: zones.publicZones[environment].id, assetsHost: zones.assetsPullZone.host }, transport);
+    return new BunnyTarget({ key: dryRun ? '' : need(env, 'BUNNY_API_KEY'), storageKey: dryRun || readProvider ? '' : need(env, 'BUNNY_STORAGE_KEY'), storageZone: zones.storageZone.name, sharedStorage: zones.storageZone.sharedStorage, publicZoneId: zones.publicZones[environment].id, assetsHost: zones.assetsPullZone.host, assetConcurrency: assetConcurrencyFrom(env) }, transport);
 }
 export async function gcProject(o: { store: DeployStore; project: string; zones: ProjectZones; target: BunnyTarget; env: Record<string, string | undefined>; keep?: number; graceSeconds?: number; execute?: boolean; out: (line: string) => void; send?: typeof fetch }) {
     if (o.zones.project !== o.project) throw new Error('Target configuration belongs to another project');

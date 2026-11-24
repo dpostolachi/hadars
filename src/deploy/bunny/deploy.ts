@@ -124,10 +124,11 @@ async function runDeploy(o: DeployOptions) {
         return;
     }
     const staticPaths = plan?.staticPaths ?? previous?.staticPaths;
+    const staticHashes = plan?.staticHashes ?? previous?.staticHashes;
     const configSummary = plan?.configSummary ?? previous?.configSummary;
     const input: DeploymentInput = {
         id: crypto.randomUUID(), environment: o.environment, revision, target: 'bunny', status: 'pending',
-        ...(staticPaths ? { staticPaths } : {}), ...(configSummary ? { configSummary } : {}), ...(outputVerification ? { outputVerification } : {}),
+        ...(staticPaths ? { staticPaths } : {}), ...(staticHashes ? { staticHashes } : {}), ...(configSummary ? { configSummary } : {}), ...(outputVerification ? { outputVerification } : {}),
         artifactSummary: plan?.artifactSummary ?? previous!.artifactSummary, ...(previous ? { rollbackOf: previous.id } : {}),
     };
     let staged: StagedRevision | undefined, activated = false, activationAttempted = false, activationStarted = false;
@@ -154,6 +155,8 @@ async function runDeploy(o: DeployOptions) {
             const count = digests.size + (digests.has(plan.configSummary?.digest) ? 0 : 1);
             plan.name = (matching ? baseName(matching) : undefined) ?? `${o.project}-${o.environment}-r${revision}${count > 1 ? `-c${count}` : ''}`;
         }
+        // Files the live release already holds (same path and hash) need no lookup during staging.
+        if (!previous && o.target instanceof BunnyTarget) o.target.setKnownStatic(live?.staticHashes ?? {});
         staged = previous?.staged ?? await o.target.stage(plan!, o.config);
         if (o.target instanceof BunnyTarget) {
             o.target.onAttempt = undefined;

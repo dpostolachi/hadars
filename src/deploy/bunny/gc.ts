@@ -6,7 +6,10 @@ export interface GcRecord {
     id: string; environment: string; revision: number; startedAt: number;
     status: string;
     staged?: { scriptId: string; split?: { groups: Array<{ scriptId: string }> } };
-    staticPaths?: string[]; previousDeploymentId?: string;
+    staticPaths?: string[];
+    /** Content hash per static path (newer records). Lets a deploy skip the lookup for files the live release already holds. */
+    staticHashes?: Record<string, string>;
+    previousDeploymentId?: string;
 }
 const ownedPrefix = (path: string) => path.startsWith('_builds/') || path.startsWith('_shell/');
 export interface StorageObject { path: string; lastChanged: number }

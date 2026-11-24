@@ -28,7 +28,7 @@ export interface CompositionBinding { snapshotId: string; shell: string; modules
 export interface CompositionProvenance extends CompositionBinding { version: 1; outputs: Record<string, { size: number; sha256: string }> }
 export interface Artifact { entry: string; files: ArtifactFile[]; provenance?: CompositionProvenance; nativeProvenance?: NativeProvenance }
 export interface Revision { project: string; environment: string; revision: number; artifact: Artifact }
-export interface Plan extends Revision { splitManifest?: SplitManifest; name: string; artifactSummary: { files: number; bytes: number }; breakdown: string; configSummary?: ConfigSummary; staticPaths?: string[]; outputVerification?: OutputVerification; adaptedScript?: Uint8Array }
+export interface Plan extends Revision { splitManifest?: SplitManifest; name: string; artifactSummary: { files: number; bytes: number }; breakdown: string; configSummary?: ConfigSummary; staticHashes?: Record<string, string>; staticPaths?: string[]; outputVerification?: OutputVerification; adaptedScript?: Uint8Array }
 export interface StageResource { scriptId: string; name: string; linkedZoneIds: string[]; disposition: 'created' | 'reused'; remaining?: string[]; cleanup?: 'cleaned' | 'kept' | 'remaining' }
 export interface StageAttempt { resources: StageResource[]; probeFailures?: Record<string, string> }
 export interface StagedRevision { /** Runtime-only identity map; persisted on Deployment, never in staged. */ liveRules?: LiveRule[]; split?: SplitReceipt; scriptId: string; hostname: string; revision: number; name: string; assets?: { reused: number; uploaded: number } }
@@ -46,7 +46,7 @@ export interface BunnyClient {
     request(method: string, path: string, body?: unknown): Promise<any>;
     publish(id: string, code: string): Promise<void>;
 }
-export interface BunnyConfig { key: string; publicZoneId: string; storageZone: string; storageKey: string; assetsHost?: string; sharedStorage?: boolean }
+export interface BunnyConfig { key: string; publicZoneId: string; storageZone: string; storageKey: string; assetsHost?: string; sharedStorage?: boolean; assetConcurrency?: number }
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const safePath = (path: string) => path && !path.includes('\\') && !path.split('/').some(p => !p || p === '.' || p === '..');
 
@@ -76,6 +76,7 @@ export class BunnyTarget implements DeployTarget {
     constructor(private readonly config: BunnyConfig, private readonly send: typeof fetch = fetch, client?: BunnyClient, private readonly pause: (ms?: number) => Promise<void> = (ms = 1000) => new Promise(resolve => setTimeout(resolve, ms))) {
         this.client = client ?? new Bunny(config.key, send);
         if (!/^\d+$/.test(config.publicZoneId) || !/^[a-z0-9-]+$/.test(config.storageZone)) throw new Error('Invalid Bunny zone configuration');
+        if (config.assetConcurrency !== undefined && (!Number.isSafeInteger(config.assetConcurrency) || config.assetConcurrency < 1 || config.assetConcurrency > 32)) throw new Error('Asset concurrency must be an integer from 1 to 32');
         if (config.assetsHost !== undefined && !dnsHostname(config.assetsHost) || config.sharedStorage !== undefined && typeof config.sharedStorage !== 'boolean') throw new Error('Invalid Bunny assets configuration');
     }
     get assetBase() { return this.config.assetsHost ? `https://${this.config.assetsHost}` : undefined; }
@@ -96,7 +97,7 @@ export class BunnyTarget implements DeployTarget {
         if (script.bytes.length > this.maxArtifactBytes) throw new Error(`Bunny script exceeds the ${this.maxArtifactBytes} byte limit. Export smaller per-module units or reduce this script.\n${breakdown}`);
         const layout = staticLayout(input.artifact);
         if (this.config.assetsHost && config?.variables.HADARS_ASSET_BASE_URL !== `https://${this.config.assetsHost}`) throw new Error('HADARS_ASSET_BASE_URL must equal the project assets zone root');
-        return { ...input, ...(splitManifest ? { splitManifest } : {}), staticPaths: layout.paths, configSummary: summarizeConfig(config ?? { variables: {}, secrets: {}, required: [] }), name: `${input.project}-${input.environment}-r${input.revision}`, artifactSummary: { files: files.length, bytes: files.reduce((sum, f) => sum + f.bytes.length, 0) }, breakdown };
+        return { ...input, ...(splitManifest ? { splitManifest } : {}), staticPaths: layout.paths, staticHashes: Object.fromEntries(layout.files.map(f => [f.path, hash(f.bytes)])), configSummary: summarizeConfig(config ?? { variables: {}, secrets: {}, required: [] }), name: `${input.project}-${input.environment}-r${input.revision}`, artifactSummary: { files: files.length, bytes: files.reduce((sum, f) => sum + f.bytes.length, 0) }, breakdown };
     }
     async planSplitRules(plan: Plan, offline = false) {
         if (!plan.splitManifest) throw new Error('Split manifest required');
@@ -129,10 +130,14 @@ export class BunnyTarget implements DeployTarget {
         const assets = await this.uploadAssets(artifact);
         return { ...await this.stageScript(plan.name, plan.revision, scriptCode, config, reuseOnly), assets };
     }
+    /** Live release's static hashes; a file with the same path and hash needs no lookup at all. */
+    private knownStatic: Record<string, string> = {};
+    setKnownStatic(hashes: Record<string, string>) { this.knownStatic = { ...hashes }; }
     private async uploadAssets(artifact: Artifact) {
         const assets = { reused: 0, uploaded: 0 };
         const files = staticLayout(artifact).files;
         const one = async (file: (typeof files)[number]) => {
+            if (this.knownStatic[file.path] === hash(file.bytes)) { assets.reused++; return; }
             // Never overwrite an asset still referenced by a live or rollback script.
             const url = `https://storage.bunnycdn.com/${this.config.storageZone}/${file.path.split('/').map(encodeURIComponent).join('/')}`;
             const old = await this.send(url, { headers: { AccessKey: this.config.storageKey }, redirect: 'error', signal: AbortSignal.timeout(60_000) });
@@ -159,7 +164,7 @@ export class BunnyTarget implements DeployTarget {
                 try { await one(files[index]!); } catch (error) { errors.push({ index, error }); }
             }
         };
-        await Promise.all(Array.from({ length: Math.min(ASSET_CONCURRENCY, files.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(this.config.assetConcurrency ?? ASSET_CONCURRENCY, files.length) }, worker));
         if (errors.length) throw errors.sort((a, b) => a.index - b.index)[0]!.error;
         return assets;
     }
