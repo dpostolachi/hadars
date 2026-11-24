@@ -11,6 +11,34 @@ import { pull, outdated } from './pull';
 import { readLock, readTrustedKeys, verifyLockSignature } from './lockfile';
 import { emitDeclarations } from './declarations';
 
+/** The hosted registry, used when a project has no lock file and no registry is named. */
+export const DEFAULT_REGISTRY = 'https://registry.hadars.xyz';
+
+const isLoopback = (host: string) => host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+
+/**
+ * Chooses the registry for this command. A project's lock file pins the registry it was pulled from:
+ * a different registry named explicitly is refused, because the token would go to the new host.
+ * Credentials only go over https, or over plain http to a loopback address for local development.
+ */
+export function resolveRegistry(args: string[], lock: { registry: string } | null, env: Record<string, string | undefined> = process.env): string {
+    const explicit = flag(args, '--registry') ?? env.HADARS_REGISTRY;
+    let chosen: string;
+    if (lock?.registry) {
+        if (explicit !== undefined && new URL(explicit).origin !== new URL(lock.registry).origin) {
+            throw new ApiError('registry_mismatch', `This project is pinned to ${new URL(lock.registry).origin}. To use ${new URL(explicit).origin}, remove hadars.lock and pull again.`);
+        }
+        chosen = lock.registry;
+    } else {
+        chosen = explicit ?? DEFAULT_REGISTRY;
+    }
+    const url = new URL(chosen);
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback(url.hostname))) {
+        throw new ApiError('insecure_registry', `Refusing to send credentials to ${url.origin}; use https.`);
+    }
+    return url.origin;
+}
+
 /** Commands this module handles; everything else belongs to the caller. */
 export const REGISTRY_COMMANDS = ['login', 'ci-login', 'whoami', 'verify', 'publish', 'types', 'pull', 'outdated', 'versions', 'set', 'history', 'go-back', 'promote', 'preview', 'signing'] as const;
 
@@ -94,10 +122,9 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
     const command = args[0];
     const json = args.includes('--json');
     const project = path.resolve(io.cwd, flag(args, '--project') ?? '.');
-    const lock = ['pull', 'outdated', 'verify'].includes(command) ? await readLock(project) : null;
-    const registry = flag(args, '--registry') ?? process.env.HADARS_REGISTRY ?? lock?.registry;
+    const lock = await readLock(project);
 
-    if (command === 'publish' || command === 'types') return publishCommand(args, io, registry);
+    if (command === 'publish' || command === 'types') return publishCommand(args, io, () => resolveRegistry(args, lock));
 
     if (command === 'verify') {
         const file = flag(args, '--trusted-keys') ?? process.env.HADARS_TRUSTED_KEYS;
@@ -119,7 +146,7 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
         return 0;
     }
 
-    if (!registry) { err('Set HADARS_REGISTRY or pass --registry.'); return 2; }
+    const registry = resolveRegistry(args, lock);
     if (command === 'login') {
         const signedIn = await login({ registryUrl: registry, device: args.includes('--device'), noBrowser: args.includes('--no-browser'), tell: err });
         out(signedIn.access_token);
@@ -163,9 +190,13 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
         return 0;
     }
     if (command === 'pull' || command === 'outdated') {
+        // Checked before any request, so the token is not sent for a pull that cannot be verified.
+        const trusted = flag(args, '--trusted-keys') ?? process.env.HADARS_TRUSTED_KEYS;
+        if (command === 'pull' && !trusted && !args.includes('--allow-unsigned')) {
+            throw new ApiError('invalid', 'pull needs trusted keys: pass --trusted-keys <file> or set HADARS_TRUSTED_KEYS. Use --allow-unsigned only for channels that are not signed.');
+        }
         const t = await resolveTeam(client, flag(args, '--team') ?? process.env.HADARS_TEAM ?? lock?.team);
         if (command === 'pull') {
-            const trusted = flag(args, '--trusted-keys') ?? process.env.HADARS_TRUSTED_KEYS;
             const result = await pull({ client, registry, team: t, project, channel: flag(args, '--env') ?? flag(args, '--channel') ?? lock?.channel ?? 'stable',
                 trustedKeys: trusted ? await readTrustedKeys(trusted) : undefined });
             out(json ? JSON.stringify(result, null, 2) : `Pinned ${result.lock.snapshotId} in hadars.lock (${result.downloaded} files downloaded).`);
@@ -240,7 +271,7 @@ export async function registryCommand(args: string[], io: RegistryIO): Promise<n
     throw new ApiError('invalid', `Unknown registry command: ${command}`);
 }
 
-async function publishCommand(args: string[], io: RegistryIO, registry: string | undefined): Promise<number> {
+async function publishCommand(args: string[], io: RegistryIO, registryFor: () => string): Promise<number> {
     const { out, err } = io;
     const project = flag(args, '--project');
     const outDir = flag(args, '--out');
@@ -250,7 +281,7 @@ async function publishCommand(args: string[], io: RegistryIO, registry: string |
     const typesOnly = args[0] === 'types';
     const dryRun = typesOnly || args.includes('--dry-run');
     const token = process.env.HADARS_TOKEN;
-    if (!dryRun && !registry) { err('Pass --dry-run, or set HADARS_REGISTRY (or --registry) to publish.'); return 2; }
+    const registry = dryRun ? undefined : registryFor();
     if (!dryRun && !token) { err('Set HADARS_TOKEN to publish.'); return 2; }
 
     const manifestFile = flag(args, '--manifest');

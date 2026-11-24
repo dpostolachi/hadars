@@ -2,7 +2,7 @@ import { test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm, stat, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { registryCommand, REGISTRY_COMMANDS } from '../../src/registry-client/commands';
+import { registryCommand, REGISTRY_COMMANDS, resolveRegistry } from '../../src/registry-client/commands';
 import { ApiError } from '../../src/registry-client/client';
 
 // A small registry stand-in: records requests and answers the few routes these commands use.
@@ -56,12 +56,31 @@ test('versions lists the package history', async () => {
     expect(out.lines[0]).toContain('#2 main abcdef12 release');
 });
 
-test('a missing registry is a usage error with exit code 2', async () => {
-    delete process.env.HADARS_REGISTRY;
+test('without a lock file or a named registry, the hosted registry is used', () => {
+    expect(resolveRegistry([], null, {})).toBe('https://registry.hadars.xyz');
+});
+
+test('a registry named on the command line or in the environment overrides the default', () => {
+    expect(resolveRegistry(['--registry', 'https://reg.example.com/x'], null, {})).toBe('https://reg.example.com');
+    expect(resolveRegistry([], null, { HADARS_REGISTRY: 'https://self.example.org' })).toBe('https://self.example.org');
+});
+
+test('a lock file pins its registry; naming a different one is refused, the same one is accepted', () => {
+    const lock = { registry: 'https://registry.hadars.xyz' };
+    expect(resolveRegistry([], lock, {})).toBe('https://registry.hadars.xyz');
+    expect(resolveRegistry(['--registry', 'https://registry.hadars.xyz'], lock, {})).toBe('https://registry.hadars.xyz');
+    expect(() => resolveRegistry(['--registry', 'https://evil.example'], lock, {})).toThrow('pinned to https://registry.hadars.xyz');
+    expect(() => resolveRegistry([], lock, { HADARS_REGISTRY: 'https://evil.example' })).toThrow('pinned');
+});
+
+test('credentials are refused over plain http, except to a loopback address', () => {
+    expect(() => resolveRegistry(['--registry', 'http://registry.example.com'], null, {})).toThrow('use https');
+    expect(resolveRegistry(['--registry', 'http://127.0.0.1:8080'], null, {})).toBe('http://127.0.0.1:8080');
+});
+
+test('pull refuses to run without trusted keys unless told explicitly', async () => {
     const out = io();
-    const code = await registryCommand(['versions', 'shell'], { out: () => {}, err: (l) => out.errors.push(l), cwd: dir });
-    expect(code).toBe(2);
-    expect(out.errors[0]).toContain('HADARS_REGISTRY');
+    await expect(registryCommand(['pull', '--env', 'stable'], { out: () => {}, err: (l) => out.errors.push(l), cwd: dir })).rejects.toThrow('needs trusted keys');
 });
 
 test('set rejects a spec without a version', async () => {
