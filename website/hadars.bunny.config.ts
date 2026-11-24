@@ -1,4 +1,5 @@
 import type { HadarsOptions } from 'hadars';
+import { demoLocaleResponse } from './demo-locales';
 
 // Trial config for `hadars export bunny` (bunny.net Edge Scripting).
 // Same app as hadars.config.ts, minus `port` (meaningless for an edge script —
@@ -10,6 +11,8 @@ const config: HadarsOptions = {
     htmlTemplate: 'src/template.html',
     baseURL: 'https://static.hadars.xyz',
     fetch: (req) => {
+        const localeResponse = demoLocaleResponse(req.pathname);
+        if (localeResponse) return localeResponse;
         if (req.pathname === '/api/data') {
             // fetch weather data from open-meteo and return it as JSON
             return fetch('https://api.open-meteo.com/v1/forecast?latitude=53.5569&longitude=9.9946&current_weather=true')

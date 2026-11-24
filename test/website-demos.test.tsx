@@ -72,7 +72,7 @@ async function click(label: string) {
 }
 
 beforeAll(() => {
-  GlobalRegistrator.register({ url: "https://demo.example.test/" });
+  GlobalRegistrator.register({ url: "https://demo.example.test/", settings: { disableJavaScriptFileLoading: true } });
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 });
 afterAll(async () => {
@@ -83,12 +83,7 @@ afterAll(async () => {
 });
 beforeEach(() => {
   window.history.replaceState({}, "", `/i18n-demo?unit=${++counter}`);
-  document.head.innerHTML =
-    '<meta name="HADARS_ASSET_BASE" content="' +
-    encodeURIComponent(
-      JSON.stringify({ base: "https://static.example.test" }),
-    ) +
-    '">';
+  document.head.innerHTML = "";
   container = document.createElement("div");
   document.body.appendChild(container);
 });
@@ -179,14 +174,14 @@ test("data playground makes one explicit request for all four components and han
   );
 });
 
-test("language preview uses CDN translations, preserves quantity, changes plural and money formats, and caches revisits", async () => {
+test("language preview uses same-origin translations, preserves quantity, changes plural and money formats, and caches revisits", async () => {
   let romanianRequests = 0;
   globalThis.fetch = mock(async (input) => {
     const url = String(input);
-    if (url.includes("/locales/ro/storefront.json")) {
+    if (url.includes("/api/demo-locales/ro/storefront.json")) {
       romanianRequests++;
       expect(url).toBe(
-        "https://static.example.test/locales/ro/storefront.json",
+        "/api/demo-locales/ro/storefront.json",
       );
       return Response.json(ro);
     }
@@ -223,7 +218,7 @@ test("language preview uses CDN translations, preserves quantity, changes plural
 
 test("a failed language request leaves the current product and quantity usable", async () => {
   globalThis.fetch = mock(async (input) => {
-    if (String(input).includes("/locales/ro/"))
+    if (String(input).includes("/api/demo-locales/ro/"))
       throw new Error("synthetic network failure");
     return Response.json({ serverData: { initial: en } });
   }) as typeof fetch;

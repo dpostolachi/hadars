@@ -10,18 +10,6 @@ const loadMessages = (locale: string, namespace: string) =>
   import(`../../static/locales/${locale}/${namespace}.json`).then(
     (m) => m.default,
   );
-function translationBase() {
-  if (typeof document === "undefined") return "/locales";
-  try {
-    const encoded = document
-      .querySelector('meta[name="HADARS_ASSET_BASE"]')
-      ?.getAttribute("content");
-    const base = encoded ? JSON.parse(decodeURIComponent(encoded)).base : "";
-    return `${typeof base === "string" ? base.replace(/\/$/, "") : ""}/locales`;
-  } catch {
-    return "/locales";
-  }
-}
 function ProductPreview() {
   const navigate = useNavigate();
   const { locale, setLocale, isSwitching } = useLocale();
@@ -213,7 +201,7 @@ export default function I18nDemo() {
           initialLocale={initialLocale}
           locales={LOCALES}
           defaultLocale="en"
-          basePath={translationBase()}
+          basePath="/api/demo-locales"
         >
           <ProductPreview />
         </LocaleProvider>

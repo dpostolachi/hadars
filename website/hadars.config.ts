@@ -1,10 +1,13 @@
 import type { HadarsOptions } from 'hadars';
+import { demoLocaleResponse } from './demo-locales';
 
 const config: HadarsOptions = {
     entry: 'src/App.tsx',
     htmlTemplate: 'src/template.html',
     port: 9090,
     fetch: (req) => {
+        const localeResponse = demoLocaleResponse(req.pathname);
+        if (localeResponse) return localeResponse;
         if (req.pathname === '/api/data') {
             // fetch weather data from open-meteo and return it as JSON
             return fetch('https://api.open-meteo.com/v1/forecast?latitude=53.5569&longitude=9.9946&current_weather=true')
