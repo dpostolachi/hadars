@@ -31,7 +31,7 @@ test('revision config precedes publish/verify, drift refuses publication, rollba
             async request(method: string, path: string, body?: any): Promise<any> {
                 calls.push(`${method} ${path}`);
                 if (path === '/pullzone') return [];
-                if (path === '/compute/script') return method === 'GET' ? [] : { Id: 9 };
+                if (path.split('?')[0] === '/compute/script') return method === 'GET' ? [] : { Id: 9 };
                 if (method === 'PUT' && path.endsWith('/variables')) { variables.push({ ...body, DefaultValue: mode === 'drift' ? 'wrong' : body.DefaultValue }); return {}; }
                 if (method === 'PUT' && path.endsWith('/secrets')) {
                     if (mode === 'secret-error') throw new Error(`Provider reflected ${secret}`);
@@ -79,7 +79,7 @@ test('incomplete code readback refuses existing immutable names', async () => {
         const config = resolveRuntimeConfig({ variables: { URL: value } });
         await expect(target.stage(target.plan(revision, config), config)).rejects.toThrow('immutable script');
     }
-    expect(calls).toEqual(['GET /compute/script', 'GET /compute/script/1/code', 'GET /compute/script', 'GET /compute/script/1/code']);
+    expect(calls).toEqual(['GET /compute/script?page=1&perPage=100', 'GET /compute/script/1/code', 'GET /compute/script?page=1&perPage=100', 'GET /compute/script/1/code']);
 });
 
 test('readback accepts spec-nullable empty collections but refuses absent list fields', async () => {

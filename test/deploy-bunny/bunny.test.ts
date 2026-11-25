@@ -7,9 +7,9 @@ function fake(smoke = 200) {
         async request(method: string, path: string, body?: any) {
             calls.push({ method, path, body });
             if (path === '/pullzone') return [];
-            if (path === '/compute/script' && method === 'POST') return { Id: 9 };
+            if (path.split('?')[0] === '/compute/script' && method === 'POST') return { Id: 9 };
             if (path === '/compute/script/9') return { DefaultHostname: 'https://demo.bunny.run' };
-            if (path === '/compute/script') return { Items: Array.from({ length: 8 }, (_, i) => ({ Id: i + 1, Name: `demo-dev-r${i + 1}` })) };
+            if (path.split('?')[0] === '/compute/script') return { Items: Array.from({ length: 8 }, (_, i) => ({ Id: i + 1, Name: `demo-dev-r${i + 1}` })) };
             return {};
         },
         async publish(id: string, code: string) { calls.push({ method: 'publish', path: id, body: code }); },
@@ -68,7 +68,7 @@ test('assets upload and read back; collisions and corrupt uploads refuse staging
             if (method === 'PUT') { assets.set(path, mode === 'corrupt' ? new Uint8Array([1]) : new Uint8Array(init.body)); return new Response(); }
             return assets.has(path) ? new Response(new Uint8Array(assets.get(path)!)) : new Response(null, { status: 404 });
         }) as typeof fetch;
-        const client = { async request(method: string, path: string) { if (path === '/pullzone') return []; return path === '/compute/script' && method === 'GET' ? [] : path === '/compute/script' ? { Id: 9 } : { DefaultHostname: 'demo.bunny.run' }; }, async publish() { published = true; } };
+        const client = { async request(method: string, path: string) { if (path === '/pullzone') return []; return path.split('?')[0] === '/compute/script' && method === 'GET' ? [] : path.split('?')[0] === '/compute/script' ? { Id: 9 } : { DefaultHostname: 'demo.bunny.run' }; }, async publish() { published = true; } };
         const target = new BunnyTarget({ key: 'fake', publicZoneId: '99', storageZone: 'assets', storageKey: 'fake' }, send, client);
         const input = revision(); input.artifact.files.push({ path: 'asset.abcdef12.js', bytes });
         if (mode === 'collision' || mode === 'corrupt') {
@@ -95,7 +95,7 @@ test('static objects transfer concurrently, and a failure names the first bad fi
             if ((init?.method ?? 'GET') === 'PUT') { assets.set(path, path === bad || path === 'a31.abcdef12.js' && bad === 'a07.abcdef12.js' ? new Uint8Array([1]) : new Uint8Array(init.body)); return new Response(); }
             return assets.has(path) ? new Response(new Uint8Array(assets.get(path)!)) : new Response(null, { status: 404 });
         }) as typeof fetch;
-        const client = { async request(method: string, path: string) { if (path === '/pullzone') return []; return path === '/compute/script' && method === 'GET' ? [] : path === '/compute/script' ? { Id: 9 } : { DefaultHostname: 'demo.bunny.run' }; }, async publish() { published = true; } };
+        const client = { async request(method: string, path: string) { if (path === '/pullzone') return []; return path.split('?')[0] === '/compute/script' && method === 'GET' ? [] : path.split('?')[0] === '/compute/script' ? { Id: 9 } : { DefaultHostname: 'demo.bunny.run' }; }, async publish() { published = true; } };
         const target = new BunnyTarget({ key: 'fake', publicZoneId: '99', storageZone: 'assets', storageKey: 'fake' }, send, client);
         const input = revision(); input.artifact.files.push(...files);
         if (!bad) {
