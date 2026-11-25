@@ -21,6 +21,7 @@ export interface DeployOptions {
     /** With dryRun: read provider state (GET only) so rule capacity and hostnames are real. */
     readProvider?: boolean;
     noAutoRollback?: boolean;
+    adoptRecreatedZone?: boolean;
     keepFailedStage?: boolean;
     probeTimeoutSeconds?: number;
     allowUnboundOutput?: boolean;
@@ -176,7 +177,7 @@ async function runDeploy(o: DeployOptions) {
         activationAttempted = true;
         const nativeStage = { ...staged, ...(previous?.liveRules ? { liveRules: previous.liveRules } : {}) };
         const nativePrevious = live?.staged ? { ...live.staged, ...(live.liveRules ? { liveRules: live.liveRules } : {}) } : undefined;
-        if (o.rollback) await o.target.rollback(nativeStage, { previous: nativePrevious, noAutoRollback: o.noAutoRollback }); else await o.target.activate(nativeStage, { previous: nativePrevious, noAutoRollback: o.noAutoRollback });
+        if (o.rollback) await o.target.rollback(nativeStage, { previous: nativePrevious, noAutoRollback: o.noAutoRollback }); else await o.target.activate(nativeStage, { previous: nativePrevious, noAutoRollback: o.noAutoRollback, adoptRecreatedZone: o.adoptRecreatedZone });
         if (o.target instanceof BunnyTarget && o.target.activationRules) input.liveRules = o.target.activationRules;
         if (o.target instanceof BunnyTarget && o.target.activationProbes) input.probeResults = o.target.activationProbes;
         for (const result of input.probeResults?.advisory ?? []) o.out(`Advisory public probes ${result.hostname}: ${result.checked - result.failed}/${result.checked} passed (${result.failed} failed)`);

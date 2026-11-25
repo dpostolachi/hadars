@@ -149,13 +149,16 @@ async function probeSingle(hostname: string, send: typeof fetch, pause: () => Pr
  * lost replies. Undo is idempotent and reversed: pointer first, disabled tombstones, updates.
  * No script deletion occurs in this transaction. Foreign rules are never written.
  */
-export async function activateReceipt(client: BunnyClient, zoneId: string, staged: StagedRevision, send: typeof fetch, pause: () => Promise<void>, previous?: StagedRevision, noAutoRollback = false, recordRules?: (rules: LiveRule[]) => void): Promise<ProbeSummary | undefined> {
+export async function activateReceipt(client: BunnyClient, zoneId: string, staged: StagedRevision, send: typeof fetch, pause: () => Promise<void>, previous?: StagedRevision, noAutoRollback = false, recordRules?: (rules: LiveRule[]) => void, adoptRecreatedZone = false): Promise<ProbeSummary | undefined> {
     const path = `/pullzone/${zoneId}`, before = await client.request('GET', path);
     const desired = staged.split;
     if (!desired && !previous?.split) throw new Error('Native transaction requires a split receipt');
     const hostname = safeSplitZone(before), owner = desired?.owner ?? previous!.split!.owner;
     if (desired && (hostname !== desired.publicHostname || outputCanonical(splitHostnames(before)) !== outputCanonical(desired.publicHostnames))) throw new Error('Public hostname drift');
-    if (previous?.split) {
+    // Opt-in for a public zone that was deleted and recreated: the previous rules and receipt belonged to the old zone.
+    // Only when the zone holds no owned rules at all; otherwise the checks below run as before.
+    const adopt = adoptRecreatedZone && !before.EdgeRules.some((r: NativeRule) => r.Description?.startsWith(owner));
+    if (previous?.split && !adopt) {
         if (previous.liveRules) {
             validateLiveRules(previous.split, previous.liveRules);
             if (previous.liveRules.some(r => !before.EdgeRules.some((a: NativeRule) => a.Description === r.Description && a.Guid === r.Guid))) throw new Error('Previous live rule identity drift');
