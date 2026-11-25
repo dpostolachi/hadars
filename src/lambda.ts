@@ -26,6 +26,7 @@ import { tryServeFile } from './utils/staticFile';
 import { getReactResponse, buildHeadHtml } from './utils/response';
 import { buildSsrResponse, buildSsrHtml, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
 import type { HadarsOptions, HadarsEntryModule, HadarsProps } from './types/hadars';
+import { splitFetchResult, noteUnappliedSsrHeaders } from './utils/fetchResult';
 
 // ── Lambda event / response types ────────────────────────────────────────────
 
@@ -205,8 +206,9 @@ export function createLambdaHandler(options: HadarsOptions, bundled?: LambdaBund
         const request = parseRequest(req);
 
         if (fetchHandler) {
-            const res = await fetchHandler(request);
-            if (res) return res;
+            const result = splitFetchResult(await fetchHandler(request));
+            if (result.ssrHeaders) noteUnappliedSsrHeaders();
+            if (result.response) return result.response;
         }
 
         const proxied = await handleProxy(request);
