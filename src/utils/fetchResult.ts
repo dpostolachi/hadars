@@ -1,21 +1,21 @@
 /**
  * What the `fetch` option may return:
  * - a `Response`: sent as-is; SSR and the proxy are skipped;
- * - `{ headers }`: SSR continues, and these headers are added to the SSR response only
+ * - a `Headers` instance: SSR continues, and these headers are added to the SSR response only
  *   (not to proxied responses or to responses the fetch handler returns);
  * - `undefined`: nothing to do, SSR continues.
  */
-export type FetchResult = Response | { headers: HeadersInit } | undefined;
+export type FetchResult = Response | Headers | undefined;
 
 let warnedUnapplied = false;
 
 export function splitFetchResult(result: FetchResult): { response?: Response; ssrHeaders?: Headers } {
     if (result instanceof Response) return { response: result };
-    if (result && typeof result === 'object' && 'headers' in result) return { ssrHeaders: new Headers(result.headers) };
+    if (result instanceof Headers) return { ssrHeaders: result };
     return {};
 }
 
-/** Adapters that do not apply `{ headers }` yet call this so the omission is visible once. */
+/** Adapters that do not apply a `Headers` result yet call this so the omission is visible once. */
 export function noteUnappliedSsrHeaders(): void {
     if (warnedUnapplied) return;
     warnedUnapplied = true;

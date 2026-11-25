@@ -183,7 +183,7 @@ export interface HadarsOptions {
      */
     websocket?: unknown;
     /**
-     * Runs before SSR and the proxy. Return a `Response` to answer the request, `{ headers }` to add
+     * Runs before SSR and the proxy. Return a `Response` to answer the request, a `Headers` instance to add
      * headers to the SSR response, or `undefined` to continue. See `FetchResult`.
      */
     fetch?: (req: HadarsRequest) => Promise<FetchResult> | FetchResult;

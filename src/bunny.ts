@@ -89,7 +89,7 @@ export function createBunnyHandler(
         const request = parseRequest(req);
         request.pinnedClients = pinnedClients;
 
-        // `{ headers }` from fetch applies to SSR responses only: not to the proxy, nor to responses fetch returns.
+        // A Headers instance from fetch applies to SSR responses only: not to the proxy, nor to responses fetch returns.
         let ssrHeaders: Headers | undefined;
         if (fetchHandler) {
             const result = splitFetchResult(await fetchHandler(request));

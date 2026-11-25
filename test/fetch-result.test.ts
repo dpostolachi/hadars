@@ -8,7 +8,7 @@ const bundled = { ssrModule: { default: () => null }, outHtml: '<head><meta name
 test('splitFetchResult tells a response from headers and from nothing', () => {
     const response = new Response('x');
     expect(splitFetchResult(response)).toEqual({ response });
-    const split = splitFetchResult({ headers: { 'cache-control': 'private, no-store' } });
+    const split = splitFetchResult(new Headers({ 'cache-control': 'private, no-store' }));
     expect(split.response).toBeUndefined();
     expect(split.ssrHeaders?.get('cache-control')).toBe('private, no-store');
     expect(splitFetchResult(undefined)).toEqual({});
@@ -27,7 +27,7 @@ test('withSsrHeaders adds and overrides headers and keeps the status', async () 
 test('fetch headers apply to SSR responses only, not to proxied or fetch-returned responses', async () => {
     const handler = createBunnyHandler({
         entry: '',
-        fetch: (req) => new URL(req.url).pathname === '/gateway' ? new Response('gateway') : { headers: { 'cache-control': 'private, no-store', 'x-test': 'ssr' } },
+        fetch: (req) => new URL(req.url).pathname === '/gateway' ? new Response('gateway') : new Headers({ 'cache-control': 'private, no-store', 'x-test': 'ssr' }),
         proxy: (req) => new URL(req.url).pathname === '/proxied' ? new Response('proxied') : null,
     } as HadarsOptions, bundled);
 
@@ -54,10 +54,14 @@ test('fetch headers apply to SSR responses only, not to proxied or fetch-returne
 test('fetch headers also apply to SSR render errors', async () => {
     const handler = createBunnyHandler({
         entry: '',
-        fetch: () => ({ headers: { 'x-test': 'ssr' } }),
+        fetch: () => new Headers({ 'x-test': 'ssr' }),
     } as HadarsOptions, { ...bundled, ssrModule: { default: () => null, getInitProps: () => { throw new Error('expected'); } } });
     const res = await handler(new Request('https://example.test/'));
     expect(res.status).toBe(500);
     expect(res.headers.get('x-test')).toBe('ssr');
     await res.text();
+});
+
+test('a plain object with headers is not treated as SSR headers', () => {
+    expect(splitFetchResult({ headers: { 'x-test': 'ssr' } } as any)).toEqual({});
 });
