@@ -72,7 +72,7 @@ export async function deployCommand(args: string[], io: { env?: Record<string, s
             artifact: directory ? await loadArtifact(directory) : undefined,
             revision: revisionText === undefined ? undefined : integer(revisionText, '--revision', 1),
             probeTimeoutSeconds: probe, keepFailedStage: args.includes('--keep-failed-stage'),
-            allowUnboundOutput: args.includes('--allow-unbound-output'), noAutoRollback: args.includes('--no-auto-rollback'),
+            allowUnboundOutput: args.includes('--allow-unbound-output'), noAutoRollback: args.includes('--no-auto-rollback'), adoptRecreatedZone: args.includes('--adopt-recreated-zone'),
         });
         return 0;
     } catch (error) { err((error as Error).message); return 1; }

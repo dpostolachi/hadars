@@ -39,7 +39,7 @@ export interface DeployTarget {
     plan(revision: Revision, config?: RuntimeConfig): Plan;
     stage(plan: Plan, config?: RuntimeConfig): Promise<StagedRevision>;
     verify(staged: StagedRevision, config?: ConfigSummary): Promise<VerifyResult>;
-    activate(staged: StagedRevision, options?: { previous?: StagedRevision; noAutoRollback?: boolean }): Promise<void>;
+    activate(staged: StagedRevision, options?: { previous?: StagedRevision; noAutoRollback?: boolean; adoptRecreatedZone?: boolean }): Promise<void>;
     rollback(previous: StagedRevision, options?: { previous?: StagedRevision; noAutoRollback?: boolean }): Promise<void>;
 }
 export interface BunnyClient {
@@ -365,11 +365,11 @@ export class BunnyTarget implements DeployTarget {
         if (failures.length) return { ok: false, error: `Staged unit probe failed: ${failures.map(([group, reason]) => `${group}: ${reason}`).join('; ')}` };
         return { ok: true };
     }
-    async activate(staged: StagedRevision, options?: { previous?: StagedRevision; noAutoRollback?: boolean }) {
+    async activate(staged: StagedRevision, options?: { previous?: StagedRevision; noAutoRollback?: boolean; adoptRecreatedZone?: boolean }) {
         this.activationProbes = undefined;
         this.activationRules = undefined;
         if (staged.split || options?.previous?.split) {
-            try { this.activationProbes = await activateReceipt(this.client, this.config.publicZoneId, staged, this.send, this.pause, options?.previous, options?.noAutoRollback, rules => { this.activationRules = rules; }); }
+            try { this.activationProbes = await activateReceipt(this.client, this.config.publicZoneId, staged, this.send, this.pause, options?.previous, options?.noAutoRollback, rules => { this.activationRules = rules; }, options?.adoptRecreatedZone); }
             catch (error) {
                 if (error instanceof SplitActivationError) throw error;
                 // The transaction wraps every write failure. Other errors are preflight,
