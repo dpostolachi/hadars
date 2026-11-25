@@ -51,7 +51,7 @@ test('Bunny publishes exactly captured verified bytes and refuses altered or inv
                 calls.push(method);
                 if (method === 'POST') return { Id: 1 };
                 // Mutation after stage starts cannot affect captured script bytes.
-                if (path === '/compute/script') { artifact.files[0].bytes = Buffer.from('changed'); return []; }
+                if (path.split('?')[0] === '/compute/script') { artifact.files[0].bytes = Buffer.from('changed'); return []; }
                 if (path === '/pullzone') return [];
                 return { DefaultHostname: 'demo.bunny.run' };
             },

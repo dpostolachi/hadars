@@ -107,10 +107,20 @@ export class BunnyTarget implements DeployTarget {
         return { hostnames: split.publicHostnames, rules: split.rules, count: checkRuleCapacity(zone.EdgeRules, split.rules, split.owner) };
     }
     async scripts(): Promise<Array<{ Id: number; Name: string }>> {
-        const result = await this.client.request('GET', '/compute/script');
-        const items = Array.isArray(result) ? result : result?.Items;
-        if (!Array.isArray(items) || result.HasMore || result.TotalItems > items.length) throw new Error('Incomplete Bunny script list; refusing revision reuse or cleanup');
-        return items;
+        // Bunny returns one page per call. Read until HasMore is false; refuse if the list is still incomplete.
+        const incomplete = () => new Error('Incomplete Bunny script list; refusing revision reuse or cleanup');
+        const items: Array<{ Id: number; Name: string }> = [];
+        for (let page = 1; page <= 100; page++) {
+            const result = await this.client.request('GET', `/compute/script?page=${page}&perPage=100`);
+            if (Array.isArray(result)) return result;
+            if (!Array.isArray(result?.Items)) { console.log('DBGSCRIPTS', JSON.stringify(result).slice(0, 300)); throw incomplete(); }
+            items.push(...result.Items);
+            if (!result.HasMore) {
+                if (result.TotalItems > items.length) throw incomplete();
+                return items;
+            }
+        }
+        throw incomplete();
     }
     async stage(plan: Plan, config?: RuntimeConfig, reuseOnly = false): Promise<StagedRevision> {
         if (plan.splitManifest) return this.stageSplit(plan, config, reuseOnly);

@@ -39,9 +39,20 @@ export function mockProvider(options: { listingPageSize?: number; split?: boolea
         async request(method, path, body: any) {
             calls.push(`${method} ${path}`);
             managementRequests.push({ method, path, body: structuredClone(body) });
-            const collection = collections.find(c => path === c || path.startsWith(c + '/'))!;
+            const [pathname, query = ''] = path.split('?');
+            const collection = collections.find(c => pathname === c || pathname.startsWith(c + '/'))!;
             if (!collection) throw new Error(`Unexpected mock request ${path}`);
-            const rest = path.slice(collection.length + 1).split('/'), id = Number(rest[0]);
+            // Collection listings are paged by query (page, perPage); the mock returns the whole table on each page.
+            if (collection === '/compute/script' && pathname === '/compute/script' && method === 'GET') {
+                const rows = structuredClone(tables[collection]);
+                const page = Number(new URLSearchParams(query).get('page') ?? 1), perPage = Number(new URLSearchParams(query).get('perPage') ?? (rows.length || 1));
+                if (options.listingPageSize !== undefined || query) {
+                    const size = options.listingPageSize ?? perPage;
+                    return { Items: rows.slice((page - 1) * size, page * size), TotalItems: rows.length, HasMore: page * size < rows.length };
+                }
+                return rows;
+            }
+            const rest = pathname.slice(collection.length + 1).split('/'), id = Number(rest[0]);
             if (method === 'GET' && path === collection) return structuredClone(tables[collection]);
             if (method === 'POST' && path === collection) {
                 // Mirror the real API: a storage-backed pull zone is stored as OriginType 2 with an empty OriginUrl.
