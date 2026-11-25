@@ -1,4 +1,5 @@
 import type { LinkHTMLAttributes, MetaHTMLAttributes, ScriptHTMLAttributes, StyleHTMLAttributes } from "react";
+import type { FetchResult } from "../utils/fetchResult";
 
 /**
  * Minimal structural representation of a typed GraphQL document node.
@@ -181,7 +182,11 @@ export interface HadarsOptions {
      * Pass a `Bun.WebSocketHandler` instance here when running on Bun.
      */
     websocket?: unknown;
-    fetch?: (req: HadarsRequest) => Promise<Response | undefined> | Response | undefined;
+    /**
+     * Runs before SSR and the proxy. Return a `Response` to answer the request, `{ headers }` to add
+     * headers to the SSR response, or `undefined` to continue. See `FetchResult`.
+     */
+    fetch?: (req: HadarsRequest) => Promise<FetchResult> | FetchResult;
     wsPath?: string;
     // Port for the rspack HMR dev server. Defaults to port + 1.
     hmrPort?: number;

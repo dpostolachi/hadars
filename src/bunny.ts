@@ -34,6 +34,7 @@ import { createProxyHandler } from './utils/proxyHandler';
 import { getReactResponse } from './utils/response';
 import { buildSsrResponse, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
 import type { HadarsOptions, HadarsEntryModule, HadarsProps } from './types/hadars';
+import { splitFetchResult, withSsrHeaders } from './utils/fetchResult';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -88,9 +89,12 @@ export function createBunnyHandler(
         const request = parseRequest(req);
         request.pinnedClients = pinnedClients;
 
+        // `{ headers }` from fetch applies to SSR responses only: not to the proxy, nor to responses fetch returns.
+        let ssrHeaders: Headers | undefined;
         if (fetchHandler) {
-            const res = await fetchHandler(request);
-            if (res) return res;
+            const result = splitFetchResult(await fetchHandler(request));
+            if (result.response) return result.response;
+            ssrHeaders = result.ssrHeaders;
         }
 
         const proxied = await handleProxy(request);
@@ -115,21 +119,21 @@ export function createBunnyHandler(
             if (isDataOnly) {
                 const { clientProps } = await finalize();
                 const serverData = (clientProps as any).__serverData ?? {};
-                return new Response(JSON.stringify({ serverData }), {
+                return withSsrHeaders(new Response(JSON.stringify({ serverData }), {
                     status,
                     headers: { 'Content-Type': 'application/json; charset=utf-8' },
-                });
+                }), ssrHeaders);
             }
 
             // Streams the head chunk ahead of the body — bunny.net Edge
             // Scripting supports ReadableStream responses natively, so the
             // browser can start requesting CSS/fonts/preloads referenced in
             // <head> before a large body chunk finishes transferring.
-            return buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml);
+            return withSsrHeaders(await buildSsrResponse(head, status, getAppBody, finalize, getPrecontentHtml), ssrHeaders);
         } catch (err: any) {
             console.error('[hadars] SSR render error:', err);
             options.onError?.(err, request)?.catch?.(() => {});
-            return new Response('Internal Server Error', { status: 500 });
+            return withSsrHeaders(new Response('Internal Server Error', { status: 500 }), ssrHeaders);
         }
     };
 

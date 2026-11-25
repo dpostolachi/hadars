@@ -88,6 +88,7 @@ async function processHtmlTemplate(templatePath: string): Promise<string> {
 // node:cluster is not available but node:worker_threads is.
 
 import type { SerializableRequest } from './ssr-render-worker';
+import { splitFetchResult, noteUnappliedSsrHeaders } from './utils/fetchResult';
 
 type PendingRenderFull = {
     kind: 'renderFull';
@@ -1002,8 +1003,9 @@ export const dev = async (options: HadarsRuntimeOptions) => {
             if (asset) return asset;
         }
         if (handler) {
-            const res = await handler(request);
-            if (res) return res;
+            const result = splitFetchResult(await handler(request));
+            if (result.ssrHeaders) noteUnappliedSsrHeaders();
+            if (result.response) return result.response;
         }
         if (handleWS && handleWS(request, ctx)) return undefined;
 
@@ -1364,8 +1366,9 @@ export const run = async (options: HadarsRuntimeOptions) => {
             if (asset) return asset;
         }
         if (handler) {
-            const res = await handler(request);
-            if (res) return res;
+            const result = splitFetchResult(await handler(request));
+            if (result.ssrHeaders) noteUnappliedSsrHeaders();
+            if (result.response) return result.response;
         }
         if (handleWS && handleWS(request, ctx)) return undefined;
 

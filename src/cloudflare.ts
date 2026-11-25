@@ -28,6 +28,7 @@ import { createProxyHandler } from './utils/proxyHandler';
 import { getReactResponse } from './utils/response';
 import { buildSsrResponse, makePrecontentHtmlGetter, createRenderCache } from './utils/ssrHandler';
 import type { HadarsOptions, HadarsEntryModule, HadarsProps } from './types/hadars';
+import { splitFetchResult, noteUnappliedSsrHeaders } from './utils/fetchResult';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -113,8 +114,9 @@ function createEnvironmentHandler(
         request.pinnedClients = pinnedClients;
 
         if (fetchHandler) {
-            const res = await fetchHandler(request);
-            if (res) return res;
+            const result = splitFetchResult(await fetchHandler(request));
+            if (result.ssrHeaders) noteUnappliedSsrHeaders();
+            if (result.response) return result.response;
         }
 
         const proxied = await handleProxy(request);
