@@ -164,6 +164,20 @@ async function getCachePage(): Promise<{ res: Response; html: string; serverTime
     return { res, html, serverTime: props.serverTime ?? '', renderId: snapshot?.renderId ?? '', renderedAt: snapshot?.renderedAt ?? 0 };
 }
 
+test('cache: navigation JSON cannot replace the HTML document or inspector response', async () => {
+    for (const accept of ['application/json', 'text/html', 'application/json', 'text/html']) {
+        const response = await fetch(BASE_URL + '/cache-test', { headers: { Accept: accept } });
+        expect(response.headers.get('content-type')).toContain(accept);
+        expect(response.headers.get('vary')?.toLowerCase()).toContain('accept');
+        if (accept === 'application/json') {
+            const data = await response.json() as { serverData: Record<string, any> };
+            expect(Object.values(data.serverData).some(value => value.kind === 'cache-render')).toBe(true);
+        } else {
+            expect(await response.text()).toContain('<title>Response caching — hadars</title>');
+        }
+    }
+});
+
 test('cache: GET /cache-test returns 200 with correct title', async () => {
     const { res, html } = await getCachePage();
     expect(res.status).toBe(200);

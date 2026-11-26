@@ -74,3 +74,45 @@ test('Bunny export preserves the configured response hook in the generated handl
         rmSync(dir, { recursive: true, force: true });
     }
 }, 60_000);
+
+for (const first of ['text/html', 'application/json']) {
+    test(`Bunny cache separates HTML and navigation JSON when ${first} is requested first`, async () => {
+        let renders = 0;
+        const handler = createBunnyHandler({ entry: '', cache: () => ({ key: '/same', ttl: 30_000 }) }, {
+            ...bundled,
+            ssrModule: { default: () => null, getInitProps: () => ({ render: ++renders }) },
+        });
+        const second = first === 'text/html' ? 'application/json' : 'text/html';
+        const bodies = new Map<string, string>();
+        for (const accept of [first, second, first, second]) {
+            const response = await handler(new Request('https://example.test/same', { headers: { accept } }));
+            expect(response.headers.get('content-type')).toContain(accept);
+            expect(response.headers.get('vary')?.split(', ')).toContain('accept');
+            const text = await response.text();
+            if (accept === 'application/json') expect(JSON.parse(text)).toEqual({ serverData: {} });
+            else expect(text).toContain('<script id="hadars"');
+            if (bodies.has(accept)) expect(text).toBe(bodies.get(accept)!);
+            bodies.set(accept, text);
+        }
+        expect(renders).toBe(2);
+    });
+}
+
+test('Bunny concurrent HTML and JSON requests have separate in-flight renders', async () => {
+    const handler = createBunnyHandler({ entry: '', cache: () => ({ key: '/same' }) }, bundled);
+    const [html, json] = await Promise.all(['text/html', 'application/json'].map(accept =>
+        handler(new Request('https://example.test/same', { headers: { accept } }))));
+    expect(html!.headers.get('content-type')).toContain('text/html');
+    expect(await html!.text()).toContain('<script id="hadars"');
+    expect(json!.headers.get('content-type')).toContain('application/json');
+    expect(await json!.json()).toEqual({ serverData: {} });
+});
+
+test('Bunny cached responses retain existing Vary fields alongside format and compression', async () => {
+    const handler = createBunnyHandler({ entry: '', cache: () => ({ key: 'vary' }),
+        fetch: () => new Response('body', { headers: { Vary: 'Origin, Accept-Encoding' } }),
+    }, bundled);
+    const response = await handler(new Request('https://example.test/'));
+    expect(response.headers.get('vary')).toBe('origin, accept-encoding, accept');
+    expect(await response.text()).toBe('body');
+});

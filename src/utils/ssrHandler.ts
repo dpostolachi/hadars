@@ -290,12 +290,15 @@ export async function buildCacheEntry(res: Response, ttl: number | undefined): P
     const body = await gzipCompress(new Uint8Array(buf));
     const headers: [string, string][] = [];
     res.headers.forEach((v, k) => {
-        if (k.toLowerCase() !== 'content-encoding' && k.toLowerCase() !== 'content-length') {
+        if (k.toLowerCase() !== 'content-encoding' && k.toLowerCase() !== 'content-length' && k.toLowerCase() !== 'vary') {
             headers.push([k, v]);
         }
     });
     headers.push(['content-encoding', 'gzip']);
-    headers.push(['vary', 'accept-encoding']);
+    const vary = new Set((res.headers.get('vary') ?? '').split(',').map(v => v.trim().toLowerCase()).filter(Boolean));
+    vary.add('accept');
+    vary.add('accept-encoding');
+    headers.push(['vary', [...vary].join(', ')]);
     return { body, status: res.status, headers, expiresAt: ttl != null ? Date.now() + ttl : null };
 }
 
@@ -319,7 +322,11 @@ export function createRenderCache(
     return async (req, ctx) => {
         const hadarsReq = parseRequest(req);
         const cacheOpts = await opts(hadarsReq);
-        const key = cacheOpts?.key ?? null;
+        // Client navigation requests JSON at the same URL as the HTML page.
+        // Partition both stored entries and in-flight renders by representation.
+        const key = cacheOpts?.key != null
+            ? JSON.stringify([cacheOpts.key, req.headers.get('Accept') === 'application/json' ? 'json' : 'html'])
+            : null;
 
         if (key != null) {
             const entry = store.get(key);
