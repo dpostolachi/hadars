@@ -129,7 +129,8 @@
     "postcss": "^8.5.8",
     "postcss-load-config": "^6.0.1",
     "postcss-loader": "^8.2.1",
-    "semver": "^7.7.2"
+    "semver": "^7.7.2",
+    "typescript": "^5"
   },
   "overrides": {
     "js-yaml": "^4.1.1"
